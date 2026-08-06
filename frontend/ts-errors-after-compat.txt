@@ -1,0 +1,50 @@
+app/escalations/page.tsx(453,22): error TS2769: No overload matches this call.
+  Overload 2 of 3, '(props: { component: ElementType<any, keyof IntrinsicElements>; } & MenuItemOwnProps & Omit<ButtonBaseOwnProps, keyof MenuItemOwnProps> & Omit<...> & CommonProps & Omit<...>): Element | null', gave the following error.
+    Type 'unknown' is not assignable to type 'Key | null | undefined'.
+  Overload 2 of 3, '(props: { component: ElementType<any, keyof IntrinsicElements>; } & MenuItemOwnProps & Omit<ButtonBaseOwnProps, keyof MenuItemOwnProps> & Omit<...> & CommonProps & Omit<...>): Element | null', gave the following error.
+    Type 'unknown' is not assignable to type 'ReactNode'.
+app/escalations/page.tsx(468,22): error TS2769: No overload matches this call.
+  Overload 2 of 3, '(props: { component: ElementType<any, keyof IntrinsicElements>; } & MenuItemOwnProps & Omit<ButtonBaseOwnProps, keyof MenuItemOwnProps> & Omit<...> & CommonProps & Omit<...>): Element | null', gave the following error.
+    Type 'unknown' is not assignable to type 'Key | null | undefined'.
+  Overload 2 of 3, '(props: { component: ElementType<any, keyof IntrinsicElements>; } & MenuItemOwnProps & Omit<ButtonBaseOwnProps, keyof MenuItemOwnProps> & Omit<...> & CommonProps & Omit<...>): Element | null', gave the following error.
+    Type 'unknown' is not assignable to type 'ReactNode'.
+app/infomentica/page.tsx(178,12): error TS2304: Cannot find name 'Tooltip'.
+app/infomentica/page.tsx(189,13): error TS2304: Cannot find name 'Tooltip'.
+app/infomentica/page.tsx(563,66): error TS2537: Type '{ source?: string | undefined; signal_origin?: string | undefined; business_area?: string | undefined; risk_level?: string | undefined; label?: string | undefined; compiled_check?: string | undefined; ... 8 more ...; record_date?: string | ... 1 more ... | undefined; }[] | undefined' has no matching index signature for type 'number'.
+app/landing-page/LandingPageContent.tsx(97,7): error TS2739: Type '{ dss: { breadcrumb: string; title: string; subtitle: string; panelTitle: string; panelText: string; bullets: string[]; features: { title: string; description: string; }[]; }; synthetic: { breadcrumb: string; ... 5 more ...; features: { ...; }[]; }; ticosa: { ...; }; }' is missing the following properties from type 'Record<"dss" | "synthetic" | "ticosa" | "subscription" | "payment", { breadcrumb: string; title: string; subtitle: string; panelTitle: string; panelText: string; bullets: string[]; features: { ...; }[]; }>': subscription, payment
+app/landing-page/LandingPageContent.tsx(386,25): error TS2322: Type 'string | undefined' is not assignable to type 'Url'.
+  Type 'undefined' is not assignable to type 'Url'.
+app/settings/repositories/page.tsx(833,24): error TS7006: Parameter 'current' implicitly has an 'any' type.
+app/synthetic-employees/document-controller/commands/page.tsx(218,3): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(props: { component: ElementType<any, keyof IntrinsicElements>; } & StackOwnProps & CommonProps & Omit<any, keyof CommonProps | keyof StackOwnProps>): Element | null', gave the following error.
+    Type '{ xs: string; md: string; }' is not assignable to type 'AlignItems | undefined'.
+  Overload 2 of 2, '(props: DefaultComponentProps<StackTypeMap<{}, "div">>): Element | null', gave the following error.
+    Type '{ xs: string; md: string; }' is not assignable to type 'AlignItems | undefined'.
+app/synthetic-employees/document-controller/configuration/page.tsx(411,11): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(props: { component: ElementType<any, keyof IntrinsicElements>; } & StackOwnProps & CommonProps & Omit<any, keyof CommonProps | keyof StackOwnProps>): Element | null', gave the following error.
+    Type '{ xs: string; md: string; }' is not assignable to type 'AlignItems | undefined'.
+  Overload 2 of 2, '(props: DefaultComponentProps<StackTypeMap<{}, "div">>): Element | null', gave the following error.
+    Type '{ xs: string; md: string; }' is not assignable to type 'AlignItems | undefined'.
+app/synthetic-employees/document-controller/configuration/page.tsx(1140,13): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(props: { component: ElementType<any, keyof IntrinsicElements>; } & StackOwnProps & CommonProps & Omit<any, keyof CommonProps | keyof StackOwnProps>): Element | null', gave the following error.
+    Type '{ xs: string; md: string; }' is not assignable to type 'AlignItems | undefined'.
+  Overload 2 of 2, '(props: DefaultComponentProps<StackTypeMap<{}, "div">>): Element | null', gave the following error.
+    Type '{ xs: string; md: string; }' is not assignable to type 'AlignItems | undefined'.
+app/synthetic-employees/document-controller/configuration/page.tsx(1648,21): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(props: { component: ElementType<any, keyof IntrinsicElements>; } & StackOwnProps & CommonProps & Omit<any, keyof CommonProps | keyof StackOwnProps>): Element | null', gave the following error.
+    Type '{ xs: string; md: string; }' is not assignable to type 'AlignItems | undefined'.
+  Overload 2 of 2, '(props: DefaultComponentProps<StackTypeMap<{}, "div">>): Element | null', gave the following error.
+    Type '{ xs: string; md: string; }' is not assignable to type 'AlignItems | undefined'.
+app/synthetic-employees/document-controller/control-center/page.tsx(369,13): error TS2345: Argument of type '(item: any, index: any) => boolean' is not assignable to parameter of type '(item: any) => boolean'.
+  Target signature provides too few arguments. Expected 2 or more, but got 1.
+app/synthetic-employees/document-controller/control-center/page.tsx(369,14): error TS7006: Parameter 'item' implicitly has an 'any' type.
+app/synthetic-employees/document-controller/control-center/page.tsx(369,20): error TS7006: Parameter 'index' implicitly has an 'any' type.
+app/synthetic-employees/document-controller/records/retention-review/page.tsx(64,9): error TS2322: Type 'Set<unknown>' is not assignable to type 'Set<string>'.
+  Type 'unknown' is not assignable to type 'string'.
+app/synthetic-employees/document-controller/registers/page.tsx(143,15): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(props: { component: ElementType<any, keyof IntrinsicElements>; } & StackOwnProps & CommonProps & Omit<any, keyof CommonProps | keyof StackOwnProps>): Element | null', gave the following error.
+    Type '{ xs: string; md: string; }' is not assignable to type 'AlignItems | undefined'.
+  Overload 2 of 2, '(props: DefaultComponentProps<StackTypeMap<{}, "div">>): Element | null', gave the following error.
+    Type '{ xs: string; md: string; }' is not assignable to type 'AlignItems | undefined'.
+components/repositories/SharePointSetupWizard.tsx(58,69): error TS2345: Argument of type 'Record<string, string>' is not assignable to parameter of type '{ auth_method?: string | undefined; tenant_id: string; client_id: string; client_secret?: string | undefined; client_secret_env?: string | undefined; certificate_thumbprint?: string | undefined; ... 5 more ...; site_id: string; }'.
+  Type 'Record<string, string>' is missing the following properties from type '{ auth_method?: string | undefined; tenant_id: string; client_id: string; client_secret?: string | undefined; client_secret_env?: string | undefined; certificate_thumbprint?: string | undefined; ... 5 more ...; site_id: string; }': tenant_id, client_id, site_id

@@ -1,0 +1,6 @@
+app/escalations/page.tsx(452,42): error TS2345: Argument of type '(option: string) => JSX.Element' is not assignable to parameter of type '(value: unknown, index: number, array: unknown[]) => Element'.
+  Types of parameters 'option' and 'value' are incompatible.
+    Type 'unknown' is not assignable to type 'string'.
+app/escalations/page.tsx(467,37): error TS2345: Argument of type '(option: string) => JSX.Element' is not assignable to parameter of type '(value: unknown, index: number, array: unknown[]) => Element'.
+  Types of parameters 'option' and 'value' are incompatible.
+    Type 'unknown' is not assignable to type 'string'.

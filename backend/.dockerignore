@@ -1,0 +1,12 @@
+.venv
+.venv-win
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.env
+.env.local
+storage
+uploaded_files
+*.sqlite3
+.git

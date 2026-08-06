@@ -1,0 +1,1034 @@
+.page {
+  min-height: 100vh;
+  background: #ffffff;
+  color: #172033;
+}
+
+.header {
+  background: #0c1b2d;
+  border-bottom: 1px solid #d6deea;
+}
+
+.headerRail {
+  min-height: 30px;
+  background: #B3B3B3;
+  display: flex;
+  align-items: center;
+}
+
+.headerRailInner {
+  width: min(1560px, calc(100% - 64px));
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  flex-wrap: wrap;
+  padding: 6px 0;
+}
+
+.headerRailContacts {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  flex-wrap: wrap;
+}
+
+.headerRailItem {
+  color: #000000;
+  font-size: 0.65rem;
+  font-weight: 500;
+  line-height: 1.2;
+  white-space: nowrap;
+  letter-spacing: 0.01em;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: geometricPrecision;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.headerRailIcon {
+  color: #000000;
+  font-size: 0.95rem !important;
+  flex: 0 0 auto;
+}
+
+.headerRailSocials {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 0 0 auto;
+}
+
+.headerRailSocialIcon {
+  color: #000000;
+  font-size: 1.05rem !important;
+  flex: 0 0 auto;
+}
+
+.container {
+  width: min(1560px, calc(100% - 64px));
+  margin: 0 auto;
+}
+
+.nav {
+  min-height: 102px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 34px;
+  padding: 0;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  color: inherit;
+  text-decoration: none;
+  flex: 0 0 auto;
+}
+
+.brand img {
+  margin-top: 5px;
+}
+
+.brandLogo {
+  width: min(247px, 100%);
+  height: auto;
+  object-fit: contain;
+}
+
+.navActions {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  flex: 1 1 auto;
+}
+
+.navLink {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  padding: 8px 0;
+  border-radius: 999px;
+  color: #ffffff;
+  font-weight: 500;
+  font-size: 0.92rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  text-decoration: none;
+  transition: color 0.2s ease;
+  white-space: nowrap;
+}
+
+.navLink::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 100%;
+  height: 2px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #2752ff 0%, #3bb8ff 100%);
+  transform: scaleX(0);
+  transform-origin: center;
+  transition: transform 0.2s ease;
+}
+
+.navLink:hover,
+.navLinkActive {
+  color: #ffffff;
+}
+
+.navLink:hover::after,
+.navLinkActive::after {
+  transform: scaleX(1);
+}
+
+.loginButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 83px;
+  min-height: 32px;
+  padding: 7px 18px;
+  border-radius: 10px;
+  border: 1px solid #0d2d72;
+  background: #0d2d72;
+  color: #ffffff;
+  font-size: 0.881rem;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  text-decoration: none;
+  box-shadow: 0 10px 24px rgba(13, 45, 114, 0.22);
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease,
+    filter 0.2s ease;
+}
+
+.loginButton:hover {
+  transform: translateY(-1px);
+  background: #123b94;
+  border-color: #123b94;
+  box-shadow: 0 16px 36px rgba(18, 59, 148, 0.28);
+}
+
+.hero {
+  position: relative;
+  overflow: hidden;
+  padding: 88px 0 100px;
+  background: transparent;
+  color: #ffffff;
+  width: 100vw;
+  margin-left: calc(50% - 50vw);
+  margin-right: calc(50% - 50vw);
+}
+
+.hero::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: url("/hero-ai-neural.jpg");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: cover;
+  transform: none;
+  opacity: 1;
+  filter: none;
+}
+
+.hero::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(180deg, rgba(8, 18, 44, 0.62) 0%, rgba(8, 18, 44, 0.68) 100%),
+    radial-gradient(circle at 50% 20%, rgba(255, 255, 255, 0.06), transparent 42%);
+}
+
+.heroContent {
+  position: relative;
+  z-index: 2;
+  max-width: 1320px;
+  margin: 0 auto;
+  text-align: center;
+}
+
+.eyebrow {
+  color: #4d8fff;
+  font-weight: 600;
+  letter-spacing: 0.38em;
+  text-transform: uppercase;
+  font-size: clamp(0.78rem, 0.95vw, 1rem);
+}
+
+.heroTitle {
+  margin: 18px auto 20px;
+  max-width: 1180px;
+  font-size: clamp(2.03rem, 3.78vw, 3.71rem);
+  line-height: 1.08;
+  letter-spacing: -0.05em;
+  font-weight: 700;
+}
+
+.heroText {
+  max-width: 980px;
+  margin: 0 auto;
+  color: rgba(255, 255, 255, 0.96);
+  font-size: clamp(0.805rem, 1.26vw, 1.4rem);
+  line-height: 1.28;
+  letter-spacing: -0.03em;
+  font-weight: 500;
+}
+
+.ctaBand {
+  background: #d9dde6;
+  color: #1d2433;
+}
+
+.ctaBandInner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 28px;
+  padding: 33px 76px 35px;
+}
+
+.ctaBandText h2 {
+  margin: 0 0 10px;
+  font-size: clamp(1.08rem, 1.92vw, 1.8rem);
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  font-weight: 600;
+  font-family: Roboto, Helvetica, sans-serif;
+}
+
+.ctaBandText p {
+  margin: 0;
+  max-width: 880px;
+  color: #4d5768;
+  font-size: clamp(0.588rem, 0.72vw, 0.708rem);
+  line-height: 1.5;
+  font-family: Roboto, Helvetica, sans-serif;
+}
+
+.ctaBandButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 119px;
+  min-height: 38px;
+  padding: 9px 18px;
+  border: 1px solid #0d2d72;
+  border-radius: 12px;
+  background: #0d2d72;
+  color: #ffffff;
+  text-decoration: none;
+  font-size: 0.72rem;
+  font-weight: 600;
+  transition:
+    background 0.2s ease,
+    border-color 0.2s ease,
+    transform 0.2s ease;
+}
+
+.ctaBandButton:hover {
+  background: #123b94;
+  border-color: #123b94;
+  transform: translateY(-1px);
+}
+
+.buttonDark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 9px 18px;
+  border-radius: 12px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-decoration: none;
+  border: 1px solid #0d2d72;
+  background: #0d2d72;
+  color: #ffffff;
+}
+
+.heroCard,
+.panel,
+.card,
+.plan,
+.feature,
+.contactForm,
+.contactInfo {
+  border-radius: 8px;
+}
+
+.heroCard {
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  padding: 22px;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.18);
+  backdrop-filter: blur(12px);
+}
+
+.metricGrid,
+.cards,
+.plans,
+.featureGrid,
+.footerGrid {
+  display: grid;
+  gap: 18px;
+}
+
+.metricGrid {
+  grid-template-columns: repeat(2, 1fr);
+  margin-top: 16px;
+}
+
+.metric {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 7px;
+  padding: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.metricValue {
+  display: block;
+  font-size: 1.55rem;
+  font-weight: 800;
+}
+
+.metricLabel {
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 0.86rem;
+}
+
+.section {
+  padding: 68px 0;
+}
+
+.sectionMuted {
+  background: #ffffff;
+}
+
+.sectionTitle {
+  max-width: 780px;
+  margin: 0 auto 34px;
+  text-align: center;
+}
+
+.sectionTitle h2 {
+  margin: 0 0 10px;
+  font-size: clamp(1.9rem, 3vw, 2.6rem);
+  letter-spacing: -0.05em;
+}
+
+.sectionTitle p {
+  margin: 0;
+  color: #667085;
+}
+
+.cards {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.card {
+  position: relative;
+  background: #ffffff;
+  border: 1px solid #d9e1ec;
+  padding: 24px;
+  box-shadow: 0 8px 22px rgba(16, 24, 40, 0.055);
+  transition: 0.22s ease;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.card:hover,
+.planFeatured {
+  box-shadow: 0 14px 40px rgba(16, 24, 40, 0.1);
+}
+
+.card:hover {
+  transform: translateY(-3px);
+}
+
+.card > * {
+  position: relative;
+  z-index: 1;
+}
+
+.cardDss::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0.5)),
+    url("/dss-card-bg-17483870.jpg");
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+  opacity: 1;
+}
+
+.cardSynthetic::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0.5)),
+    url("/synthetic-card-bg.jpg");
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+  opacity: 1;
+}
+
+.cardTicosa::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.85), rgba(255, 255, 255, 0.85)),
+    url("/ticosa-card-bg.png");
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+  opacity: 1;
+}
+
+.icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  margin-bottom: 18px;
+  background: linear-gradient(135deg, #164e8a, #23b3a4);
+  color: #ffffff;
+  font-weight: 900;
+}
+
+.card h3,
+.planTitle,
+.feature h4 {
+  margin: 0 0 10px;
+}
+
+.card p,
+.card li,
+.feature p,
+.panelText,
+.contactMeta {
+  color: #667085;
+}
+
+.card p {
+  margin-bottom: 18px;
+}
+
+.card .buttonDark {
+  margin-top: auto;
+  align-self: flex-start;
+}
+
+.cards ul,
+.plan ul {
+  padding-left: 18px;
+  margin-bottom: 0;
+}
+
+.consultingSection {
+  padding: 0;
+  background: #f3f4f7;
+  width: 100vw;
+  margin-left: calc(50% - 50vw);
+  margin-right: calc(50% - 50vw);
+}
+
+.consultingGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) clamp(460px, 32vw, 620px);
+  gap: 34px;
+  align-items: center;
+  padding: 0 0 0 clamp(48px, 7vw, 116px);
+}
+
+.consultingCopy h2 {
+  margin: 0 0 18px;
+  max-width: 760px;
+  font-size: clamp(1.89rem, 3.22vw, 3.115rem);
+  line-height: 1.06;
+  letter-spacing: -0.06em;
+  color: #11131d;
+}
+
+.consultingCopy p {
+  margin: 0;
+  max-width: 760px;
+  color: #7a8095;
+  font-size: 1rem;
+  line-height: 1.9;
+}
+
+.consultingEyebrow {
+  margin-bottom: 18px;
+  color: #3c74de;
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.34em;
+  text-transform: uppercase;
+}
+
+.consultingButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 28px;
+  min-width: 83px;
+  min-height: 32px;
+  padding: 7px 18px;
+  border-radius: 10px;
+  border: 1px solid #0d2d72;
+  background: #0d2d72;
+  color: #ffffff;
+  font-size: 0.881rem;
+  font-weight: 600;
+  text-decoration: none;
+  box-shadow: 0 10px 24px rgba(13, 45, 114, 0.22);
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease,
+    background 0.2s ease;
+}
+
+.consultingButton:hover {
+  background: #123b94;
+  border-color: #123b94;
+  box-shadow: 0 16px 36px rgba(18, 59, 148, 0.28);
+  transform: translateY(-1px);
+}
+
+.consultingVisual {
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+  justify-self: end;
+  min-height: 610px;
+  background-image: url("/consultation-visual-2.jpeg");
+  background-repeat: no-repeat;
+  background-position: 78% top;
+  background-size: auto 100%;
+}
+
+.plans {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+.plan {
+  background: #ffffff;
+  border: 1px solid #d9e1ec;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+}
+
+.planFeatured {
+  border: 2px solid #0b7fab;
+}
+
+.tag {
+  display: inline-block;
+  background: #e9f7f5;
+  color: #08786f;
+  padding: 5px 8px;
+  border-radius: 5px;
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+.price {
+  margin: 16px 0 4px;
+  font-size: 2.1rem;
+  font-weight: 850;
+  letter-spacing: -0.05em;
+}
+
+.priceSmall {
+  font-size: 0.88rem;
+  color: #667085;
+  font-weight: 650;
+}
+
+.planButton,
+.subscriptionButton,
+.subscriptionButtonSecondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  padding: 10px 18px;
+  border-radius: 10px;
+  text-decoration: none;
+  font-weight: 700;
+}
+
+.planButton {
+  margin-top: auto;
+  align-self: flex-start;
+  background: #0d2d72;
+  color: #ffffff;
+}
+
+.subscriptionGrid {
+  display: grid;
+  grid-template-columns: 1.1fr 0.9fr;
+  gap: 28px;
+  align-items: stretch;
+}
+
+.subscriptionCard {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 28px;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #102a43 0%, #164e8a 100%);
+  color: #ffffff;
+  box-shadow: 0 16px 44px rgba(16, 24, 40, 0.14);
+}
+
+.subscriptionTag {
+  display: inline-flex;
+  width: fit-content;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.subscriptionCard h3 {
+  margin: 18px 0 10px;
+  font-size: 2rem;
+  letter-spacing: -0.04em;
+}
+
+.subscriptionPrice {
+  margin-bottom: 16px;
+  font-size: 1.25rem;
+  font-weight: 800;
+}
+
+.subscriptionCard p {
+  color: rgba(255, 255, 255, 0.82);
+  line-height: 1.7;
+}
+
+.subscriptionButton {
+  margin-top: 24px;
+  width: fit-content;
+  background: #ffffff;
+  color: #0d2d72;
+}
+
+.subscriptionButtonSecondary {
+  margin-top: 24px;
+  width: fit-content;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+}
+
+.pageHero {
+  padding: 56px 0;
+  background: linear-gradient(135deg, #102a43, #164e8a);
+  color: #ffffff;
+}
+
+.breadcrumb {
+  color: #b9d7ee;
+  font-weight: 700;
+  font-size: 0.82rem;
+}
+
+.pageHero h1 {
+  margin: 12px 0 10px;
+  font-size: clamp(2rem, 4vw, 3.25rem);
+  letter-spacing: -0.05em;
+}
+
+.pageHero p {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.split,
+.contactGrid {
+  display: grid;
+  gap: 28px;
+}
+
+.split {
+  grid-template-columns: 0.95fr 1.05fr;
+  align-items: center;
+}
+
+.contactGrid {
+  grid-template-columns: 0.9fr 1.1fr;
+}
+
+.panel,
+.contactForm,
+.contactInfo {
+  background: #ffffff;
+  border: 1px solid #d9e1ec;
+  padding: 22px 24px;
+  box-shadow: 0 8px 24px rgba(16, 24, 40, 0.06);
+}
+
+.panel h2 {
+  margin-top: 0;
+  margin-bottom: 12px;
+  font-size: 1.8rem;
+  letter-spacing: -0.04em;
+}
+
+.panel .panelText {
+  margin-bottom: 14px;
+}
+
+.list {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.listItem {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  color: #667085;
+}
+
+.tick {
+  min-width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: #dcf7f3;
+  color: #08786f;
+  display: grid;
+  place-items: center;
+  font-weight: 900;
+}
+
+.featureGrid {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.feature {
+  background: #eef3f9;
+  border: 1px solid #d9e1ec;
+  padding: 18px;
+}
+
+.formField,
+.formSelect,
+.formTextarea {
+  width: 100%;
+  border: 1px solid #d9e1ec;
+  border-radius: 7px;
+  background: #ffffff;
+  padding: 13px 14px;
+  font: inherit;
+  margin-bottom: 12px;
+}
+
+.formTextarea {
+  min-height: 130px;
+  resize: vertical;
+}
+
+.footer {
+  background: #0c1b2d;
+  color: #ffffff;
+  padding-top: 46px;
+}
+
+.footerGrid {
+  grid-template-columns: 1.2fr repeat(3, 1fr);
+  padding-bottom: 34px;
+}
+
+.footer h4 {
+  margin: 0 0 12px;
+}
+
+.footer p,
+.footerLink {
+  display: block;
+  margin: 8px 0;
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 0.92rem;
+  text-decoration: none;
+}
+
+.footerBrandText {
+  max-width: 340px;
+}
+
+.bottomBar {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 15px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  font-size: 0.82rem;
+  color: rgba(255, 255, 255, 0.64);
+}
+
+@media (max-width: 940px) {
+  .consultingGrid,
+  .subscriptionGrid,
+  .split,
+  .contactGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .cards,
+  .plans,
+  .footerGrid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .nav {
+    min-height: auto;
+    flex-direction: column;
+    align-items: flex-start;
+    padding: 22px 0 26px;
+  }
+
+  .navActions {
+    justify-content: flex-start;
+    gap: 16px 20px;
+  }
+
+  .hero {
+    padding: 72px 0 80px;
+  }
+
+  .ctaBandInner {
+    flex-direction: column;
+    align-items: flex-start;
+    padding: 27px 34px 29px;
+  }
+
+  .consultingGrid {
+    min-height: auto;
+    padding: 44px 34px 0;
+    gap: 32px;
+  }
+
+  .consultingVisual {
+    min-height: 420px;
+    background-size: cover;
+    background-position: 64% top;
+  }
+}
+
+@media (max-width: 620px) {
+  .cards,
+  .plans,
+  .footerGrid,
+  .featureGrid,
+  .metricGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .container {
+    width: min(100% - 32px, 1560px);
+  }
+
+  .headerRail {
+    min-height: 20px;
+  }
+
+  .headerRailInner {
+    width: min(100% - 32px, 1560px);
+    gap: 12px;
+    padding: 5px 0;
+    justify-content: flex-start;
+  }
+
+  .headerRailContacts {
+    gap: 10px 16px;
+  }
+
+  .headerRailItem {
+    white-space: normal;
+    font-size: 0.63rem;
+  }
+
+  .headerRailSocials {
+    gap: 10px;
+  }
+
+  .brandLogo {
+    width: min(218px, 100%);
+  }
+
+  .navLink {
+    padding: 6px 0;
+    font-size: 0.82rem;
+  }
+
+  .loginButton {
+    min-width: 74px;
+    min-height: 29px;
+    padding: 6px 15px;
+    font-size: 0.77rem;
+  }
+
+  .hero {
+    padding: 56px 0 62px;
+  }
+
+  .section {
+    padding: 46px 0;
+  }
+
+  .eyebrow {
+    letter-spacing: 0.24em;
+    font-size: 0.76rem;
+  }
+
+  .heroTitle {
+    font-size: clamp(1.47rem, 7.14vw, 2.205rem);
+    line-height: 1.1;
+  }
+
+  .heroText {
+    font-size: clamp(0.7rem, 3.43vw, 1.015rem);
+    line-height: 1.34;
+  }
+
+  .consultingSection {
+    padding: 0;
+  }
+
+  .consultingGrid {
+    padding: 34px 22px 0;
+  }
+
+  .consultingCopy h2 {
+    font-size: clamp(1.4rem, 5.6vw, 2.1rem);
+  }
+
+  .consultingCopy p {
+    font-size: 0.98rem;
+    line-height: 1.65;
+  }
+
+  .consultingEyebrow {
+    font-size: 0.72rem;
+    letter-spacing: 0.24em;
+  }
+
+  .consultingButton {
+    min-width: 74px;
+    min-height: 29px;
+    padding: 6px 15px;
+    font-size: 0.77rem;
+    margin-top: 24px;
+  }
+
+  .consultingVisual {
+    min-height: 320px;
+    background-position: center top;
+  }
+
+  .ctaBandText h2 {
+    font-size: clamp(0.9rem, 4.8vw, 1.26rem);
+  }
+
+  .ctaBandText p {
+    font-size: 0.56rem;
+  }
+
+  .ctaBandButton {
+    min-width: 108px;
+    min-height: 35px;
+    padding: 8px 15px;
+  }
+}

@@ -1,0 +1,42 @@
+# OS / editor
+.DS_Store
+.vscode/
+
+# Local credentials / secrets
+.aws/
+.agents/
+.codex/
+backend/.env
+backend/.env.*
+frontend/.env*
+
+# Python
+**/__pycache__/
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+backend/.venv/
+backend/.venv-win/
+.venv/
+.venv-win/
+
+# Node / Next
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/build/
+
+# Archives / local bundles
+*.tar
+*.tgz
+*.zip
+
+# Temporary local materials
+temp-eic/
+
+# Logs and runtime state
+*.log
+*.bak
+backend/storage/
+backend/tmp/
+backend/uploaded_files/
