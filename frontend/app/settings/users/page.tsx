@@ -48,6 +48,16 @@ const modulePermissionMap: Record<string, string[]> = {
   copilot: ["copilot:use"],
   documents: ["documents:read", "documents:upload"],
   escalations: ["escalation:read", "escalation:manage"],
+  augmis_business: [
+    "business_development:read",
+    "business_development:create",
+    "business_development:update",
+    "business_development:delete",
+    "business_development:scan",
+    "business_development:qualify",
+    "business_development:outreach",
+    "business_development:admin",
+  ],
   settings: ["admin:settings", "admin:users"],
 };
 
@@ -188,23 +198,37 @@ export default function UserManagementPage() {
         "copilot",
         "documents",
         "escalations",
+        "augmis_business",
       ];
       permissions = [
         "dashboard:view",
         "copilot:use",
         "documents:read",
         "escalation:read",
+        "business_development:read",
       ];
     }
 
     if (role === "MANAGER") {
-      allowed_modules = ["dashboard", "copilot", "documents"];
-      permissions = ["dashboard:view", "copilot:use", "documents:read"];
+      allowed_modules = ["dashboard", "copilot", "documents", "augmis_business"];
+      permissions = [
+        "dashboard:view",
+        "copilot:use",
+        "documents:read",
+        "business_development:read",
+        "business_development:create",
+        "business_development:update",
+        "business_development:qualify",
+      ];
     }
 
     if (role === "ANALYST") {
-      allowed_modules = ["dashboard", "documents"];
-      permissions = ["dashboard:view", "documents:read"];
+      allowed_modules = ["dashboard", "documents", "augmis_business"];
+      permissions = [
+        "dashboard:view",
+        "documents:read",
+        "business_development:read",
+      ];
     }
 
     if (role === "VIEWER") {
@@ -234,21 +258,35 @@ export default function UserManagementPage() {
         "copilot",
         "documents",
         "escalations",
+        "augmis_business",
       ];
       permissions = [
         "dashboard:view",
         "copilot:use",
         "documents:read",
         "escalation:read",
+        "business_development:read",
       ];
     }
     if (role === "MANAGER") {
-      allowed_modules = ["dashboard", "copilot", "documents"];
-      permissions = ["dashboard:view", "copilot:use", "documents:read"];
+      allowed_modules = ["dashboard", "copilot", "documents", "augmis_business"];
+      permissions = [
+        "dashboard:view",
+        "copilot:use",
+        "documents:read",
+        "business_development:read",
+        "business_development:create",
+        "business_development:update",
+        "business_development:qualify",
+      ];
     }
     if (role === "ANALYST") {
-      allowed_modules = ["dashboard", "documents"];
-      permissions = ["dashboard:view", "documents:read"];
+      allowed_modules = ["dashboard", "documents", "augmis_business"];
+      permissions = [
+        "dashboard:view",
+        "documents:read",
+        "business_development:read",
+      ];
     }
     if (role === "VIEWER") {
       allowed_modules = ["dashboard"];

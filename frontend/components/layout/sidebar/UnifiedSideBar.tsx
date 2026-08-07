@@ -168,6 +168,15 @@ const symployeeItems: MenuItem[] = [
   },
 ];
 
+const businessDevelopmentItem: MenuItem = {
+  label: "Business Development Agent",
+  path: "/augmis-business",
+  icon: <BusinessCenterOutlinedIcon />,
+  accentColor: "#22C55E",
+  module: "augmis_business",
+  permission: "business_development:read",
+};
+
 export default function UnifiedSidebar({
   collapsed = false,
   onToggleCollapse,
@@ -182,10 +191,10 @@ export default function UnifiedSidebar({
   const isCool = shellMode === "COOL";
 
   const [infomenticaOpen, setInfomenticaOpen] = useState(
-    !pathname.startsWith("/synthetic-employees")
+    !pathname.startsWith("/synthetic-employees") && !pathname.startsWith("/augmis-business")
   );
   const [symployeesOpen, setSymployeesOpen] = useState(
-    pathname.startsWith("/synthetic-employees")
+    pathname.startsWith("/synthetic-employees") || pathname.startsWith("/augmis-business")
   );
   const [documentControllerOpen, setDocumentControllerOpen] = useState(
     pathname.startsWith("/synthetic-employees/document-controller")
@@ -603,7 +612,7 @@ export default function UnifiedSidebar({
             "Synthetic Employees",
             <BadgeOutlinedIcon />,
             symployeesOpen,
-            pathname.startsWith("/synthetic-employees"),
+            pathname.startsWith("/synthetic-employees") || pathname.startsWith("/augmis-business"),
             () => togglePrimarySection("symployees"),
             "/synthetic-employees"
           )}
@@ -623,6 +632,11 @@ export default function UnifiedSidebar({
                     {symployeeItems.map((item) => renderNestedItem(item))}
                   </List>
                 </Collapse>
+                {(!businessDevelopmentItem.module || hasModule(businessDevelopmentItem.module)) &&
+                (!businessDevelopmentItem.permission ||
+                  hasPermission(businessDevelopmentItem.permission))
+                  ? renderItem(businessDevelopmentItem, true)
+                  : null}
               </List>
             </Collapse>
           ) : null}

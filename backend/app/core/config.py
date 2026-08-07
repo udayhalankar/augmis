@@ -4,6 +4,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         extra="ignore",
+        env_file=".env",
+        env_file_encoding="utf-8",
     )
 
     OPENAI_API_KEY: str
@@ -37,5 +39,14 @@ class Settings(BaseSettings):
     AUTH_SESSION_IDLE_TIMEOUT_MINUTES: int = 30
     AUTH_SESSION_ABSOLUTE_TIMEOUT_HOURS: int = 12
     AUTH_REMEMBER_ME_SESSION_DAYS: int = 30
+    AUGMIS_CONNECTOR_SECRET_KEY: str | None = None
+    TAVILY_API_KEY: str | None = None
+    TAVILY_SEARCH_BASE_URL: str = "https://api.tavily.com/search"
+    BRAVE_SEARCH_API_KEY: str | None = None
+    BRAVE_SEARCH_BASE_URL: str = "https://api.search.brave.com/res/v1/web/search"
+    AUGMIS_WEB_SEARCH_TIMEOUT_SECONDS: int = 20
+    AUGMIS_WEB_FETCH_TIMEOUT_SECONDS: int = 15
+    AUGMIS_WEB_FETCH_MAX_BYTES: int = 300000
+    AUGMIS_WEB_FETCH_MAX_REDIRECTS: int = 3
 
 settings = Settings()

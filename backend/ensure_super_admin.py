@@ -10,6 +10,7 @@ DEFAULT_MODULES = [
     "copilot",
     "documents",
     "escalations",
+    "augmis_business",
     "settings",
 ]
 DEFAULT_PERMISSIONS = [
@@ -19,6 +20,14 @@ DEFAULT_PERMISSIONS = [
     "documents:upload",
     "escalation:read",
     "escalation:manage",
+    "business_development:read",
+    "business_development:create",
+    "business_development:update",
+    "business_development:delete",
+    "business_development:scan",
+    "business_development:qualify",
+    "business_development:outreach",
+    "business_development:admin",
     "admin:users",
     "admin:settings",
 ]

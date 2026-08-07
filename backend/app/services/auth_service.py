@@ -60,6 +60,7 @@ DEFAULT_TENANT_ADMIN_MODULES = [
     "vendors",
     "procurement",
     "escalations",
+    "augmis_business",
     "settings",
 ]
 DEFAULT_TENANT_ADMIN_PERMISSIONS = [
@@ -75,6 +76,14 @@ DEFAULT_TENANT_ADMIN_PERMISSIONS = [
     "procurement:write",
     "escalation:read",
     "escalation:manage",
+    "business_development:read",
+    "business_development:create",
+    "business_development:update",
+    "business_development:delete",
+    "business_development:scan",
+    "business_development:qualify",
+    "business_development:outreach",
+    "business_development:admin",
     "admin:users",
     "admin:settings",
 ]

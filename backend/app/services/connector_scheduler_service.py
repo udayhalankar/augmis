@@ -2,6 +2,7 @@ import logging
 
 from app.core.config import settings
 from app.core.database import SessionLocal
+from app.services.augmis_business_listener_service import run_due_listener_scans
 from app.services.server_log_service import background_log_context
 from app.services.connector_scheduled_runner_service import run_due_repository_syncs
 
@@ -55,6 +56,15 @@ def start_connector_scheduler():
         trigger="interval",
         minutes=settings.CONNECTOR_SYNC_SCHEDULER_INTERVAL_MINUTES,
         id="connector_due_syncs",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+    )
+    scheduler.add_job(
+        _run_due_listener_scans_job,
+        trigger="interval",
+        minutes=settings.CONNECTOR_SYNC_SCHEDULER_INTERVAL_MINUTES,
+        id="augmis_business_due_listener_scans",
         replace_existing=True,
         coalesce=True,
         max_instances=1,
@@ -115,6 +125,30 @@ def _run_due_syncs_job():
         except Exception:
             logger.exception(
                 "Connector due-sync job crashed",
+                extra={"category": "scheduler_crash", "is_critical": True},
+            )
+        finally:
+            db.close()
+
+
+def _run_due_listener_scans_job():
+    with background_log_context(
+        request_id="SCHEDULER-AUGMIS-DUE-LISTENER-SCANS",
+        route="scheduler://augmis_business_due_listener_scans",
+        method="JOB",
+        component="augmis_business_listener_scheduler",
+    ):
+        db = SessionLocal()
+        try:
+            result = run_due_listener_scans(db)
+            logger.info(
+                "AUGMIS listener due-scan job completed: %s connectors considered due",
+                result["due_count"],
+                extra={"category": "scheduler_run"},
+            )
+        except Exception:
+            logger.exception(
+                "AUGMIS listener due-scan job crashed",
                 extra={"category": "scheduler_crash", "is_critical": True},
             )
         finally:

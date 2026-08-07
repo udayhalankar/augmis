@@ -13,6 +13,7 @@ from app.api.routes import repository_sync
 from app.api.routes import scope_tracker
 from app.api.routes import symployees
 from app.api.routes import symployee_record_configuration
+from app.api.routes import augmis_business
 from app.services.connector_scheduler_service import (
     start_connector_scheduler,
     stop_connector_scheduler,
@@ -65,6 +66,7 @@ app.include_router(repositories.router)
 app.include_router(scope_tracker.router)
 app.include_router(symployees.router)
 app.include_router(symployee_record_configuration.router)
+app.include_router(augmis_business.router)
 
 app.add_middleware(
     CORSMiddleware,

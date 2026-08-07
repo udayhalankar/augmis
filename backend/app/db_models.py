@@ -59,6 +59,834 @@ class Plan(AuditColumnsMixin, Base):
     features = Column(JSON, default=list)
 
 
+class BusinessDevelopmentExperienceItem(Base):
+    __tablename__ = "bd_experience_items"
+
+    id = Column(String, primary_key=True)
+    tenant_id = Column(String, ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    name = Column(String, nullable=False)
+    category = Column(String, nullable=False, index=True)
+    description = Column(Text, nullable=False, default="")
+    business_problems_json = Column(JSON, nullable=False, default=list)
+    features_json = Column(JSON, nullable=False, default=list)
+    technologies_json = Column(JSON, nullable=False, default=list)
+    industries_json = Column(JSON, nullable=False, default=list)
+    keywords_json = Column(JSON, nullable=False, default=list)
+    reusable_capabilities_json = Column(JSON, nullable=False, default=list)
+    confidentiality_safe_summary = Column(Text, nullable=False, default="")
+    status = Column(String, nullable=False, default="active", index=True)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "name", name="uq_bd_experience_item_tenant_name"),
+        Index("ix_bd_experience_items_tenant_category", "tenant_id", "category"),
+    )
+
+
+class BusinessDevelopmentOpportunity(Base):
+    __tablename__ = "bd_opportunities"
+
+    id = Column(String, primary_key=True)
+    tenant_id = Column(String, ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    external_id = Column(String, nullable=True)
+    source_type = Column(String, nullable=False, index=True)
+    source_name = Column(String, nullable=False)
+    source_url = Column(String, nullable=True)
+    title = Column(String, nullable=False)
+    organization_name = Column(String, nullable=False, index=True)
+    organization_domain = Column(String, nullable=True, index=True)
+    country = Column(String, nullable=True, index=True)
+    region = Column(String, nullable=True, index=True)
+    industry = Column(String, nullable=True)
+    published_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    closing_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    raw_summary = Column(Text, nullable=True)
+    requirement_summary = Column(Text, nullable=False)
+    business_problem = Column(Text, nullable=True)
+    expected_deliverables_json = Column(JSON, nullable=False, default=list)
+    required_technologies_json = Column(JSON, nullable=False, default=list)
+    published_budget = Column(Float, nullable=True)
+    published_currency = Column(String, nullable=True)
+    estimated_value_min = Column(Float, nullable=True)
+    estimated_value_max = Column(Float, nullable=True)
+    estimated_currency = Column(String, nullable=True)
+    fit_score = Column(Float, nullable=True, index=True)
+    confidence_score = Column(Float, nullable=True)
+    ai_recommendation = Column(Text, nullable=True)
+    opportunity_status = Column(String, nullable=False, default="new", index=True)
+    source_evidence_json = Column(JSON, nullable=False, default=list)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "source_type",
+            "external_id",
+            name="uq_bd_opportunity_tenant_source_external",
+        ),
+        Index("ix_bd_opportunities_tenant_status", "tenant_id", "opportunity_status"),
+        Index("ix_bd_opportunities_tenant_closing", "tenant_id", "closing_at"),
+        Index("ix_bd_opportunities_tenant_fit", "tenant_id", "fit_score"),
+        Index("ix_bd_opportunities_tenant_domain", "tenant_id", "organization_domain"),
+        Index("ix_bd_opportunities_tenant_source_url", "tenant_id", "source_url"),
+    )
+
+
+class BusinessDevelopmentProspect(Base):
+    __tablename__ = "bd_prospects"
+
+    id = Column(String, primary_key=True)
+    tenant_id = Column(String, ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    organization_name = Column(String, nullable=False, index=True)
+    organization_domain = Column(String, nullable=True, index=True)
+    website_url = Column(String, nullable=True)
+    country = Column(String, nullable=True, index=True)
+    region = Column(String, nullable=True, index=True)
+    city = Column(String, nullable=True, index=True)
+    industry = Column(String, nullable=True, index=True)
+    organization_type = Column(String, nullable=True, index=True)
+    employee_range = Column(String, nullable=True)
+    general_email = Column(String, nullable=True, index=True)
+    general_phone = Column(String, nullable=True)
+    prospect_status = Column(String, nullable=False, default="active", index=True)
+    estimated_account_potential_min = Column(Float, nullable=True)
+    estimated_account_potential_max = Column(Float, nullable=True)
+    estimated_currency = Column(String, nullable=True)
+    notes = Column(Text, nullable=True)
+    source_opportunity_id = Column(String, ForeignKey("bd_opportunities.id"), nullable=True, index=True)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "organization_name",
+            "organization_domain",
+            name="uq_bd_prospect_tenant_name_domain",
+        ),
+        Index("ix_bd_prospects_tenant_status", "tenant_id", "prospect_status"),
+        Index("ix_bd_prospects_tenant_domain", "tenant_id", "organization_domain"),
+    )
+
+
+class BusinessDevelopmentContact(Base):
+    __tablename__ = "bd_contacts"
+
+    id = Column(String, primary_key=True)
+    tenant_id = Column(String, ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    prospect_id = Column(String, ForeignKey("bd_prospects.id"), nullable=False, index=True)
+    full_name = Column(String, nullable=True, index=True)
+    email = Column(String, nullable=True, index=True)
+    phone = Column(String, nullable=True)
+    job_title = Column(String, nullable=True)
+    department = Column(String, nullable=True)
+    buyer_role = Column(String, nullable=True, index=True)
+    linkedin_url = Column(String, nullable=True)
+    company_profile_url = Column(String, nullable=True)
+    contact_source = Column(String, nullable=True)
+    source_url = Column(String, nullable=True)
+    evidence_text = Column(Text, nullable=True)
+    verification_status = Column(String, nullable=False, default="unverified", index=True)
+    confidence_score = Column(Float, nullable=True)
+    contact_status = Column(String, nullable=False, default="active", index=True)
+    is_primary = Column(Boolean, nullable=False, default=False, index=True)
+    notes = Column(Text, nullable=True)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "prospect_id",
+            "email",
+            name="uq_bd_contact_tenant_prospect_email",
+        ),
+        Index("ix_bd_contacts_tenant_status", "tenant_id", "contact_status"),
+    )
+
+
+class BusinessDevelopmentLead(Base):
+    __tablename__ = "bd_leads"
+
+    id = Column(String, primary_key=True)
+    tenant_id = Column(String, ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    opportunity_id = Column(String, ForeignKey("bd_opportunities.id"), nullable=False, index=True)
+    prospect_id = Column(String, ForeignKey("bd_prospects.id"), nullable=False, index=True)
+    primary_contact_id = Column(String, ForeignKey("bd_contacts.id"), nullable=True, index=True)
+    title = Column(String, nullable=False, index=True)
+    lead_stage = Column(String, nullable=False, default="new", index=True)
+    lead_status = Column(String, nullable=False, default="active", index=True)
+    priority = Column(String, nullable=False, default="medium", index=True)
+    source_type = Column(String, nullable=True, index=True)
+    source_name = Column(String, nullable=True)
+    estimated_value = Column(Float, nullable=True)
+    weighted_value = Column(Float, nullable=True)
+    probability_pct = Column(Float, nullable=True)
+    notes = Column(Text, nullable=True)
+    converted_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        Index("ix_bd_leads_tenant_stage", "tenant_id", "lead_stage"),
+        Index("ix_bd_leads_tenant_status", "tenant_id", "lead_status"),
+        Index("ix_bd_leads_tenant_opportunity", "tenant_id", "opportunity_id"),
+    )
+
+
+class BusinessDevelopmentLeadExperienceMatch(Base):
+    __tablename__ = "bd_lead_experience_matches"
+
+    id = Column(String, primary_key=True)
+    tenant_id = Column(String, ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    lead_id = Column(String, ForeignKey("bd_leads.id"), nullable=False, index=True)
+    experience_item_id = Column(String, ForeignKey("bd_experience_items.id"), nullable=False, index=True)
+    relevance_score = Column(Float, nullable=True)
+    match_notes = Column(Text, nullable=True)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "lead_id",
+            "experience_item_id",
+            name="uq_bd_lead_experience_match",
+        ),
+    )
+
+
+class BusinessDevelopmentTask(Base):
+    __tablename__ = "bd_tasks"
+
+    id = Column(String, primary_key=True)
+    tenant_id = Column(String, ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    lead_id = Column(String, ForeignKey("bd_leads.id"), nullable=False, index=True)
+    opportunity_id = Column(String, ForeignKey("bd_opportunities.id"), nullable=True, index=True)
+    prospect_id = Column(String, ForeignKey("bd_prospects.id"), nullable=True, index=True)
+    assigned_user_id = Column(String, ForeignKey("users.user_id"), nullable=True, index=True)
+    title = Column(String, nullable=False)
+    description = Column(Text, nullable=True)
+    task_type = Column(String, nullable=False, default="follow_up", index=True)
+    task_status = Column(String, nullable=False, default="open", index=True)
+    priority = Column(String, nullable=False, default="medium", index=True)
+    due_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    completed_by = Column(String, ForeignKey("users.user_id"), nullable=True, index=True)
+    completion_notes = Column(Text, nullable=True)
+    metadata_json = Column(JSON, nullable=False, default=dict)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        Index("ix_bd_tasks_tenant_status", "tenant_id", "task_status"),
+        Index("ix_bd_tasks_tenant_due", "tenant_id", "due_at"),
+        Index("ix_bd_tasks_tenant_priority", "tenant_id", "priority"),
+    )
+
+
+class BusinessDevelopmentActivity(Base):
+    __tablename__ = "bd_activities"
+
+    id = Column(String, primary_key=True)
+    tenant_id = Column(String, ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    lead_id = Column(String, ForeignKey("bd_leads.id"), nullable=True, index=True)
+    opportunity_id = Column(String, ForeignKey("bd_opportunities.id"), nullable=True, index=True)
+    prospect_id = Column(String, ForeignKey("bd_prospects.id"), nullable=True, index=True)
+    contact_id = Column(String, ForeignKey("bd_contacts.id"), nullable=True, index=True)
+    activity_type = Column(String, nullable=False, index=True)
+    subject = Column(String, nullable=False)
+    description = Column(Text, nullable=True)
+    activity_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+    direction = Column(String, nullable=True, index=True)
+    outcome = Column(String, nullable=True, index=True)
+    metadata_json = Column(JSON, nullable=False, default=dict)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        Index("ix_bd_activities_tenant_type", "tenant_id", "activity_type"),
+        Index("ix_bd_activities_tenant_activity_at", "tenant_id", "activity_at"),
+    )
+
+
+class BusinessDevelopmentSearchProfile(Base):
+    __tablename__ = "bd_search_profiles"
+
+    id = Column(String, primary_key=True)
+    tenant_id = Column(String, ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    name = Column(String, nullable=False)
+    enabled = Column(Boolean, nullable=False, default=True, index=True)
+    target_regions_json = Column(JSON, nullable=False, default=list)
+    target_countries_json = Column(JSON, nullable=False, default=list)
+    target_industries_json = Column(JSON, nullable=False, default=list)
+    include_keywords_json = Column(JSON, nullable=False, default=list)
+    include_technologies_json = Column(JSON, nullable=False, default=list)
+    include_capabilities_json = Column(JSON, nullable=False, default=list)
+    exclude_keywords_json = Column(JSON, nullable=False, default=list)
+    excluded_domains_json = Column(JSON, nullable=False, default=list)
+    excluded_categories_json = Column(JSON, nullable=False, default=list)
+    minimum_budget = Column(Float, nullable=True)
+    currencies_json = Column(JSON, nullable=False, default=list)
+    allow_budget_unknown = Column(Boolean, nullable=False, default=True)
+    solo_feasibility_preference = Column(String, nullable=True)
+    small_team_allowed = Column(Boolean, nullable=False, default=True)
+    max_delivery_months = Column(Integer, nullable=True)
+    max_age_days = Column(Integer, nullable=True)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "name", name="uq_bd_search_profile_tenant_name"),
+        Index("ix_bd_search_profiles_tenant_enabled", "tenant_id", "enabled"),
+    )
+
+
+class BusinessDevelopmentConnector(Base):
+    __tablename__ = "bd_connectors"
+
+    id = Column(String, primary_key=True)
+    tenant_id = Column(String, ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    search_profile_id = Column(
+        String,
+        ForeignKey("bd_search_profiles.id"),
+        nullable=True,
+        index=True,
+    )
+    connector_type = Column(String, nullable=False, index=True)
+    name = Column(String, nullable=False)
+    source_category = Column(String, nullable=False, index=True)
+    status = Column(String, nullable=False, default="configured", index=True)
+    enabled = Column(Boolean, nullable=False, default=True, index=True)
+    schedule_enabled = Column(Boolean, nullable=False, default=False, index=True)
+    schedule_expression = Column(String, nullable=True)
+    configuration_json = Column(JSON, nullable=False, default=dict)
+    search_criteria_json = Column(JSON, nullable=False, default=dict)
+    capability_flags_json = Column(JSON, nullable=False, default=dict)
+    last_scan_at = Column(DateTime(timezone=True), nullable=True)
+    last_success_at = Column(DateTime(timezone=True), nullable=True)
+    last_error_at = Column(DateTime(timezone=True), nullable=True)
+    last_error_message = Column(Text, nullable=True)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "name", name="uq_bd_connector_tenant_name"),
+        Index("ix_bd_connectors_tenant_type", "tenant_id", "connector_type"),
+        Index("ix_bd_connectors_tenant_status", "tenant_id", "status"),
+    )
+
+
+class BusinessDevelopmentConnectorSecret(Base):
+    __tablename__ = "bd_connector_secrets"
+
+    id = Column(String, primary_key=True)
+    tenant_id = Column(String, ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    connector_id = Column(String, ForeignKey("bd_connectors.id"), nullable=True, index=True)
+    provider = Column(String, nullable=False, index=True)
+    credential_type = Column(String, nullable=False, default="api_key", index=True)
+    encrypted_value = Column(Text, nullable=False)
+    key_version = Column(String, nullable=False, default="v1")
+    status = Column(String, nullable=False, default="active", index=True)
+    last_four = Column(String, nullable=True)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_by = Column(String, nullable=True)
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+    last_tested_at = Column(DateTime(timezone=True), nullable=True)
+    last_test_status = Column(String, nullable=True)
+    last_test_error = Column(Text, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "provider",
+            "credential_type",
+            name="uq_bd_connector_secret_tenant_provider_type",
+        ),
+        Index("ix_bd_connector_secrets_tenant_provider", "tenant_id", "provider"),
+    )
+
+
+class BusinessDevelopmentConnectorRun(Base):
+    __tablename__ = "bd_connector_runs"
+
+    id = Column(String, primary_key=True)
+    tenant_id = Column(String, ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    connector_id = Column(String, ForeignKey("bd_connectors.id"), nullable=False, index=True)
+    run_type = Column(String, nullable=False, default="manual", index=True)
+    status = Column(String, nullable=False, default="queued", index=True)
+    started_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        index=True,
+    )
+    completed_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    items_found = Column(Integer, nullable=False, default=0)
+    items_new = Column(Integer, nullable=False, default=0)
+    items_duplicate = Column(Integer, nullable=False, default=0)
+    items_filtered = Column(Integer, nullable=False, default=0)
+    items_failed = Column(Integer, nullable=False, default=0)
+    error_summary = Column(Text, nullable=True)
+    run_metadata_json = Column(JSON, nullable=False, default=dict)
+    initiated_by = Column(String, ForeignKey("users.user_id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        Index(
+            "ix_bd_connector_runs_tenant_connector_started",
+            "tenant_id",
+            "connector_id",
+            "started_at",
+        ),
+        Index("ix_bd_connector_runs_tenant_status_started", "tenant_id", "status", "started_at"),
+    )
+
+
+class BusinessDevelopmentDiscoveredOpportunity(Base):
+    __tablename__ = "bd_discovered_opportunities"
+
+    id = Column(String, primary_key=True)
+    tenant_id = Column(String, ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    connector_id = Column(String, ForeignKey("bd_connectors.id"), nullable=False, index=True)
+    connector_run_id = Column(String, ForeignKey("bd_connector_runs.id"), nullable=True, index=True)
+    external_id = Column(String, nullable=True)
+    source_type = Column(String, nullable=False, index=True)
+    source_name = Column(String, nullable=False)
+    source_url = Column(String, nullable=True)
+    canonical_source_url = Column(String, nullable=True)
+    source_domain = Column(String, nullable=True, index=True)
+    source_country = Column(String, nullable=True, index=True)
+    title = Column(String, nullable=False)
+    normalized_title = Column(String, nullable=False)
+    organization_name = Column(String, nullable=True, index=True)
+    normalized_organization_name = Column(String, nullable=True, index=True)
+    published_date = Column(DateTime(timezone=True), nullable=True, index=True)
+    closing_date = Column(DateTime(timezone=True), nullable=True, index=True)
+    raw_summary = Column(Text, nullable=True)
+    requirement_summary = Column(Text, nullable=True)
+    raw_content_json = Column(JSON, nullable=False, default=dict)
+    raw_text = Column(Text, nullable=True)
+    country = Column(String, nullable=True, index=True)
+    region = Column(String, nullable=True, index=True)
+    industry = Column(String, nullable=True, index=True)
+    budget_min = Column(Float, nullable=True)
+    budget_max = Column(Float, nullable=True)
+    currency = Column(String, nullable=True, index=True)
+    discovered_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        index=True,
+    )
+    retrieval_timestamp = Column(DateTime(timezone=True), nullable=True)
+    discovery_status = Column(String, nullable=False, default="new", index=True)
+    duplicate_of_discovery_id = Column(
+        String,
+        ForeignKey("bd_discovered_opportunities.id"),
+        nullable=True,
+        index=True,
+    )
+    possible_duplicate_of_discovery_id = Column(
+        String,
+        ForeignKey("bd_discovered_opportunities.id"),
+        nullable=True,
+        index=True,
+    )
+    imported_opportunity_id = Column(
+        String,
+        ForeignKey("bd_opportunities.id"),
+        nullable=True,
+        index=True,
+    )
+    preliminary_relevance_score = Column(Float, nullable=True, index=True)
+    relevance_reasons_json = Column(JSON, nullable=False, default=list)
+    matched_keywords_json = Column(JSON, nullable=False, default=list)
+    evidence_json = Column(JSON, nullable=False, default=list)
+    normalized_search_text = Column(Text, nullable=True)
+    url_fingerprint = Column(String, nullable=True, index=True)
+    composite_fingerprint = Column(String, nullable=True, index=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "connector_id",
+            "external_id",
+            name="uq_bd_discovery_tenant_connector_external",
+        ),
+        Index("ix_bd_discoveries_tenant_status", "tenant_id", "discovery_status"),
+        Index("ix_bd_discoveries_tenant_connector", "tenant_id", "connector_id"),
+        Index("ix_bd_discoveries_tenant_discovered", "tenant_id", "discovered_at"),
+        Index("ix_bd_discoveries_tenant_closing", "tenant_id", "closing_date"),
+        Index("ix_bd_discoveries_tenant_imported", "tenant_id", "imported_opportunity_id"),
+    )
+
+
+class BusinessDevelopmentOpportunityAIAssessment(Base):
+    __tablename__ = "bd_opportunity_ai_assessments"
+
+    id = Column(String, primary_key=True)
+    tenant_id = Column(String, ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    opportunity_id = Column(String, ForeignKey("bd_opportunities.id"), nullable=False, index=True)
+    assessment_version = Column(Integer, nullable=False)
+    provider = Column(String, nullable=False)
+    model = Column(String, nullable=False)
+    prompt_bundle_version = Column(String, nullable=False, default="phase4a_v1")
+    requirement_extraction_json = Column(JSON, nullable=False, default=dict)
+    qualification_json = Column(JSON, nullable=False, default=dict)
+    buyer_roles_json = Column(JSON, nullable=False, default=dict)
+    final_fit_score = Column(Float, nullable=True, index=True)
+    confidence_score = Column(Float, nullable=True)
+    recommendation = Column(String, nullable=True, index=True)
+    risks_json = Column(JSON, nullable=False, default=list)
+    missing_information_json = Column(JSON, nullable=False, default=list)
+    ai_run_summary_json = Column(JSON, nullable=False, default=dict)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "opportunity_id",
+            "assessment_version",
+            name="uq_bd_opportunity_ai_assessment_version",
+        ),
+        Index(
+            "ix_bd_opportunity_ai_assessments_tenant_opportunity_created",
+            "tenant_id",
+            "opportunity_id",
+            "created_at",
+        ),
+    )
+
+
+class BusinessDevelopmentOpportunityExperienceMatch(Base):
+    __tablename__ = "bd_opportunity_experience_matches"
+
+    id = Column(String, primary_key=True)
+    tenant_id = Column(String, ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    opportunity_id = Column(String, ForeignKey("bd_opportunities.id"), nullable=False, index=True)
+    assessment_id = Column(
+        String,
+        ForeignKey("bd_opportunity_ai_assessments.id"),
+        nullable=False,
+        index=True,
+    )
+    experience_item_id = Column(String, ForeignKey("bd_experience_items.id"), nullable=False, index=True)
+    match_score = Column(Float, nullable=True)
+    matching_capabilities_json = Column(JSON, nullable=False, default=list)
+    matching_technologies_json = Column(JSON, nullable=False, default=list)
+    business_problem_similarity = Column(Text, nullable=True)
+    explanation = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "assessment_id",
+            "experience_item_id",
+            name="uq_bd_opportunity_assessment_experience_match",
+        ),
+        Index(
+            "ix_bd_opportunity_experience_matches_tenant_opportunity_score",
+            "tenant_id",
+            "opportunity_id",
+            "match_score",
+        ),
+    )
+
+
+class BusinessDevelopmentOutreachDraft(Base):
+    __tablename__ = "bd_outreach_drafts"
+
+    id = Column(String, primary_key=True)
+    tenant_id = Column(String, ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    opportunity_id = Column(String, ForeignKey("bd_opportunities.id"), nullable=False, index=True)
+    lead_id = Column(String, ForeignKey("bd_leads.id"), nullable=True, index=True)
+    prospect_id = Column(String, ForeignKey("bd_prospects.id"), nullable=True, index=True)
+    contact_id = Column(String, ForeignKey("bd_contacts.id"), nullable=True, index=True)
+    outreach_type = Column(String, nullable=False, index=True)
+    tone = Column(String, nullable=False, index=True)
+    subject = Column(Text, nullable=True)
+    body = Column(Text, nullable=False)
+    structured_content_json = Column(JSON, nullable=False, default=dict)
+    generation_version = Column(Integer, nullable=False)
+    provider = Column(String, nullable=False)
+    model = Column(String, nullable=False)
+    prompt_bundle_version = Column(String, nullable=False, default="phase4b_v1")
+    status = Column(String, nullable=False, default="draft", index=True)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "opportunity_id",
+            "lead_id",
+            "outreach_type",
+            "generation_version",
+            name="uq_bd_outreach_draft_generation_version",
+        ),
+        Index(
+            "ix_bd_outreach_drafts_tenant_scope_created",
+            "tenant_id",
+            "opportunity_id",
+            "lead_id",
+            "created_at",
+        ),
+    )
+
+
+class BusinessDevelopmentMiniSolution(Base):
+    __tablename__ = "bd_mini_solutions"
+
+    id = Column(String, primary_key=True)
+    tenant_id = Column(String, ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    opportunity_id = Column(String, ForeignKey("bd_opportunities.id"), nullable=False, index=True)
+    lead_id = Column(String, ForeignKey("bd_leads.id"), nullable=True, index=True)
+    assessment_id = Column(
+        String,
+        ForeignKey("bd_opportunity_ai_assessments.id"),
+        nullable=True,
+        index=True,
+    )
+    title = Column(String, nullable=False)
+    solution_json = Column(JSON, nullable=False, default=dict)
+    generation_version = Column(Integer, nullable=False)
+    provider = Column(String, nullable=False)
+    model = Column(String, nullable=False)
+    prompt_bundle_version = Column(String, nullable=False, default="phase4b_v1")
+    status = Column(String, nullable=False, default="draft", index=True)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "opportunity_id",
+            "lead_id",
+            "generation_version",
+            name="uq_bd_mini_solution_generation_version",
+        ),
+        Index(
+            "ix_bd_mini_solutions_tenant_scope_created",
+            "tenant_id",
+            "opportunity_id",
+            "lead_id",
+            "created_at",
+        ),
+    )
+
+
+class BusinessDevelopmentReply(Base):
+    __tablename__ = "bd_replies"
+
+    id = Column(String, primary_key=True)
+    tenant_id = Column(String, ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    opportunity_id = Column(String, ForeignKey("bd_opportunities.id"), nullable=True, index=True)
+    lead_id = Column(String, ForeignKey("bd_leads.id"), nullable=False, index=True)
+    prospect_id = Column(String, ForeignKey("bd_prospects.id"), nullable=True, index=True)
+    contact_id = Column(String, ForeignKey("bd_contacts.id"), nullable=True, index=True)
+    outreach_id = Column(String, ForeignKey("bd_outreach_drafts.id"), nullable=True, index=True)
+    channel = Column(String, nullable=False, index=True)
+    subject = Column(String, nullable=True)
+    raw_message = Column(Text, nullable=False)
+    sender_display = Column(String, nullable=True)
+    received_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    reply_status = Column(String, nullable=False, default="received", index=True)
+    notes = Column(Text, nullable=True)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        Index("ix_bd_replies_tenant_received", "tenant_id", "received_at"),
+        Index("ix_bd_replies_tenant_status", "tenant_id", "reply_status"),
+        Index("ix_bd_replies_tenant_lead", "tenant_id", "lead_id"),
+    )
+
+
+class BusinessDevelopmentReplyAIAnalysis(Base):
+    __tablename__ = "bd_reply_ai_analyses"
+
+    id = Column(String, primary_key=True)
+    tenant_id = Column(String, ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    reply_id = Column(String, ForeignKey("bd_replies.id"), nullable=False, index=True)
+    analysis_version = Column(Integer, nullable=False)
+    provider = Column(String, nullable=False)
+    model = Column(String, nullable=False)
+    prompt_bundle_version = Column(String, nullable=False, default="phase4c_v1")
+    intent = Column(String, nullable=False, index=True)
+    sentiment = Column(String, nullable=False, index=True)
+    engagement_level = Column(String, nullable=False, index=True)
+    urgency = Column(String, nullable=False, index=True)
+    objection_category = Column(String, nullable=True, index=True)
+    recommended_pipeline_stage = Column(String, nullable=True, index=True)
+    recommended_next_action = Column(Text, nullable=False)
+    analysis_json = Column(JSON, nullable=False, default=dict)
+    confidence_score = Column(Float, nullable=False)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "reply_id",
+            "analysis_version",
+            name="uq_bd_reply_ai_analysis_version",
+        ),
+        Index(
+            "ix_bd_reply_ai_analyses_tenant_reply_created",
+            "tenant_id",
+            "reply_id",
+            "created_at",
+        ),
+    )
+
+
+class BusinessDevelopmentReplyResponseDraft(Base):
+    __tablename__ = "bd_reply_response_drafts"
+
+    id = Column(String, primary_key=True)
+    tenant_id = Column(String, ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    reply_id = Column(String, ForeignKey("bd_replies.id"), nullable=False, index=True)
+    opportunity_id = Column(String, ForeignKey("bd_opportunities.id"), nullable=True, index=True)
+    lead_id = Column(String, ForeignKey("bd_leads.id"), nullable=False, index=True)
+    prospect_id = Column(String, ForeignKey("bd_prospects.id"), nullable=True, index=True)
+    contact_id = Column(String, ForeignKey("bd_contacts.id"), nullable=True, index=True)
+    analysis_id = Column(String, ForeignKey("bd_reply_ai_analyses.id"), nullable=True, index=True)
+    tone = Column(String, nullable=False, index=True)
+    subject = Column(Text, nullable=True)
+    body = Column(Text, nullable=False)
+    structured_content_json = Column(JSON, nullable=False, default=dict)
+    generation_version = Column(Integer, nullable=False)
+    provider = Column(String, nullable=False)
+    model = Column(String, nullable=False)
+    prompt_bundle_version = Column(String, nullable=False, default="phase4c_v1")
+    status = Column(String, nullable=False, default="draft", index=True)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "reply_id",
+            "generation_version",
+            name="uq_bd_reply_response_generation_version",
+        ),
+        Index(
+            "ix_bd_reply_response_drafts_tenant_reply_created",
+            "tenant_id",
+            "reply_id",
+            "created_at",
+        ),
+    )
+
+
 class TenantUsage(AuditColumnsMixin, Base):
     __tablename__ = "tenant_usage"
 
