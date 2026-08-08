@@ -14,8 +14,10 @@ from app.db_models import (
     BusinessDevelopmentConnector,
     BusinessDevelopmentConnectorRun,
     BusinessDevelopmentDiscoveredOpportunity,
+    BusinessDevelopmentDiscoveryTranslation,
     BusinessDevelopmentExperienceItem,
     BusinessDevelopmentOpportunity,
+    BusinessDevelopmentSearchProvider,
     BusinessDevelopmentSearchProfile,
     Tenant,
     User,
@@ -39,9 +41,11 @@ class AugmisBusinessWebSearchConnectorPipelineTest(unittest.TestCase):
                 BusinessDevelopmentExperienceItem.__table__,
                 BusinessDevelopmentOpportunity.__table__,
                 BusinessDevelopmentSearchProfile.__table__,
+                BusinessDevelopmentSearchProvider.__table__,
                 BusinessDevelopmentConnector.__table__,
                 BusinessDevelopmentConnectorRun.__table__,
                 BusinessDevelopmentDiscoveredOpportunity.__table__,
+                BusinessDevelopmentDiscoveryTranslation.__table__,
             ],
         )
         self.Session = sessionmaker(bind=self.engine)

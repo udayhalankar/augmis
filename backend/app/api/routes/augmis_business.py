@@ -15,9 +15,11 @@ from app.models.augmis_business_models import (
     AugmisBusinessConnectorCreateRequest,
     AugmisBusinessConnectorCredentialTestRequest,
     AugmisBusinessConnectorCredentialWriteRequest,
+    AugmisBusinessConnectorProviderUpdateRequest,
     AugmisBusinessConnectorScanRequest,
     AugmisBusinessConnectorUpdateRequest,
     AugmisBusinessDiscoveryUpdateRequest,
+    AugmisBusinessDiscoveryTranslationRequest,
     AugmisBusinessLeadStageUpdateRequest,
     AugmisBusinessLeadUpdateRequest,
     AugmisBusinessMiniSolutionGenerateRequest,
@@ -34,10 +36,16 @@ from app.models.augmis_business_models import (
     AugmisBusinessProspectUpdateRequest,
     AugmisBusinessSearchProfileCreateRequest,
     AugmisBusinessSearchProfileUpdateRequest,
+    AugmisBusinessSearchProviderCreateRequest,
+    AugmisBusinessSearchProviderUpdateRequest,
     AugmisBusinessStatusActionRequest,
     AugmisBusinessTaskCompleteRequest,
     AugmisBusinessTaskCreateRequest,
     AugmisBusinessTaskUpdateRequest,
+)
+from app.services.augmis_business_discovery_translation_service import (
+    get_discovery_translation,
+    translate_discovery,
 )
 from app.services.augmis_business_listener_service import (
     create_connector,
@@ -52,6 +60,7 @@ from app.services.augmis_business_listener_service import (
     list_search_profiles,
     reject_discovery,
     run_connector_scan,
+    set_connector_provider,
     shortlist_discovery,
     test_connector,
     update_connector,
@@ -64,6 +73,14 @@ from app.services.augmis_business_connector_credential_service import (
     list_connector_credential_statuses,
     save_connector_credential,
     test_connector_credential,
+)
+from app.services.augmis_business_search_provider_service import (
+    create_search_provider,
+    delete_search_provider,
+    get_search_provider,
+    list_search_providers,
+    test_search_provider,
+    update_search_provider,
 )
 from app.services.augmis_business_ai_service import (
     assess_opportunity_ai,
@@ -239,6 +256,90 @@ def test_augmis_business_connector(
     return test_connector(db, current_user["tenant_id"], current_user, connector_id)
 
 
+@router.patch("/connectors/{connector_id}/provider")
+def update_augmis_business_connector_provider(
+    connector_id: str,
+    payload: AugmisBusinessConnectorProviderUpdateRequest,
+    current_user: dict = Depends(
+        require_saas_access("augmis_business", "business_development:admin")
+    ),
+    db: Session = Depends(get_db),
+):
+    return set_connector_provider(
+        db,
+        current_user["tenant_id"],
+        connector_id,
+        current_user,
+        payload.provider_code,
+    )
+
+
+@router.get("/search-providers")
+def get_augmis_business_search_providers(
+    current_user: dict = Depends(
+        require_saas_access("augmis_business", "business_development:read")
+    ),
+    db: Session = Depends(get_db),
+):
+    return list_search_providers(db, current_user["tenant_id"])
+
+
+@router.post("/search-providers")
+def create_augmis_business_search_provider(
+    payload: AugmisBusinessSearchProviderCreateRequest,
+    current_user: dict = Depends(
+        require_saas_access("augmis_business", "business_development:admin")
+    ),
+    db: Session = Depends(get_db),
+):
+    return create_search_provider(db, current_user["tenant_id"], current_user, payload)
+
+
+@router.get("/search-providers/{provider_id}")
+def get_augmis_business_search_provider(
+    provider_id: str,
+    current_user: dict = Depends(
+        require_saas_access("augmis_business", "business_development:read")
+    ),
+    db: Session = Depends(get_db),
+):
+    return get_search_provider(db, current_user["tenant_id"], provider_id)
+
+
+@router.patch("/search-providers/{provider_id}")
+def update_augmis_business_search_provider(
+    provider_id: str,
+    payload: AugmisBusinessSearchProviderUpdateRequest,
+    current_user: dict = Depends(
+        require_saas_access("augmis_business", "business_development:admin")
+    ),
+    db: Session = Depends(get_db),
+):
+    return update_search_provider(db, current_user["tenant_id"], provider_id, current_user, payload)
+
+
+@router.delete("/search-providers/{provider_id}")
+def delete_augmis_business_search_provider(
+    provider_id: str,
+    current_user: dict = Depends(
+        require_saas_access("augmis_business", "business_development:admin")
+    ),
+    db: Session = Depends(get_db),
+):
+    return delete_search_provider(db, current_user["tenant_id"], provider_id, current_user)
+
+
+@router.post("/search-providers/{provider_id}/test")
+def test_augmis_business_search_provider_route(
+    provider_id: str,
+    current_user: dict = Depends(
+        require_saas_access("augmis_business", "business_development:admin")
+    ),
+    db: Session = Depends(get_db),
+):
+    return test_search_provider(db, current_user["tenant_id"], provider_id, current_user)
+
+
 @router.get("/connector-credentials")
 def get_augmis_business_connector_credentials(
     current_user: dict = Depends(
@@ -342,6 +443,9 @@ def get_augmis_business_discoveries(
     source_category: str | None = Query(None),
     country: str | None = Query(None),
     minimum_preliminary_score: float | None = Query(None, alias="minimum_score"),
+    relevance_band: str | None = Query(None),
+    sort_by: str | None = Query(None),
+    sort_order: str | None = Query(None),
     current_user: dict = Depends(
         require_saas_access("augmis_business", "business_development:read")
     ),
@@ -358,6 +462,9 @@ def get_augmis_business_discoveries(
         source_category=source_category,
         country=country,
         minimum_preliminary_score=minimum_preliminary_score,
+        relevance_band=relevance_band,
+        sort_by=sort_by,
+        sort_order=sort_order,
     )
 
 
@@ -370,6 +477,36 @@ def get_augmis_business_discovery(
     db: Session = Depends(get_db),
 ):
     return get_discovery(db, current_user["tenant_id"], discovery_id)
+
+
+@router.get("/discoveries/{discovery_id}/translation")
+def get_augmis_business_discovery_translation(
+    discovery_id: str,
+    current_user: dict = Depends(
+        require_saas_access("augmis_business", "business_development:read")
+    ),
+    db: Session = Depends(get_db),
+):
+    return get_discovery_translation(db, current_user["tenant_id"], discovery_id)
+
+
+@router.post("/discoveries/{discovery_id}/translate")
+def translate_augmis_business_discovery(
+    discovery_id: str,
+    payload: AugmisBusinessDiscoveryTranslationRequest | None = None,
+    force: bool = Query(False),
+    current_user: dict = Depends(
+        require_saas_access("augmis_business", "business_development:update")
+    ),
+    db: Session = Depends(get_db),
+):
+    return translate_discovery(
+        db,
+        current_user["tenant_id"],
+        discovery_id,
+        current_user,
+        force=bool(force or (payload.force if payload else False)),
+    )
 
 
 @router.patch("/discoveries/{discovery_id}")

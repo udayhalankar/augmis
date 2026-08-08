@@ -18,8 +18,10 @@ from app.db_models import (
     BusinessDevelopmentConnector,
     BusinessDevelopmentConnectorRun,
     BusinessDevelopmentDiscoveredOpportunity,
+    BusinessDevelopmentDiscoveryTranslation,
     BusinessDevelopmentExperienceItem,
     BusinessDevelopmentOpportunity,
+    BusinessDevelopmentSearchProvider,
     BusinessDevelopmentSearchProfile,
     Tenant,
     User,
@@ -48,9 +50,11 @@ class AugmisBusinessListenerServiceTest(unittest.TestCase):
                 BusinessDevelopmentExperienceItem.__table__,
                 BusinessDevelopmentOpportunity.__table__,
                 BusinessDevelopmentSearchProfile.__table__,
+                BusinessDevelopmentSearchProvider.__table__,
                 BusinessDevelopmentConnector.__table__,
                 BusinessDevelopmentConnectorRun.__table__,
                 BusinessDevelopmentDiscoveredOpportunity.__table__,
+                BusinessDevelopmentDiscoveryTranslation.__table__,
             ],
         )
         self.Session = sessionmaker(bind=self.engine)
@@ -114,6 +118,45 @@ class AugmisBusinessListenerServiceTest(unittest.TestCase):
             ]
         )
         self.db.commit()
+
+    def _make_ted_candidate(
+        self,
+        *,
+        title: str,
+        summary: str,
+        cpv_codes: list[str],
+        organization_name: str = "City Authority",
+        closing_date: datetime | None = None,
+    ):
+        return service.AugmisBusinessDiscoveredOpportunityCandidate(
+            external_id=f"TED-{abs(hash(title))}",
+            source_type="public_procurement",
+            source_name="TED",
+            source_url="https://ted.europa.eu/en/notice/123456-2026/html",
+            source_country="DEU",
+            title=title,
+            organization_name=organization_name,
+            published_date=self.fixed_now,
+            closing_date=closing_date,
+            country="DEU",
+            region=None,
+            industry="Public Procurement",
+            requirement_summary=summary,
+            raw_summary=summary,
+            raw_text=summary,
+            budget_min=None,
+            budget_max=None,
+            currency=None,
+            evidence=[],
+            source_metadata={"provider": "ted", "cpv_codes": cpv_codes},
+            raw_content_json={
+                "provider": "ted",
+                "cpv_codes": cpv_codes,
+                "contract_nature": ["services"],
+                "notice_type": "cn-standard",
+            },
+            retrieval_timestamp=self.fixed_now,
+        )
 
     def test_default_profile_and_fixture_connector_are_seeded(self):
         profile = service.ensure_default_search_profile(self.db, "TENANT-1", self.current_user)
@@ -269,6 +312,262 @@ class AugmisBusinessListenerServiceTest(unittest.TestCase):
             AugmisBusinessConnectorUpdateRequest(enabled=False),
         )["data"]
         self.assertEqual(disabled["status"], "disabled")
+
+    def test_connector_schedule_can_be_enabled(self):
+        connector = service.ensure_ted_connector(self.db, "TENANT-1", self.current_user)
+        updated = service.update_connector(
+            self.db,
+            "TENANT-1",
+            connector.id,
+            self.current_user,
+            service.AugmisBusinessConnectorUpdateRequest(  # type: ignore[attr-defined]
+                schedule_enabled=True,
+                schedule_type="hourly_interval",
+                schedule_interval_minutes=360,
+                schedule_timezone="UTC",
+            ),
+        )["data"]
+        self.assertTrue(updated["schedule_enabled"])
+        self.assertEqual(updated["schedule_type"], "hourly_interval")
+        self.assertEqual(updated["schedule_expression"], "Every 6 hours")
+        self.assertEqual(updated["next_run_at"], "2026-08-07T17:00:00")
+
+    def test_connector_schedule_can_be_disabled(self):
+        connector = service.ensure_ted_connector(self.db, "TENANT-1", self.current_user)
+        service.update_connector(
+            self.db,
+            "TENANT-1",
+            connector.id,
+            self.current_user,
+            service.AugmisBusinessConnectorUpdateRequest(  # type: ignore[attr-defined]
+                schedule_enabled=True,
+                schedule_type="hourly_interval",
+                schedule_interval_minutes=360,
+                schedule_timezone="UTC",
+            ),
+        )
+        updated = service.update_connector(
+            self.db,
+            "TENANT-1",
+            connector.id,
+            self.current_user,
+            service.AugmisBusinessConnectorUpdateRequest(enabled=True, schedule_enabled=False),  # type: ignore[attr-defined]
+        )["data"]
+        self.assertFalse(updated["schedule_enabled"])
+        self.assertEqual(updated["schedule_type"], "manual")
+        self.assertIsNone(updated["next_run_at"])
+
+    def test_daily_schedule_computes_next_run(self):
+        connector = service.ensure_ted_connector(self.db, "TENANT-1", self.current_user)
+        updated = service.update_connector(
+            self.db,
+            "TENANT-1",
+            connector.id,
+            self.current_user,
+            service.AugmisBusinessConnectorUpdateRequest(  # type: ignore[attr-defined]
+                schedule_enabled=True,
+                schedule_type="daily",
+                schedule_time_local="07:00",
+                schedule_timezone="UTC",
+            ),
+        )["data"]
+        self.assertEqual(updated["next_run_at"], "2026-08-08T07:00:00")
+
+    def test_weekly_schedule_computes_next_run(self):
+        connector = service.ensure_ted_connector(self.db, "TENANT-1", self.current_user)
+        updated = service.update_connector(
+            self.db,
+            "TENANT-1",
+            connector.id,
+            self.current_user,
+            service.AugmisBusinessConnectorUpdateRequest(  # type: ignore[attr-defined]
+                schedule_enabled=True,
+                schedule_type="weekly",
+                schedule_day_of_week=0,
+                schedule_time_local="07:00",
+                schedule_timezone="UTC",
+            ),
+        )["data"]
+        self.assertEqual(updated["next_run_at"], "2026-08-10T07:00:00")
+
+    def test_invalid_schedule_is_rejected(self):
+        connector = service.ensure_ted_connector(self.db, "TENANT-1", self.current_user)
+        with self.assertRaises(Exception) as exc:
+            service.update_connector(
+                self.db,
+                "TENANT-1",
+                connector.id,
+                self.current_user,
+                service.AugmisBusinessConnectorUpdateRequest(  # type: ignore[attr-defined]
+                    schedule_enabled=True,
+                    schedule_type="hourly_interval",
+                    schedule_interval_minutes=30,
+                    schedule_timezone="UTC",
+                ),
+            )
+        self.assertIn("greater than or equal to 60", str(exc.exception))
+
+    def test_due_connector_runs(self):
+        connector = service.ensure_fixture_connector(self.db, "TENANT-1", self.current_user)
+        service.update_connector(
+            self.db,
+            "TENANT-1",
+            connector.id,
+            self.current_user,
+            service.AugmisBusinessConnectorUpdateRequest(  # type: ignore[attr-defined]
+                schedule_enabled=True,
+                schedule_type="hourly_interval",
+                schedule_interval_minutes=60,
+                schedule_timezone="UTC",
+            ),
+        )
+        connector_row = service._require_connector(self.db, "TENANT-1", connector.id)
+        connector_row.next_run_at = self.fixed_now - service.timedelta(minutes=1)  # type: ignore[attr-defined]
+        self.db.commit()
+
+        result = service.run_due_listener_scans(self.db)
+
+        self.assertEqual(result["due_count"], 1)
+        self.assertEqual(result["results"][0]["run_type"], "scheduled")
+        latest_run = (
+            self.db.query(BusinessDevelopmentConnectorRun)
+            .filter(BusinessDevelopmentConnectorRun.connector_id == connector.id)
+            .order_by(BusinessDevelopmentConnectorRun.started_at.desc())
+            .first()
+        )
+        self.assertIsNotNone(latest_run)
+        self.assertEqual(latest_run.run_type, "scheduled")  # type: ignore[union-attr]
+
+    def test_startup_does_not_scan_every_connector(self):
+        connector = service.ensure_ted_connector(self.db, "TENANT-1", self.current_user)
+        service.update_connector(
+            self.db,
+            "TENANT-1",
+            connector.id,
+            self.current_user,
+            service.AugmisBusinessConnectorUpdateRequest(  # type: ignore[attr-defined]
+                schedule_enabled=True,
+                schedule_type="daily",
+                schedule_time_local="07:00",
+                schedule_timezone="UTC",
+            ),
+        )
+        run_count_before = self.db.query(BusinessDevelopmentConnectorRun).count()
+        init_result = service.initialize_listener_schedule_state(self.db)
+        run_count_after = self.db.query(BusinessDevelopmentConnectorRun).count()
+        self.assertEqual(init_result["recovered"], 0)
+        self.assertEqual(run_count_before, run_count_after)
+
+    def test_stale_running_scan_is_recovered(self):
+        connector = service.ensure_ted_connector(self.db, "TENANT-1", self.current_user)
+        service.update_connector(
+            self.db,
+            "TENANT-1",
+            connector.id,
+            self.current_user,
+            service.AugmisBusinessConnectorUpdateRequest(  # type: ignore[attr-defined]
+                schedule_enabled=True,
+                schedule_type="hourly_interval",
+                schedule_interval_minutes=360,
+                schedule_timezone="UTC",
+            ),
+        )
+        stale_started_at = self.fixed_now - service.timedelta(minutes=service.SCHEDULE_STALE_RUN_THRESHOLD_MINUTES + 5)
+        run = BusinessDevelopmentConnectorRun(
+            id="BD-RUN-STALE-1",
+            tenant_id="TENANT-1",
+            connector_id=connector.id,
+            run_type="scheduled",
+            status="running",
+            started_at=stale_started_at,
+            run_metadata_json={},
+        )
+        self.db.add(run)
+        connector_row = service._require_connector(self.db, "TENANT-1", connector.id)
+        connector_row.active_run_id = run.id
+        self.db.commit()
+
+        result = service.recover_stale_connector_runs(self.db)
+
+        self.assertEqual(result["recovered"], 1)
+        recovered_run = (
+            self.db.query(BusinessDevelopmentConnectorRun)
+            .filter(BusinessDevelopmentConnectorRun.id == run.id)
+            .first()
+        )
+        self.assertEqual(recovered_run.status, "failed")  # type: ignore[union-attr]
+        refreshed_connector = service._require_connector(self.db, "TENANT-1", connector.id)
+        self.assertIsNone(refreshed_connector.active_run_id)
+        self.assertEqual(refreshed_connector.status, "attention")
+
+    @patch("app.services.augmis_business_listener_service._get_connector_implementation")
+    def test_transient_failure_schedules_retry(self, mock_get_implementation):
+        connector = service.ensure_ted_connector(self.db, "TENANT-1", self.current_user)
+        service.update_connector(
+            self.db,
+            "TENANT-1",
+            connector.id,
+            self.current_user,
+            service.AugmisBusinessConnectorUpdateRequest(  # type: ignore[attr-defined]
+                schedule_enabled=True,
+                schedule_type="hourly_interval",
+                schedule_interval_minutes=360,
+                schedule_timezone="UTC",
+            ),
+        )
+        connector_row = service._require_connector(self.db, "TENANT-1", connector.id)
+        connector_row.next_run_at = self.fixed_now - service.timedelta(minutes=1)  # type: ignore[attr-defined]
+        self.db.commit()
+
+        implementation = Mock()
+        implementation.validate_config.return_value = None
+        implementation.discover.side_effect = Exception("HTTP 503 temporary upstream timeout")
+        implementation.last_run_metadata = {}
+        mock_get_implementation.return_value = implementation
+
+        result = service.run_due_listener_scans(self.db)
+
+        self.assertEqual(result["due_count"], 1)
+        refreshed_connector = service._require_connector(self.db, "TENANT-1", connector.id)
+        self.assertEqual(refreshed_connector.schedule_retry_count, 1)
+        self.assertIsNotNone(refreshed_connector.next_run_at)
+        latest_run = (
+            self.db.query(BusinessDevelopmentConnectorRun)
+            .filter(BusinessDevelopmentConnectorRun.connector_id == connector.id)
+            .order_by(BusinessDevelopmentConnectorRun.started_at.desc())
+            .first()
+        )
+        self.assertEqual(latest_run.next_retry_at.isoformat(), "2026-08-07T11:05:00")  # type: ignore[union-attr]
+
+    @patch("app.services.augmis_business_listener_service._get_connector_implementation")
+    def test_missing_credential_does_not_retry(self, mock_get_implementation):
+        connector = service.ensure_ted_connector(self.db, "TENANT-1", self.current_user)
+        service.update_connector(
+            self.db,
+            "TENANT-1",
+            connector.id,
+            self.current_user,
+            service.AugmisBusinessConnectorUpdateRequest(  # type: ignore[attr-defined]
+                schedule_enabled=True,
+                schedule_type="hourly_interval",
+                schedule_interval_minutes=360,
+                schedule_timezone="UTC",
+            ),
+        )
+        connector_row = service._require_connector(self.db, "TENANT-1", connector.id)
+        connector_row.next_run_at = self.fixed_now - service.timedelta(minutes=1)  # type: ignore[attr-defined]
+        self.db.commit()
+
+        implementation = Mock()
+        implementation.validate_config.return_value = None
+        implementation.discover.side_effect = Exception("Provider credential is not configured.")
+        implementation.last_run_metadata = {}
+        mock_get_implementation.return_value = implementation
+
+        service.run_due_listener_scans(self.db)
+
+        refreshed_connector = service._require_connector(self.db, "TENANT-1", connector.id)
+        self.assertEqual(refreshed_connector.schedule_retry_count, 0)
 
     def test_route_permission_enforcement_blocks_scan_without_permission(self):
         connector = service.ensure_fixture_connector(self.db, "TENANT-1", self.current_user)
@@ -452,6 +751,250 @@ class AugmisBusinessListenerServiceTest(unittest.TestCase):
         self.assertEqual(result["run"]["run_metadata_json"]["source_pages_attempted"], 1)
         self.assertEqual(result["run"]["run_metadata_json"]["source_pages_skipped_due_limit"], 1)
         self.assertEqual(mock_fetch_public_webpage.call_count, 1)
+
+    def test_relevant_software_tender_gets_high_score(self):
+        score, reasons, matched = service._calculate_preliminary_relevance(
+            self._make_ted_candidate(
+                title="Workflow automation software platform for municipal services",
+                summary="Custom software development, system integration, dashboards and office automation for a city service portal.",
+                cpv_codes=["72230000", "72262000", "72513000"],
+                organization_name="City of Hamburg",
+            ),
+            None,
+        )
+        self.assertGreaterEqual(score, 80.0)
+        self.assertTrue(any("High-relevance software / IT CPV" in reason for reason in reasons))
+        self.assertTrue(matched)
+
+    def test_document_management_tender_gets_high_score(self):
+        score, _, _ = service._calculate_preliminary_relevance(
+            self._make_ted_candidate(
+                title="Document management system renewal for city archives",
+                summary="Upgrade, migration and implementation of a records management and archival information system.",
+                cpv_codes=["48311100", "72512000", "72212311"],
+                organization_name="Budapest City Archives",
+            ),
+            None,
+        )
+        self.assertGreaterEqual(score, 80.0)
+
+    def test_data_analytics_tender_gets_high_score(self):
+        score, _, _ = service._calculate_preliminary_relevance(
+            self._make_ted_candidate(
+                title="Analytics and dashboard platform for public reporting",
+                summary="Business intelligence, statistical reporting and database services for a public authority.",
+                cpv_codes=["72212482", "72316000", "72320000"],
+                organization_name="Regional Data Agency",
+            ),
+            None,
+        )
+        self.assertGreaterEqual(score, 80.0)
+
+    def test_pure_legal_services_tender_scores_low(self):
+        score, reasons, _ = service._calculate_preliminary_relevance(
+            self._make_ted_candidate(
+                title="Legal advisory services for public energy project",
+                summary="Comprehensive legal and financial advisory support for an energy efficiency programme.",
+                cpv_codes=["79111000", "79410000"],
+                organization_name="Ministry of Regional Development",
+            ),
+            None,
+        )
+        self.assertLess(score, 35.0)
+        self.assertTrue(any("Legal advisory" in reason for reason in reasons))
+
+    def test_pure_construction_tender_scores_low(self):
+        score, reasons, _ = service._calculate_preliminary_relevance(
+            self._make_ted_candidate(
+                title="Railway construction works and civil engineering package",
+                summary="Design and construction work for a new railway section with tunnels and drainage.",
+                cpv_codes=["45000000", "45200000", "45233100"],
+                organization_name="Rail Infrastructure Authority",
+            ),
+            None,
+        )
+        self.assertLess(score, 35.0)
+        self.assertTrue(any("Construction works" in reason for reason in reasons))
+
+    def test_construction_plus_document_management_is_not_incorrectly_rejected(self):
+        score, _, _ = service._calculate_preliminary_relevance(
+            self._make_ted_candidate(
+                title="Construction project document management system",
+                summary="Implementation of a document management platform for infrastructure programme controls and approvals.",
+                cpv_codes=["45000000", "48311100", "72512000"],
+                organization_name="Transport Authority",
+            ),
+            None,
+        )
+        self.assertGreaterEqual(score, 35.0)
+
+    def test_hardware_only_tender_scores_low(self):
+        score, _, _ = service._calculate_preliminary_relevance(
+            self._make_ted_candidate(
+                title="Procurement of hardware devices and printers",
+                summary="Supply of hardware equipment and devices without software implementation.",
+                cpv_codes=["30000000", "30200000"],
+                organization_name="Procurement Office",
+            ),
+            None,
+        )
+        self.assertLess(score, 35.0)
+
+    def test_it_consulting_can_score_medium_or_high(self):
+        score, _, _ = service._calculate_preliminary_relevance(
+            self._make_ted_candidate(
+                title="IT consulting, software development and internet support",
+                summary="ERP, SAP and software integration support for enterprise systems.",
+                cpv_codes=["72222300", "72230000", "72227000"],
+                organization_name="City of Munich IT Department",
+            ),
+            None,
+        )
+        self.assertGreaterEqual(score, 65.0)
+
+    def test_multilingual_notice_scores_via_cpv_metadata(self):
+        score, _, _ = service._calculate_preliminary_relevance(
+            self._make_ted_candidate(
+                title="Lengyelország – Gyógyászati információs rendszerek",
+                summary="Przyspieszenie procesów transformacji cyfrowej ochrony zdrowia.",
+                cpv_codes=["48814000", "48180000", "72263000", "72227000"],
+                organization_name="Szpital Specjalistyczny",
+            ),
+            None,
+        )
+        self.assertGreaterEqual(score, 50.0)
+
+    def test_strong_cpv_boosts_score(self):
+        high_score, _, _ = service._calculate_preliminary_relevance(
+            self._make_ted_candidate(
+                title="Software maintenance and custom application support",
+                summary="Application support and enhancement services.",
+                cpv_codes=["72230000", "72267100"],
+            ),
+            None,
+        )
+        low_score, _, _ = service._calculate_preliminary_relevance(
+            self._make_ted_candidate(
+                title="Specialist support services",
+                summary="General advisory support.",
+                cpv_codes=["79410000"],
+            ),
+            None,
+        )
+        self.assertGreater(high_score, low_score)
+
+    def test_irrelevant_cpv_penalizes_score(self):
+        score, _, _ = service._calculate_preliminary_relevance(
+            self._make_ted_candidate(
+                title="Security guarding services",
+                summary="Guard services for public buildings.",
+                cpv_codes=["79710000", "79713000"],
+            ),
+            None,
+        )
+        self.assertLess(score, 35.0)
+
+    def test_expired_and_closing_soon_status_calculation(self):
+        expired = service._ted_closing_status(self.fixed_now - service.timedelta(days=1), now=self.fixed_now)
+        closing_soon = service._ted_closing_status(self.fixed_now + service.timedelta(days=7), now=self.fixed_now)
+        open_status = service._ted_closing_status(self.fixed_now + service.timedelta(days=30), now=self.fixed_now)
+        unknown = service._ted_closing_status(None, now=self.fixed_now)
+        self.assertEqual(expired, "expired")
+        self.assertEqual(closing_soon, "closing_soon")
+        self.assertEqual(open_status, "open")
+        self.assertEqual(unknown, "unknown")
+
+    def test_relevance_bands(self):
+        self.assertEqual(service._ted_relevance_band(88.0), "strong")
+        self.assertEqual(service._ted_relevance_band(70.0), "good")
+        self.assertEqual(service._ted_relevance_band(55.0), "possible")
+        self.assertEqual(service._ted_relevance_band(40.0), "weak")
+        self.assertEqual(service._ted_relevance_band(10.0), "low")
+
+    def test_reason_generation_splits_positive_and_negative_signals(self):
+        _, reasons, _ = service._calculate_preliminary_relevance(
+            self._make_ted_candidate(
+                title="Legal advisory for workflow software platform",
+                summary="Workflow software implementation with legal review support.",
+                cpv_codes=["72230000", "79111000"],
+            ),
+            None,
+        )
+        positives, negatives = service._split_relevance_reasons(reasons)
+        self.assertTrue(positives)
+        self.assertTrue(negatives)
+
+    @patch("app.services.augmis_business_listener_service.TedSearchClient.search_notices")
+    def test_ted_scan_failure_is_persisted_as_controlled_connector_error(self, mock_search_notices: Mock):
+        connector = service.ensure_ted_connector(self.db, "TENANT-1", self.current_user)
+        mock_search_notices.side_effect = service.TedApiError(
+            "TED rejected the search request because the connector field configuration is invalid.",
+            provider_message="Parameter 'fields' contains unsupported value (supported values are: field-1, field-2, field-3)",
+            http_status=400,
+            provider_error_code="BAD_REQUEST",
+            request_id="ted-request-1",
+        )
+
+        with self.assertRaises(Exception) as captured:
+            service.run_connector_scan(
+                self.db,
+                "TENANT-1",
+                connector.id,
+                self.current_user,
+                AugmisBusinessConnectorScanRequest(run_type="manual"),
+            )
+
+        self.assertIn("TED rejected the search request because the connector field configuration is invalid.", str(captured.exception))
+        run = (
+            self.db.query(BusinessDevelopmentConnectorRun)
+            .filter(BusinessDevelopmentConnectorRun.connector_id == connector.id)
+            .order_by(BusinessDevelopmentConnectorRun.created_at.desc())
+            .first()
+        )
+        connector_row = service._require_connector(self.db, "TENANT-1", connector.id)
+        self.assertEqual(run.status, "failed")
+        self.assertEqual(
+            run.error_summary,
+            "TED rejected the search request because the connector field configuration is invalid.",
+        )
+        self.assertEqual(
+            connector_row.last_error_message,
+            "TED rejected the search request because the connector field configuration is invalid.",
+        )
+        self.assertEqual(run.run_metadata_json["provider_error"]["provider_http_status"], 400)
+        self.assertEqual(run.run_metadata_json["provider_error"]["provider_error_code"], "BAD_REQUEST")
+        self.assertEqual(run.run_metadata_json["provider_error"]["request_id"], "ted-request-1")
+        self.assertNotIn("supported values are", connector_row.last_error_message)
+
+    @patch("app.services.augmis_business_listener_service.TedSearchClient.search_notices")
+    def test_ted_failure_preserves_previous_success_timestamp(self, mock_search_notices: Mock):
+        connector = service.ensure_ted_connector(self.db, "TENANT-1", self.current_user)
+        mock_search_notices.return_value = {"total": 0, "items": [], "invalid_items": 0, "raw": {}}
+        first = service.run_connector_scan(
+            self.db,
+            "TENANT-1",
+            connector.id,
+            self.current_user,
+            AugmisBusinessConnectorScanRequest(run_type="manual"),
+        )["data"]["connector"]
+        successful_last_success_at = first["last_success_at"]
+
+        mock_search_notices.side_effect = service.TedApiError(
+            "TED rejected the search request.",
+            provider_message="Query syntax invalid near FT",
+            http_status=400,
+        )
+        with self.assertRaises(Exception):
+            service.run_connector_scan(
+                self.db,
+                "TENANT-1",
+                connector.id,
+                self.current_user,
+                AugmisBusinessConnectorScanRequest(run_type="manual"),
+            )
+
+        connector_row = service._require_connector(self.db, "TENANT-1", connector.id)
+        self.assertEqual(service._serialize_datetime(connector_row.last_success_at), successful_last_success_at)
 
 
 if __name__ == "__main__":

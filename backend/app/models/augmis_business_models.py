@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import re
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -133,9 +134,15 @@ ALLOWED_CONNECTOR_SOURCE_CATEGORIES = {
     "marketplace",
     "company_source",
 }
-ALLOWED_CONNECTOR_STATUSES = {"configured", "ready", "running", "error", "disabled"}
-ALLOWED_CONNECTOR_RUN_TYPES = {"manual", "scheduled", "test"}
+ALLOWED_CONNECTOR_STATUSES = {"configured", "ready", "running", "error", "disabled", "attention"}
+ALLOWED_CONNECTOR_RUN_TYPES = {"manual", "scheduled", "retry", "test"}
 ALLOWED_CONNECTOR_RUN_STATUSES = {"queued", "running", "completed", "partial", "failed", "cancelled"}
+ALLOWED_CONNECTOR_SCHEDULE_TYPES = {"manual", "hourly_interval", "daily", "weekly"}
+ALLOWED_CONNECTOR_SCHEDULE_WEEKDAYS = set(range(7))
+ALLOWED_SEARCH_PROVIDER_TYPES = {"builtin", "generic_rest"}
+ALLOWED_SEARCH_PROVIDER_CREDENTIAL_TYPES = {"api_key", "bearer_token"}
+ALLOWED_SEARCH_PROVIDER_AUTH_TYPES = {"api_key_header", "bearer_token"}
+ALLOWED_SEARCH_PROVIDER_HTTP_METHODS = {"get", "post"}
 ALLOWED_DISCOVERY_STATUSES = {
     "new",
     "reviewing",
@@ -171,6 +178,17 @@ def _validate_currency(value: str | None) -> str | None:
     normalized = normalized.upper()
     if not CURRENCY_PATTERN.match(normalized):
         raise ValueError("Currency must be a 3-letter uppercase code")
+    return normalized
+
+
+def _validate_timezone_name(value: str | None) -> str | None:
+    normalized = _normalize_optional_text(value)
+    if normalized is None:
+        return None
+    try:
+        ZoneInfo(normalized)
+    except ZoneInfoNotFoundError as exc:
+        raise ValueError("Unknown timezone") from exc
     return normalized
 
 
@@ -1503,6 +1521,11 @@ class AugmisBusinessConnectorBase(BaseModel):
     enabled: bool = True
     schedule_enabled: bool = False
     schedule_expression: str | None = Field(default=None, max_length=255)
+    schedule_type: str = Field(default="manual", min_length=1, max_length=50)
+    schedule_interval_minutes: int | None = Field(default=None, ge=60, le=10080)
+    schedule_day_of_week: int | None = Field(default=None, ge=0, le=6)
+    schedule_time_local: str | None = Field(default=None, max_length=5)
+    schedule_timezone: str | None = Field(default=None, max_length=64)
     configuration_json: dict[str, object] = Field(default_factory=dict)
     search_criteria_json: dict[str, object] = Field(default_factory=dict)
     capability_flags_json: dict[str, object] = Field(default_factory=dict)
@@ -1516,6 +1539,49 @@ class AugmisBusinessConnectorBase(BaseModel):
             raise ValueError(f"Invalid source category: {value}")
         return normalized
 
+    @field_validator("schedule_type")
+    @classmethod
+    def validate_schedule_type(cls, value: str) -> str:
+        normalized = str(value or "manual").strip().lower()
+        if normalized not in ALLOWED_CONNECTOR_SCHEDULE_TYPES:
+            raise ValueError(f"Invalid schedule type: {value}")
+        return normalized
+
+    @field_validator("schedule_time_local")
+    @classmethod
+    def validate_schedule_time_local(cls, value: str | None) -> str | None:
+        normalized = _normalize_optional_text(value)
+        if normalized is None:
+            return None
+        if not re.fullmatch(r"^([01]\d|2[0-3]):[0-5]\d$", normalized):
+            raise ValueError("Schedule time must use HH:MM 24-hour format")
+        return normalized
+
+    @field_validator("schedule_timezone")
+    @classmethod
+    def validate_schedule_timezone(cls, value: str | None) -> str | None:
+        return _validate_timezone_name(value)
+
+    @model_validator(mode="after")
+    def validate_schedule_fields(self):
+        schedule_type = (self.schedule_type or "manual").lower()
+        if not self.schedule_enabled or schedule_type == "manual":
+            return self
+        if schedule_type == "hourly_interval":
+            if self.schedule_interval_minutes is None:
+                raise ValueError("Hourly interval schedules require an interval in minutes")
+            if self.schedule_interval_minutes < 60:
+                raise ValueError("Automatic schedules cannot run more frequently than hourly")
+        elif schedule_type == "daily":
+            if not self.schedule_time_local:
+                raise ValueError("Daily schedules require a local time")
+        elif schedule_type == "weekly":
+            if self.schedule_day_of_week not in ALLOWED_CONNECTOR_SCHEDULE_WEEKDAYS:
+                raise ValueError("Weekly schedules require a valid weekday")
+            if not self.schedule_time_local:
+                raise ValueError("Weekly schedules require a local time")
+        return self
+
 
 class AugmisBusinessConnectorCreateRequest(AugmisBusinessConnectorBase):
     pass
@@ -1526,6 +1592,11 @@ class AugmisBusinessConnectorUpdateRequest(BaseModel):
     enabled: bool | None = None
     schedule_enabled: bool | None = None
     schedule_expression: str | None = Field(default=None, max_length=255)
+    schedule_type: str | None = Field(default=None, min_length=1, max_length=50)
+    schedule_interval_minutes: int | None = Field(default=None, ge=60, le=10080)
+    schedule_day_of_week: int | None = Field(default=None, ge=0, le=6)
+    schedule_time_local: str | None = Field(default=None, max_length=5)
+    schedule_timezone: str | None = Field(default=None, max_length=64)
     configuration_json: dict[str, object] | None = None
     search_criteria_json: dict[str, object] | None = None
     capability_flags_json: dict[str, object] | None = None
@@ -1542,6 +1613,31 @@ class AugmisBusinessConnectorUpdateRequest(BaseModel):
         if normalized not in ALLOWED_CONNECTOR_STATUSES:
             raise ValueError(f"Invalid connector status: {value}")
         return normalized
+
+    @field_validator("schedule_type")
+    @classmethod
+    def validate_optional_schedule_type(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = str(value or "manual").strip().lower()
+        if normalized not in ALLOWED_CONNECTOR_SCHEDULE_TYPES:
+            raise ValueError(f"Invalid schedule type: {value}")
+        return normalized
+
+    @field_validator("schedule_time_local")
+    @classmethod
+    def validate_optional_schedule_time_local(cls, value: str | None) -> str | None:
+        normalized = _normalize_optional_text(value)
+        if normalized is None:
+            return None
+        if not re.fullmatch(r"^([01]\d|2[0-3]):[0-5]\d$", normalized):
+            raise ValueError("Schedule time must use HH:MM 24-hour format")
+        return normalized
+
+    @field_validator("schedule_timezone")
+    @classmethod
+    def validate_optional_schedule_timezone(cls, value: str | None) -> str | None:
+        return _validate_timezone_name(value)
 
 
 class AugmisBusinessConnectorCredentialWriteRequest(BaseModel):
@@ -1584,6 +1680,96 @@ class AugmisBusinessConnectorCredentialStatusResponse(BaseModel):
     storage_message: str | None = None
 
 
+class AugmisBusinessSearchProviderBase(BaseModel):
+    provider_code: str = Field(min_length=2, max_length=120)
+    display_name: str = Field(min_length=1, max_length=255)
+    provider_type: str = Field(min_length=1, max_length=50)
+    adapter_code: str | None = Field(default=None, max_length=120)
+    description: str | None = Field(default=None, max_length=1000)
+    enabled: bool = True
+    credential_type: str = Field(default="api_key", min_length=1, max_length=50)
+    configuration_json: dict[str, object] = Field(default_factory=dict)
+
+    @field_validator("provider_code")
+    @classmethod
+    def validate_provider_code(cls, value: str) -> str:
+        normalized = re.sub(r"[^a-z0-9-]+", "-", str(value or "").strip().lower()).strip("-")
+        if len(normalized) < 2:
+            raise ValueError("Provider code must contain at least 2 letters or numbers")
+        return normalized
+
+    @field_validator("provider_type")
+    @classmethod
+    def validate_provider_type(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized not in ALLOWED_SEARCH_PROVIDER_TYPES:
+            raise ValueError(f"Invalid provider type: {value}")
+        return normalized
+
+    @field_validator("credential_type")
+    @classmethod
+    def validate_credential_type(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized not in ALLOWED_SEARCH_PROVIDER_CREDENTIAL_TYPES:
+            raise ValueError(f"Invalid credential type: {value}")
+        return normalized
+
+
+class AugmisBusinessSearchProviderCreateRequest(AugmisBusinessSearchProviderBase):
+    pass
+
+
+class AugmisBusinessSearchProviderUpdateRequest(BaseModel):
+    display_name: str | None = Field(default=None, min_length=1, max_length=255)
+    description: str | None = Field(default=None, max_length=1000)
+    enabled: bool | None = None
+    credential_type: str | None = Field(default=None, min_length=1, max_length=50)
+    configuration_json: dict[str, object] | None = None
+
+    @field_validator("credential_type")
+    @classmethod
+    def validate_optional_credential_type(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = str(value or "").strip().lower()
+        if normalized not in ALLOWED_SEARCH_PROVIDER_CREDENTIAL_TYPES:
+            raise ValueError(f"Invalid credential type: {value}")
+        return normalized
+
+
+class AugmisBusinessConnectorProviderUpdateRequest(BaseModel):
+    provider_code: str = Field(min_length=2, max_length=120)
+
+    @field_validator("provider_code")
+    @classmethod
+    def validate_provider_code(cls, value: str) -> str:
+        normalized = re.sub(r"[^a-z0-9-]+", "-", str(value or "").strip().lower()).strip("-")
+        if len(normalized) < 2:
+            raise ValueError("Provider code must contain at least 2 letters or numbers")
+        return normalized
+
+
+class AugmisBusinessSearchProviderResponse(BaseModel):
+    id: str
+    tenant_id: str | None = None
+    provider_code: str
+    display_name: str
+    provider_type: str
+    adapter_code: str | None = None
+    description: str | None = None
+    enabled: bool
+    credential_type: str
+    configuration_json: dict[str, object] = Field(default_factory=dict)
+    credential_configured: bool = False
+    credential_source: str = "none"
+    connection_status: str = "not_tested"
+    last_tested_at: datetime | None = None
+    last_test_error: str | None = None
+    created_by: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
 class AugmisBusinessConnectorResponse(BaseModel):
     id: str
     tenant_id: str
@@ -1595,6 +1781,17 @@ class AugmisBusinessConnectorResponse(BaseModel):
     enabled: bool
     schedule_enabled: bool
     schedule_expression: str | None = None
+    schedule_type: str = "manual"
+    schedule_interval_minutes: int | None = None
+    schedule_day_of_week: int | None = None
+    schedule_time_local: str | None = None
+    schedule_timezone: str | None = None
+    next_run_at: datetime | None = None
+    last_scheduled_run_at: datetime | None = None
+    schedule_retry_count: int = 0
+    active_run_id: str | None = None
+    schedule_updated_by: str | None = None
+    schedule_updated_at: datetime | None = None
     configuration_json: dict[str, object] = Field(default_factory=dict)
     search_criteria_json: dict[str, object] = Field(default_factory=dict)
     capability_flags_json: dict[str, object] = Field(default_factory=dict)
@@ -1614,6 +1811,10 @@ class AugmisBusinessConnectorRunResponse(BaseModel):
     connector_id: str
     run_type: str
     status: str
+    attempt_number: int = 1
+    max_attempts: int = 1
+    retry_of_run_id: str | None = None
+    next_retry_at: datetime | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None
     items_found: int
@@ -1760,6 +1961,11 @@ class AugmisBusinessDiscoveryResponse(BaseModel):
     possible_duplicate_of_discovery_id: str | None = None
     imported_opportunity_id: str | None = None
     preliminary_relevance_score: float | None = None
+    source_language_code: str | None = None
+    source_language_label: str | None = None
+    source_language_is_english: bool = False
+    translation_required: bool = False
+    active_translation: dict[str, object] | None = None
     relevance_reasons_json: list[str] = Field(default_factory=list)
     matched_keywords_json: list[str] = Field(default_factory=list)
     evidence_json: list[dict[str, object]] = Field(default_factory=list)
@@ -1773,3 +1979,29 @@ class AugmisBusinessDiscoveryResponse(BaseModel):
 class AugmisBusinessDiscoveryImportResponse(BaseModel):
     discovery: AugmisBusinessDiscoveryResponse
     opportunity: dict[str, object]
+
+
+class AugmisBusinessDiscoveryTranslationResponse(BaseModel):
+    id: str
+    tenant_id: str
+    discovery_id: str
+    translation_version: int
+    source_language: str
+    source_language_label: str
+    target_language: str
+    translated_title: str | None = None
+    translated_summary: str | None = None
+    translated_description: str | None = None
+    translated_detail_json: dict[str, object] = Field(default_factory=dict)
+    provider: str
+    model: str
+    prompt_bundle_version: str
+    prompt_version: str
+    usage_json: dict[str, object] = Field(default_factory=dict)
+    created_by: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class AugmisBusinessDiscoveryTranslationRequest(BaseModel):
+    force: bool = False

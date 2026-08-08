@@ -416,6 +416,18 @@ class BusinessDevelopmentConnector(Base):
     enabled = Column(Boolean, nullable=False, default=True, index=True)
     schedule_enabled = Column(Boolean, nullable=False, default=False, index=True)
     schedule_expression = Column(String, nullable=True)
+    schedule_type = Column(String, nullable=False, default="manual", index=True)
+    schedule_interval_minutes = Column(Integer, nullable=True)
+    schedule_day_of_week = Column(Integer, nullable=True)
+    schedule_time_local = Column(String, nullable=True)
+    schedule_timezone = Column(String, nullable=True)
+    next_run_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    last_scheduled_run_at = Column(DateTime(timezone=True), nullable=True)
+    schedule_retry_count = Column(Integer, nullable=False, default=0)
+    schedule_retry_run_id = Column(String, nullable=True)
+    active_run_id = Column(String, nullable=True, index=True)
+    schedule_updated_by = Column(String, nullable=True)
+    schedule_updated_at = Column(DateTime(timezone=True), nullable=True)
     configuration_json = Column(JSON, nullable=False, default=dict)
     search_criteria_json = Column(JSON, nullable=False, default=dict)
     capability_flags_json = Column(JSON, nullable=False, default=dict)
@@ -436,6 +448,35 @@ class BusinessDevelopmentConnector(Base):
         UniqueConstraint("tenant_id", "name", name="uq_bd_connector_tenant_name"),
         Index("ix_bd_connectors_tenant_type", "tenant_id", "connector_type"),
         Index("ix_bd_connectors_tenant_status", "tenant_id", "status"),
+    )
+
+
+class BusinessDevelopmentSearchProvider(Base):
+    __tablename__ = "bd_search_providers"
+
+    id = Column(String, primary_key=True)
+    tenant_id = Column(String, ForeignKey("tenants.tenant_id"), nullable=True, index=True)
+    provider_code = Column(String, nullable=False, index=True)
+    display_name = Column(String, nullable=False)
+    provider_type = Column(String, nullable=False, index=True)
+    adapter_code = Column(String, nullable=True, index=True)
+    description = Column(Text, nullable=True)
+    enabled = Column(Boolean, nullable=False, default=True, index=True)
+    credential_type = Column(String, nullable=False, default="api_key")
+    configuration_json = Column(JSON, nullable=False, default=dict)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_by = Column(String, nullable=True)
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        Index("ix_bd_search_providers_scope_code", "tenant_id", "provider_code"),
+        Index("ix_bd_search_providers_scope_enabled", "tenant_id", "enabled"),
     )
 
 
@@ -483,6 +524,10 @@ class BusinessDevelopmentConnectorRun(Base):
     connector_id = Column(String, ForeignKey("bd_connectors.id"), nullable=False, index=True)
     run_type = Column(String, nullable=False, default="manual", index=True)
     status = Column(String, nullable=False, default="queued", index=True)
+    attempt_number = Column(Integer, nullable=False, default=1)
+    max_attempts = Column(Integer, nullable=False, default=1)
+    retry_of_run_id = Column(String, ForeignKey("bd_connector_runs.id"), nullable=True, index=True)
+    next_retry_at = Column(DateTime(timezone=True), nullable=True, index=True)
     started_at = Column(
         DateTime(timezone=True),
         nullable=False,
@@ -594,6 +639,62 @@ class BusinessDevelopmentDiscoveredOpportunity(Base):
         Index("ix_bd_discoveries_tenant_discovered", "tenant_id", "discovered_at"),
         Index("ix_bd_discoveries_tenant_closing", "tenant_id", "closing_date"),
         Index("ix_bd_discoveries_tenant_imported", "tenant_id", "imported_opportunity_id"),
+    )
+
+
+class BusinessDevelopmentDiscoveryTranslation(Base):
+    __tablename__ = "bd_discovery_translations"
+
+    id = Column(String, primary_key=True)
+    tenant_id = Column(String, ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    discovery_id = Column(
+        String,
+        ForeignKey("bd_discovered_opportunities.id"),
+        nullable=False,
+        index=True,
+    )
+    translation_version = Column(Integer, nullable=False)
+    source_language = Column(String, nullable=False, index=True)
+    target_language = Column(String, nullable=False, index=True, server_default="en")
+    source_content_hash = Column(String, nullable=False, index=True)
+    translated_title = Column(Text, nullable=True)
+    translated_summary = Column(Text, nullable=True)
+    translated_description = Column(Text, nullable=True)
+    translated_detail_json = Column(JSON, nullable=False, default=dict)
+    provider = Column(String, nullable=False, server_default="openai")
+    model = Column(String, nullable=False)
+    prompt_bundle_version = Column(String, nullable=False, server_default="phase5c4_v1")
+    prompt_version = Column(String, nullable=False, server_default="discovery_translation_v1")
+    usage_json = Column(JSON, nullable=False, default=dict)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "discovery_id",
+            "translation_version",
+            name="uq_bd_discovery_translation_version",
+        ),
+        Index(
+            "ix_bd_discovery_translations_tenant_discovery_created",
+            "tenant_id",
+            "discovery_id",
+            "created_at",
+        ),
+        Index(
+            "ix_bd_discovery_translations_tenant_discovery_target_hash",
+            "tenant_id",
+            "discovery_id",
+            "target_language",
+            "source_content_hash",
+        ),
     )
 
 

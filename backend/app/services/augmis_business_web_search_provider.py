@@ -8,6 +8,7 @@ from urllib.parse import urlsplit
 import requests
 
 from app.core.config import settings
+from app.services.augmis_business_web_fetcher import validate_public_http_url
 
 
 class WebSearchProviderError(Exception):
@@ -82,6 +83,153 @@ class BaseWebSearchProvider:
         exclude_domains: list[str] | None = None,
     ) -> dict[str, Any]:
         raise NotImplementedError
+
+
+def _safe_json_path_lookup(payload: Any, path: str | None) -> Any:
+    if not path:
+        return payload
+    current = payload
+    for token in [part.strip() for part in path.split(".") if part.strip()]:
+        if isinstance(current, dict):
+            current = current.get(token)
+        elif isinstance(current, list):
+            try:
+                current = current[int(token)]
+            except (ValueError, IndexError):
+                return None
+        else:
+            return None
+    return current
+
+
+class GenericRestWebSearchProvider(BaseWebSearchProvider):
+    display_name = "Generic REST Search"
+
+    def __init__(
+        self,
+        *,
+        name: str,
+        configuration: dict[str, Any],
+        api_key: str | None = None,
+    ) -> None:
+        super().__init__(api_key=api_key)
+        self.name = name
+        self.base_url = str(configuration.get("base_search_url") or "").strip()
+        self.http_method = str(configuration.get("http_method", "get") or "get").strip().lower()
+        self.authentication_type = str(configuration.get("authentication_type", "api_key_header") or "api_key_header").strip().lower()
+        self.api_key_header_name = str(configuration.get("api_key_header_name", "X-API-Key") or "X-API-Key").strip()
+        self.query_parameter_name = str(configuration.get("query_parameter_name", "q") or "q").strip()
+        self.results_path = str(configuration.get("results_path", "results") or "results").strip()
+        self.title_field = str(configuration.get("title_field", "title") or "title").strip()
+        self.url_field = str(configuration.get("url_field", "url") or "url").strip()
+        self.snippet_field = str(configuration.get("snippet_field", "snippet") or "snippet").strip()
+        self.score_field = str(configuration.get("score_field") or "").strip() or None
+        self.published_date_field = str(configuration.get("published_date_field") or "").strip() or None
+        self.page_parameter = str(configuration.get("page_parameter") or "").strip() or None
+        self.page_size_parameter = str(configuration.get("page_size_parameter") or "").strip() or None
+        self.timeout_seconds = settings.AUGMIS_WEB_SEARCH_TIMEOUT_SECONDS
+        validate_public_http_url(self.base_url)
+
+    def _headers(self) -> dict[str, str]:
+        headers = {"Accept": "application/json"}
+        if not self.api_key:
+            raise MissingWebSearchApiKeyError(self._missing_key_message())
+        if self.authentication_type == "bearer_token":
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        else:
+            headers[self.api_key_header_name] = self.api_key
+        return headers
+
+    def search(
+        self,
+        *,
+        query: str,
+        count: int,
+        offset: int = 0,
+        country: str | None = None,
+        language: str | None = None,
+        freshness_days: int | None = None,
+        exclude_domains: list[str] | None = None,
+    ) -> dict[str, Any]:
+        del country
+        del language
+        del freshness_days
+        del exclude_domains
+        query_count = max(1, min(count, 20))
+        payload: dict[str, Any] = {self.query_parameter_name: query}
+        if self.page_size_parameter:
+            payload[self.page_size_parameter] = query_count
+        if self.page_parameter:
+            payload[self.page_parameter] = max(1, offset + 1)
+        try:
+            if self.http_method == "post":
+                response = requests.post(
+                    self.base_url,
+                    headers=self._headers(),
+                    json=payload,
+                    timeout=self.timeout_seconds,
+                )
+            else:
+                response = requests.get(
+                    self.base_url,
+                    headers=self._headers(),
+                    params=payload,
+                    timeout=self.timeout_seconds,
+                )
+        except requests.Timeout as exc:
+            raise WebSearchProviderError(self._request_timed_out_message()) from exc
+        except requests.RequestException as exc:
+            raise WebSearchProviderError(self._request_failed_message()) from exc
+        if response.status_code == 401:
+            raise WebSearchProviderError(self._invalid_key_message())
+        if response.status_code == 403:
+            raise WebSearchProviderError(f"{self.display_name} rejected the request.")
+        if response.status_code == 429:
+            raise WebSearchProviderError(f"{self.display_name} rate limit was reached.")
+        if response.status_code >= 500:
+            raise WebSearchProviderError(f"{self.display_name} returned a server error.")
+        if response.status_code >= 400:
+            raise WebSearchProviderError(f"{self.display_name} returned HTTP {response.status_code}.")
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise WebSearchProviderError(f"{self.display_name} returned malformed JSON.") from exc
+
+        raw_results = _safe_json_path_lookup(body, self.results_path)
+        if raw_results is None:
+            raw_results = []
+        if not isinstance(raw_results, list):
+            raise WebSearchProviderError("Unable to map provider response.")
+
+        parsed_results: list[WebSearchResult] = []
+        for index, item in enumerate(raw_results, start=1):
+            if not isinstance(item, dict):
+                continue
+            title = str(_safe_json_path_lookup(item, self.title_field) or "").strip()
+            url = str(_safe_json_path_lookup(item, self.url_field) or "").strip()
+            if not title or not url:
+                raise WebSearchProviderError("Unable to map provider response.")
+            snippet = str(_safe_json_path_lookup(item, self.snippet_field) or "").strip() or None
+            score = _safe_json_path_lookup(item, self.score_field) if self.score_field else None
+            published_at = (
+                str(_safe_json_path_lookup(item, self.published_date_field) or "").strip() or None
+                if self.published_date_field
+                else None
+            )
+            hostname = urlsplit(url).hostname
+            parsed_results.append(
+                WebSearchResult(
+                    result_id=f"{self.name}-{index}",
+                    title=title,
+                    url=url,
+                    snippet=snippet,
+                    source_domain=hostname.lower() if hostname else None,
+                    published_at=published_at,
+                    rank=index,
+                    provider_metadata={"score": score, "raw_item": item},
+                )
+            )
+        return self._result(query=query, raw_count=len(raw_results), results=parsed_results)
 
 
 class BraveWebSearchProvider(BaseWebSearchProvider):
@@ -297,11 +445,26 @@ class TavilyWebSearchProvider(BaseWebSearchProvider):
         )
 
 
-def get_web_search_provider(provider_name: str | None, api_key: str | None = None) -> BaseWebSearchProvider:
+def get_web_search_provider(
+    provider_name: str | None,
+    api_key: str | None = None,
+    *,
+    provider_type: str = "builtin",
+    configuration: dict[str, Any] | None = None,
+    adapter_code: str | None = None,
+) -> BaseWebSearchProvider:
     normalized = str(provider_name or "tavily").strip().lower()
-    if normalized == "tavily":
+    normalized_type = str(provider_type or "builtin").strip().lower()
+    if normalized_type == "generic_rest":
+        return GenericRestWebSearchProvider(
+            name=normalized,
+            configuration=configuration or {},
+            api_key=api_key,
+        )
+    builtin_code = str(adapter_code or normalized).strip().lower()
+    if builtin_code == "tavily":
         return TavilyWebSearchProvider(api_key=api_key)
-    if normalized == "brave":
+    if builtin_code == "brave":
         return BraveWebSearchProvider(api_key=api_key)
     raise WebSearchProviderError(f"Unsupported web search provider: {provider_name}")
 

@@ -13,7 +13,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.db_models import BusinessDevelopmentConnectorSecret
+from app.db_models import BusinessDevelopmentConnectorSecret, BusinessDevelopmentSearchProvider
 from app.services.audit_service import create_audit_log
 from app.services.augmis_business_web_search_provider import (
     MissingWebSearchApiKeyError,
@@ -22,8 +22,8 @@ from app.services.augmis_business_web_search_provider import (
 )
 
 
-SUPPORTED_CREDENTIAL_PROVIDERS = {"tavily", "brave"}
-SUPPORTED_CREDENTIAL_TYPE = "api_key"
+BUILTIN_CREDENTIAL_PROVIDERS = {"tavily", "brave"}
+DEFAULT_CREDENTIAL_TYPE = "api_key"
 SECRET_KEY_VERSION = "v1"
 ENVIRONMENT_CREDENTIAL_NAMES = {
     "tavily": "TAVILY_API_KEY",
@@ -46,9 +46,30 @@ def _now() -> datetime:
 
 def _normalize_provider(provider: str) -> str:
     normalized = str(provider or "").strip().lower()
-    if normalized not in SUPPORTED_CREDENTIAL_PROVIDERS:
+    if not normalized:
         raise HTTPException(status_code=404, detail="Credential provider not found")
     return normalized
+
+
+def _provider_row(db: Session, tenant_id: str, provider: str) -> BusinessDevelopmentSearchProvider | None:
+    normalized = _normalize_provider(provider)
+    return (
+        db.query(BusinessDevelopmentSearchProvider)
+        .filter(
+            BusinessDevelopmentSearchProvider.provider_code == normalized,
+            (BusinessDevelopmentSearchProvider.tenant_id == tenant_id)
+            | (BusinessDevelopmentSearchProvider.tenant_id.is_(None)),
+        )
+        .order_by(BusinessDevelopmentSearchProvider.tenant_id.desc().nulls_last())
+        .first()
+    )
+
+
+def _credential_type_for_provider(db: Session, tenant_id: str, provider: str) -> str:
+    row = _provider_row(db, tenant_id, provider)
+    if row and row.credential_type:
+        return row.credential_type
+    return DEFAULT_CREDENTIAL_TYPE
 
 
 def _masked_hint(value: str | None) -> str | None:
@@ -138,7 +159,7 @@ def _serialize_secret_status(
     storage_status = connector_secret_storage_status()
     return {
         "provider": provider,
-        "credential_type": SUPPORTED_CREDENTIAL_TYPE,
+        "credential_type": row.credential_type if row and row.credential_type else DEFAULT_CREDENTIAL_TYPE,
         "configured": configured,
         "credential_source": credential_source,
         "masked_hint": masked,
@@ -152,12 +173,13 @@ def _serialize_secret_status(
 
 
 def _require_secret_row(db: Session, tenant_id: str, provider: str) -> BusinessDevelopmentConnectorSecret | None:
+    credential_type = _credential_type_for_provider(db, tenant_id, provider)
     return (
         db.query(BusinessDevelopmentConnectorSecret)
         .filter(
             BusinessDevelopmentConnectorSecret.tenant_id == tenant_id,
             BusinessDevelopmentConnectorSecret.provider == provider,
-            BusinessDevelopmentConnectorSecret.credential_type == SUPPORTED_CREDENTIAL_TYPE,
+            BusinessDevelopmentConnectorSecret.credential_type == credential_type,
         )
         .first()
     )
@@ -168,13 +190,15 @@ def list_connector_credential_statuses(db: Session, tenant_id: str) -> dict[str,
         "success": True,
         "data": [
             get_connector_credential_status(db, tenant_id, provider)["data"]
-            for provider in sorted(SUPPORTED_CREDENTIAL_PROVIDERS)
+            for provider in sorted(BUILTIN_CREDENTIAL_PROVIDERS)
         ],
     }
 
 
 def get_connector_credential_status(db: Session, tenant_id: str, provider: str) -> dict[str, Any]:
     normalized = _normalize_provider(provider)
+    if not _provider_row(db, tenant_id, normalized) and normalized not in BUILTIN_CREDENTIAL_PROVIDERS:
+        raise HTTPException(status_code=404, detail="Credential provider not found")
     row = _require_secret_row(db, tenant_id, normalized)
     if row:
         return {
@@ -214,6 +238,9 @@ def resolve_provider_credential(
     provider: str,
 ) -> ResolvedProviderCredential:
     normalized = _normalize_provider(provider)
+    provider_row = _provider_row(db, tenant_id, normalized)
+    if not provider_row and normalized not in BUILTIN_CREDENTIAL_PROVIDERS:
+        raise HTTPException(status_code=404, detail="Credential provider not found")
     row = _require_secret_row(db, tenant_id, normalized)
     if row:
         return ResolvedProviderCredential(
@@ -254,6 +281,7 @@ def test_connector_credential(
     transient_api_key: str | None = None,
 ) -> dict[str, Any]:
     normalized = _normalize_provider(provider)
+    provider_row = _provider_row(db, tenant_id, normalized)
     api_key = transient_api_key.strip() if transient_api_key else None
     resolved = (
         ResolvedProviderCredential(
@@ -284,7 +312,13 @@ def test_connector_credential(
                 },
             },
         }
-    provider_client = get_web_search_provider(normalized, api_key=resolved.api_key)
+    provider_client = get_web_search_provider(
+        normalized,
+        api_key=resolved.api_key,
+        provider_type=provider_row.provider_type if provider_row else "builtin",
+        configuration=provider_row.configuration_json if provider_row else {},
+        adapter_code=provider_row.adapter_code if provider_row else normalized,
+    )
     try:
         result = provider_client.test_connection()
         if resolved.secret_row:
@@ -349,6 +383,9 @@ def save_connector_credential(
     api_key: str,
 ) -> dict[str, Any]:
     normalized = _normalize_provider(provider)
+    if not _provider_row(db, tenant_id, normalized) and normalized not in BUILTIN_CREDENTIAL_PROVIDERS:
+        raise HTTPException(status_code=404, detail="Credential provider not found")
+    credential_type = _credential_type_for_provider(db, tenant_id, normalized)
     encrypted = _encrypt_value(api_key.strip())
     row = _require_secret_row(db, tenant_id, normalized)
     action = "replaced" if row else "created"
@@ -369,7 +406,7 @@ def save_connector_credential(
             tenant_id=tenant_id,
             connector_id=None,
             provider=normalized,
-            credential_type=SUPPORTED_CREDENTIAL_TYPE,
+            credential_type=credential_type,
             encrypted_value=encrypted,
             key_version=SECRET_KEY_VERSION,
             status="active",
@@ -402,6 +439,8 @@ def delete_connector_credential(
     current_user: dict,
 ) -> dict[str, Any]:
     normalized = _normalize_provider(provider)
+    if not _provider_row(db, tenant_id, normalized) and normalized not in BUILTIN_CREDENTIAL_PROVIDERS:
+        raise HTTPException(status_code=404, detail="Credential provider not found")
     row = _require_secret_row(db, tenant_id, normalized)
     if not row:
         return {"success": True, "deleted": 0, "data": get_connector_credential_status(db, tenant_id, normalized)["data"]}

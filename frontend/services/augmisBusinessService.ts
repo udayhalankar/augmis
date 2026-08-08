@@ -520,16 +520,27 @@ export type AugmisBusinessConnectorMetadata = {
   supports_incremental_scan: boolean;
   status: string;
   is_test_connector: boolean;
-  default_provider?: string;
-  supported_providers?: string[];
-  provider_statuses?: Record<
-    string,
-    {
-      label: string;
-      configured: boolean;
-      message: string;
-    }
-  >;
+};
+
+export type AugmisBusinessSearchProvider = {
+  id: string;
+  tenant_id: string | null;
+  provider_code: string;
+  display_name: string;
+  provider_type: "builtin" | "generic_rest";
+  adapter_code: string | null;
+  description: string | null;
+  enabled: boolean;
+  credential_type: string;
+  configuration_json: Record<string, unknown>;
+  credential_configured: boolean;
+  credential_source: "tenant_secret" | "environment" | "none" | "transient";
+  connection_status: string;
+  last_tested_at: string | null;
+  last_test_error: string | null;
+  created_by: string | null;
+  created_at: string | null;
+  updated_at: string | null;
 };
 
 export type AugmisBusinessConnector = {
@@ -543,6 +554,17 @@ export type AugmisBusinessConnector = {
   enabled: boolean;
   schedule_enabled: boolean;
   schedule_expression: string | null;
+  schedule_type: "manual" | "hourly_interval" | "daily" | "weekly";
+  schedule_interval_minutes: number | null;
+  schedule_day_of_week: number | null;
+  schedule_time_local: string | null;
+  schedule_timezone: string | null;
+  next_run_at: string | null;
+  last_scheduled_run_at: string | null;
+  schedule_retry_count: number;
+  active_run_id: string | null;
+  schedule_updated_by: string | null;
+  schedule_updated_at: string | null;
   configuration_json: Record<string, unknown>;
   search_criteria_json: Record<string, unknown>;
   capability_flags_json: Record<string, unknown>;
@@ -562,6 +584,10 @@ export type AugmisBusinessConnectorRun = {
   connector_id: string;
   run_type: string;
   status: string;
+  attempt_number: number;
+  max_attempts: number;
+  retry_of_run_id: string | null;
+  next_retry_at: string | null;
   started_at: string | null;
   completed_at: string | null;
   items_found: number;
@@ -624,12 +650,43 @@ export type AugmisBusinessDiscovery = {
   possible_duplicate_of_discovery_id: string | null;
   imported_opportunity_id: string | null;
   preliminary_relevance_score: number | null;
+  source_language_code?: string | null;
+  source_language_label?: string | null;
+  source_language_is_english?: boolean;
+  translation_required?: boolean;
+  active_translation?: AugmisBusinessDiscoveryTranslation | null;
+  relevance_band?: string | null;
+  closing_status?: string | null;
   relevance_reasons_json: string[];
+  positive_relevance_reasons?: string[];
+  negative_relevance_reasons?: string[];
   matched_keywords_json: string[];
   evidence_json: Array<Record<string, unknown>>;
   normalized_search_text: string | null;
   url_fingerprint: string | null;
   composite_fingerprint: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+export type AugmisBusinessDiscoveryTranslation = {
+  id: string;
+  tenant_id: string;
+  discovery_id: string;
+  translation_version: number;
+  source_language: string;
+  source_language_label: string;
+  target_language: string;
+  translated_title: string | null;
+  translated_summary: string | null;
+  translated_description: string | null;
+  translated_detail_json: Record<string, unknown>;
+  provider: string;
+  model: string;
+  prompt_bundle_version: string;
+  prompt_version: string;
+  usage_json: Record<string, unknown>;
+  created_by: string | null;
   created_at: string | null;
   updated_at: string | null;
 };
@@ -651,6 +708,9 @@ export type DiscoveryListParams = {
   source_category?: string;
   country?: string;
   minimum_score?: number;
+  relevance_band?: string;
+  sort_by?: string;
+  sort_order?: "asc" | "desc";
 };
 
 export type CreateAugmisBusinessSearchProfilePayload = Omit<
@@ -667,6 +727,11 @@ export type CreateAugmisBusinessConnectorPayload = {
   enabled?: boolean;
   schedule_enabled?: boolean;
   schedule_expression?: string | null;
+  schedule_type?: "manual" | "hourly_interval" | "daily" | "weekly";
+  schedule_interval_minutes?: number | null;
+  schedule_day_of_week?: number | null;
+  schedule_time_local?: string | null;
+  schedule_timezone?: string | null;
   configuration_json?: Record<string, unknown>;
   search_criteria_json?: Record<string, unknown>;
   capability_flags_json?: Record<string, unknown>;
@@ -676,6 +741,19 @@ export type CreateAugmisBusinessConnectorPayload = {
 export type UpdateAugmisBusinessConnectorPayload = Partial<CreateAugmisBusinessConnectorPayload> & {
   status?: string | null;
 };
+
+export type CreateAugmisBusinessSearchProviderPayload = {
+  provider_code: string;
+  display_name: string;
+  provider_type: "generic_rest";
+  adapter_code?: string | null;
+  description?: string | null;
+  enabled?: boolean;
+  credential_type?: "api_key" | "bearer_token";
+  configuration_json?: Record<string, unknown>;
+};
+
+export type UpdateAugmisBusinessSearchProviderPayload = Partial<CreateAugmisBusinessSearchProviderPayload>;
 
 export type UpdateAugmisBusinessDiscoveryPayload = {
   discovery_status?: string | null;
@@ -1344,6 +1422,82 @@ export async function testAugmisBusinessConnector(connectorId: string) {
   };
 }
 
+export async function setAugmisBusinessConnectorSearchProvider(
+  connectorId: string,
+  payload: { provider_code: string }
+) {
+  const response = await apiClient.patch(
+    `/api/augmis-business/connectors/${encodeURIComponent(connectorId)}/provider`,
+    payload
+  );
+  return response.data as {
+    success: boolean;
+    data: AugmisBusinessConnector;
+  };
+}
+
+export async function listAugmisBusinessSearchProviders() {
+  const response = await apiClient.get("/api/augmis-business/search-providers");
+  return response.data as {
+    success: boolean;
+    data: AugmisBusinessSearchProvider[];
+    options: {
+      provider_type_options: Array<{ value: string; label: string }>;
+      builtin_adapter_options: Array<{ adapter_code: string; display_name: string }>;
+    };
+  };
+}
+
+export async function createAugmisBusinessSearchProvider(
+  payload: CreateAugmisBusinessSearchProviderPayload
+) {
+  const response = await apiClient.post("/api/augmis-business/search-providers", payload);
+  return response.data as {
+    success: boolean;
+    data: AugmisBusinessSearchProvider;
+  };
+}
+
+export async function updateAugmisBusinessSearchProvider(
+  providerId: string,
+  payload: UpdateAugmisBusinessSearchProviderPayload
+) {
+  const response = await apiClient.patch(
+    `/api/augmis-business/search-providers/${encodeURIComponent(providerId)}`,
+    payload
+  );
+  return response.data as {
+    success: boolean;
+    data: AugmisBusinessSearchProvider;
+  };
+}
+
+export async function deleteAugmisBusinessSearchProvider(providerId: string) {
+  const response = await apiClient.delete(
+    `/api/augmis-business/search-providers/${encodeURIComponent(providerId)}`
+  );
+  return response.data as {
+    success: boolean;
+    deleted: number;
+  };
+}
+
+export async function testAugmisBusinessSearchProvider(providerId: string) {
+  const response = await apiClient.post(
+    `/api/augmis-business/search-providers/${encodeURIComponent(providerId)}/test`
+  );
+  return response.data as {
+    success: boolean;
+    data: AugmisBusinessSearchProvider;
+    result: {
+      success: boolean;
+      provider: string;
+      message: string;
+      result_count?: number;
+    };
+  };
+}
+
 export async function listAugmisBusinessConnectorCredentials() {
   const response = await apiClient.get("/api/augmis-business/connector-credentials");
   return response.data as {
@@ -1468,6 +1622,37 @@ export async function getAugmisBusinessDiscovery(discoveryId: string) {
     success: boolean;
     data: AugmisBusinessDiscovery;
     duplicates: AugmisBusinessDiscovery[];
+  };
+}
+
+export async function getAugmisBusinessDiscoveryTranslation(discoveryId: string) {
+  const response = await apiClient.get(
+    `/api/augmis-business/discoveries/${encodeURIComponent(discoveryId)}/translation`
+  );
+  return response.data as {
+    success: boolean;
+    data: AugmisBusinessDiscoveryTranslation | null;
+    source_language: string | null;
+    source_language_label: string;
+    translation_required: boolean;
+  };
+}
+
+export async function translateAugmisBusinessDiscovery(
+  discoveryId: string,
+  payload: { force?: boolean } = {}
+) {
+  const response = await apiClient.post(
+    `/api/augmis-business/discoveries/${encodeURIComponent(discoveryId)}/translate`,
+    payload,
+    {
+      params: payload.force ? { force: true } : undefined,
+    }
+  );
+  return response.data as {
+    success: boolean;
+    cached: boolean;
+    data: AugmisBusinessDiscoveryTranslation;
   };
 }
 

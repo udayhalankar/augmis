@@ -2,7 +2,10 @@ import logging
 
 from app.core.config import settings
 from app.core.database import SessionLocal
-from app.services.augmis_business_listener_service import run_due_listener_scans
+from app.services.augmis_business_listener_service import (
+    initialize_listener_schedule_state,
+    run_due_listener_scans,
+)
 from app.services.server_log_service import background_log_context
 from app.services.connector_scheduled_runner_service import run_due_repository_syncs
 
@@ -49,6 +52,12 @@ def start_connector_scheduler():
 
     if _scheduler and _scheduler.running:
         return _scheduler
+
+    init_db = SessionLocal()
+    try:
+        initialize_listener_schedule_state(init_db)
+    finally:
+        init_db.close()
 
     scheduler = BackgroundScheduler(timezone=settings.CONNECTOR_SYNC_SCHEDULER_TIMEZONE)
     scheduler.add_job(

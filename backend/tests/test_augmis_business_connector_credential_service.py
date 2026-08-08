@@ -18,6 +18,7 @@ from app.db_models import (
     AuditLog,
     BusinessDevelopmentConnector,
     BusinessDevelopmentConnectorSecret,
+    BusinessDevelopmentSearchProvider,
     Tenant,
     User,
 )
@@ -28,6 +29,7 @@ from app.services.augmis_business_connector_credential_service import (
     save_connector_credential,
     test_connector_credential,
 )
+from app.services.augmis_business_search_provider_service import ensure_builtin_search_providers
 from app.services.augmis_business_web_search_provider import WebSearchProviderError
 
 
@@ -49,6 +51,7 @@ class AugmisBusinessConnectorCredentialServiceTest(unittest.TestCase):
                 User.__table__,
                 AuditLog.__table__,
                 BusinessDevelopmentConnector.__table__,
+                BusinessDevelopmentSearchProvider.__table__,
                 BusinessDevelopmentConnectorSecret.__table__,
             ],
         )
@@ -98,6 +101,7 @@ class AugmisBusinessConnectorCredentialServiceTest(unittest.TestCase):
             ]
         )
         self.db.commit()
+        ensure_builtin_search_providers(self.db)
 
     def tearDown(self):
         settings.AUGMIS_CONNECTOR_SECRET_KEY = self.original_secret_key
@@ -270,7 +274,13 @@ class AugmisBusinessConnectorCredentialServiceTest(unittest.TestCase):
         )
         result = test_connector_credential(self.db, "TENANT-1", "tavily", self.current_user)
         self.assertTrue(result["data"]["result"]["success"])
-        mock_get_provider.assert_called_once_with("tavily", api_key="tvly-tenant-1234")
+        mock_get_provider.assert_called_once_with(
+            "tavily",
+            api_key="tvly-tenant-1234",
+            provider_type="builtin",
+            configuration={},
+            adapter_code="tavily",
+        )
 
     @patch("app.services.augmis_business_connector_credential_service.get_web_search_provider")
     def test_provider_test_failure_is_safe_and_does_not_echo_key(self, mock_get_provider: Mock):

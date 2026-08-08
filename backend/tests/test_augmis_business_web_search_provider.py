@@ -7,6 +7,7 @@ import requests
 
 from app.services.augmis_business_web_search_provider import (
     BraveWebSearchProvider,
+    GenericRestWebSearchProvider,
     MissingWebSearchApiKeyError,
     TavilyWebSearchProvider,
     WebSearchProviderError,
@@ -161,6 +162,63 @@ class AugmisBusinessWebSearchProviderTest(unittest.TestCase):
     def test_unsupported_provider_does_not_fallback(self):
         with self.assertRaises(WebSearchProviderError):
             get_web_search_provider("unsupported")
+
+    @patch("app.services.augmis_business_web_search_provider.validate_public_http_url")
+    @patch("app.services.augmis_business_web_search_provider.requests.get")
+    def test_generic_rest_get_provider_maps_results(self, mock_get: Mock, mock_validate: Mock):
+        provider = GenericRestWebSearchProvider(
+            name="custom-search",
+            api_key="custom-key",
+            configuration={
+                "base_search_url": "https://search.example/api",
+                "http_method": "get",
+                "authentication_type": "api_key_header",
+                "api_key_header_name": "X-API-Key",
+                "query_parameter_name": "q",
+                "results_path": "results",
+                "title_field": "title",
+                "url_field": "url",
+                "snippet_field": "snippet",
+            },
+        )
+        mock_response = Mock(status_code=200)
+        mock_response.json.return_value = {
+            "results": [
+                {
+                    "title": "Workflow Tender",
+                    "url": "https://buyer.example/tender",
+                    "snippet": "Seeking workflow automation vendor.",
+                }
+            ]
+        }
+        mock_get.return_value = mock_response
+        result = provider.search(query="workflow", count=5)
+        self.assertEqual(result["provider"], "custom-search")
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["results"][0].title, "Workflow Tender")
+
+    @patch("app.services.augmis_business_web_search_provider.validate_public_http_url")
+    @patch("app.services.augmis_business_web_search_provider.requests.post")
+    def test_generic_rest_post_provider_rejects_bad_mapping(self, mock_post: Mock, mock_validate: Mock):
+        provider = GenericRestWebSearchProvider(
+            name="custom-search",
+            api_key="custom-key",
+            configuration={
+                "base_search_url": "https://search.example/api",
+                "http_method": "post",
+                "authentication_type": "bearer_token",
+                "query_parameter_name": "query",
+                "results_path": "items",
+                "title_field": "title",
+                "url_field": "url",
+                "snippet_field": "summary",
+            },
+        )
+        mock_response = Mock(status_code=200)
+        mock_response.json.return_value = {"items": [{"title": "Missing URL"}]}
+        mock_post.return_value = mock_response
+        with self.assertRaises(WebSearchProviderError):
+            provider.search(query="workflow", count=5)
 
 
 if __name__ == "__main__":
