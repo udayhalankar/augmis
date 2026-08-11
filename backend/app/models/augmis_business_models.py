@@ -2293,6 +2293,14 @@ class AugmisBusinessDiscoveryResponse(BaseModel):
     possible_duplicate_of_discovery_id: str | None = None
     imported_opportunity_id: str | None = None
     preliminary_relevance_score: float | None = None
+    validity_score: float | None = None
+    validity_band: str | None = None
+    validity_class: str | None = None
+    actionability: str | None = None
+    validity_positive_evidence: list[str] = Field(default_factory=list)
+    validity_negative_evidence: list[str] = Field(default_factory=list)
+    validity_reason_codes: list[str] = Field(default_factory=list)
+    validity_eligible_for_inbox: bool = False
     commercial_priority_score: float | None = None
     commercial_priority_band: str | None = None
     commercial_recommendation: str | None = None

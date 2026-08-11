@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from html.parser import HTMLParser
 import re
+import time
 from typing import Any
 from urllib import robotparser
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
@@ -40,6 +41,8 @@ from app.services.augmis_business_web_fetcher import (
     fetch_public_webpage,
     validate_public_http_url,
 )
+
+_sleep = time.sleep
 
 
 INDEPENDENT_WEB_CONNECTOR_TYPE = "independent_web_discovery"
@@ -308,6 +311,17 @@ def _session_bound_url_reasons(url: str) -> list[str]:
     return list(dict.fromkeys(reasons))[:6]
 
 
+def _requires_parent_session_bootstrap(url: str) -> bool:
+    parts = urlsplit(url)
+    lowered_path = parts.path.lower()
+    lowered_query = parts.query.lower()
+    if ";jsessionid=" in lowered_path:
+        return True
+    if "session=" in lowered_query and ("directlink" in lowered_query or "component=" in lowered_query):
+        return True
+    return bool(_session_bound_url_reasons(url))
+
+
 def _diagnostic_message(code: str) -> str:
     return {
         "ROBOTS_DENIED": "Robots policy denied this URL.",
@@ -500,6 +514,13 @@ class PageParseResult:
     contact_routes: list[dict[str, Any]]
     application_url: str | None
     reference_number: str | None
+
+
+@dataclass
+class FrontierSelection:
+    frontier: BusinessDevelopmentWebFrontier | None
+    wait_until: datetime | None
+    reason: str
 
 
 def _limited_codes(values: list[str], *, limit: int = 8) -> list[str]:
@@ -1479,6 +1500,7 @@ def _enqueue_frontier_url(
     context: str | None,
     depth: int,
     priority: float,
+    requeue_existing_fetched: bool = False,
 ) -> BusinessDevelopmentWebFrontier | None:
     try:
         canonical_url, domain = _as_public_url(url)
@@ -1500,6 +1522,11 @@ def _enqueue_frontier_url(
         if row.status in {"failed", "skipped", "blocked", "robots_denied"} and next_fetch_at <= _now():
             row.status = "queued"
             row.next_fetch_at = _now()
+        elif requeue_existing_fetched and row.status == "fetched" and next_fetch_at <= _now():
+            row.status = "queued"
+            row.next_fetch_at = _now()
+            row.error_code = None
+            row.error_message = None
         return row
     row = BusinessDevelopmentWebFrontier(
         id=f"BD-WFR-{_fingerprint(f'{tenant_id}:{connector_id}:{canonical_url}')}",
@@ -1629,10 +1656,15 @@ class IndependentWebDiscoveryEngine:
             "detail_links_robots_denied": 0,
         }
         self.visited_domains: set[str] = set()
+        self.run_domains: set[str] = set()
+        self.pages_attempted_by_domain: dict[str, int] = {}
+        self.pages_fetched_by_domain: dict[str, int] = {}
         self.seed_by_id: dict[str, BusinessDevelopmentWebSeed] = {}
         self.listing_detail_links_discovered: set[str] = set()
         self.listing_detail_links_queued: set[str] = set()
         self.http_sessions: dict[str, requests.Session] = {}
+        self.session_initialized_domains: set[str] = set()
+        self.robots_policy_cache: dict[str, RobotsPolicy] = {}
 
     def _session_for_domain(self, domain: str) -> requests.Session:
         session = self.http_sessions.get(domain)
@@ -1701,6 +1733,119 @@ class IndependentWebDiscoveryEngine:
         robots_delay = domain_row.robots_crawl_delay_seconds or configured
         return max(configured, robots_delay)
 
+    def _domain_row(self, frontier: BusinessDevelopmentWebFrontier) -> BusinessDevelopmentWebDomain | None:
+        return (
+            self.db.query(BusinessDevelopmentWebDomain)
+            .filter(
+                BusinessDevelopmentWebDomain.tenant_id == self.connector.tenant_id,
+                BusinessDevelopmentWebDomain.connector_id == self.connector.id,
+                BusinessDevelopmentWebDomain.domain == frontier.domain,
+            )
+            .first()
+        )
+
+    def _robots_policy_for_frontier(
+        self,
+        *,
+        frontier: BusinessDevelopmentWebFrontier,
+        seed: BusinessDevelopmentWebSeed | None,
+    ) -> tuple[BusinessDevelopmentWebDomain, RobotsPolicy]:
+        domain_row = _ensure_domain(
+            self.db,
+            tenant_id=self.connector.tenant_id,
+            connector_id=self.connector.id,
+            seed=seed,
+            domain=frontier.domain,
+            source="seed" if seed else "crawl",
+            found_from_url=frontier.parent_url,
+            found_context=frontier.anchor_text,
+            default_approval="approved" if seed else "pending_review",
+        )
+        robots = self.robots_policy_cache.get(frontier.domain)
+        if robots is None:
+            robots = _fetch_robots(domain_row, self.policy)
+            self.robots_policy_cache[frontier.domain] = robots
+        return domain_row, robots
+
+    def _max_links_for_page(self, page_type: str) -> int:
+        limit = self._max_links_per_page()
+        if page_type == "procurement_list":
+            return max(limit, 200)
+        return limit
+
+    def _pending_frontier_summary(self) -> tuple[int, dict[str, int]]:
+        rows = (
+            self.db.query(BusinessDevelopmentWebFrontier.domain, func.count(BusinessDevelopmentWebFrontier.id))
+            .filter(
+                BusinessDevelopmentWebFrontier.tenant_id == self.connector.tenant_id,
+                BusinessDevelopmentWebFrontier.connector_id == self.connector.id,
+                BusinessDevelopmentWebFrontier.status == "queued",
+            )
+            .group_by(BusinessDevelopmentWebFrontier.domain)
+            .all()
+        )
+        pending_by_domain = {domain: int(count or 0) for domain, count in rows}
+        return sum(pending_by_domain.values()), pending_by_domain
+
+    def _resolve_run_status(
+        self,
+        *,
+        stop_reason: str,
+        seeded_due_work: bool,
+    ) -> str:
+        pending_frontier_count, pending_frontier_by_domain = self._pending_frontier_summary()
+        self.metrics["pending_frontier_count"] = pending_frontier_count
+        self.metrics["pending_frontier_by_domain"] = pending_frontier_by_domain
+        if stop_reason == "run_duration_reached":
+            return "run_duration_reached"
+        if stop_reason == "frontier_waiting":
+            return "frontier_waiting"
+        if stop_reason == "batch_limit_reached":
+            return "batch_limit_reached"
+        if pending_frontier_count == 0:
+            if self.metrics["pages_attempted"] == 0 and not seeded_due_work:
+                return "no_due_work"
+            return "frontier_exhausted"
+        return "batch_limit_reached"
+
+    def _fetch_frontier_with_session(
+        self,
+        *,
+        frontier: BusinessDevelopmentWebFrontier,
+    ) -> dict[str, Any]:
+        session = self._session_for_domain(frontier.domain)
+        needs_parent_bootstrap = _requires_parent_session_bootstrap(frontier.canonical_url)
+        should_bootstrap_parent = (
+            needs_parent_bootstrap
+            and frontier.domain not in self.session_initialized_domains
+            and bool(frontier.parent_url)
+            and _same_origin_referer(frontier.parent_url, frontier.canonical_url) is not None
+            and frontier.parent_url != frontier.canonical_url
+        )
+        if should_bootstrap_parent:
+            fetch_public_webpage(
+                frontier.parent_url,
+                policy=self.policy,
+                session=session,
+                referer=_same_origin_referer(frontier.parent_url, frontier.parent_url),
+            )
+            self.session_initialized_domains.add(frontier.domain)
+        if needs_parent_bootstrap and frontier.domain not in self.session_initialized_domains:
+            raise SafeWebFetchError(
+                "URL appears bound to a transient public session and will not be retried as a durable link.",
+                code="SESSION_BOUND_URL",
+                retryable=False,
+                final_url=frontier.canonical_url,
+            )
+        result = fetch_public_webpage(
+            frontier.canonical_url,
+            policy=self.policy,
+            session=session,
+            referer=_same_origin_referer(frontier.parent_url, frontier.canonical_url),
+        )
+        self.session_initialized_domains.add(frontier.domain)
+        return result
+
     def _seed_rows(self) -> list[BusinessDevelopmentWebSeed]:
         rows = (
             self.db.query(BusinessDevelopmentWebSeed)
@@ -1740,6 +1885,7 @@ class IndependentWebDiscoveryEngine:
             context=seed.notes,
             depth=0,
             priority=float(seed.priority),
+            requeue_existing_fetched=True,
         )
         if seed.seed_type == "sitemap" or canonical_url.endswith("sitemap.xml"):
             self._queue_sitemap(seed, domain_row, canonical_url)
@@ -1769,52 +1915,33 @@ class IndependentWebDiscoveryEngine:
         except Exception:
             self.metrics["errors"] += 1
 
-    def _pick_frontier(self) -> BusinessDevelopmentWebFrontier | None:
+    def _pick_frontier(self) -> FrontierSelection:
         rows = (
             self.db.query(BusinessDevelopmentWebFrontier)
             .filter(
                 BusinessDevelopmentWebFrontier.tenant_id == self.connector.tenant_id,
                 BusinessDevelopmentWebFrontier.connector_id == self.connector.id,
                 BusinessDevelopmentWebFrontier.status == "queued",
-                (BusinessDevelopmentWebFrontier.next_fetch_at.is_(None) | (BusinessDevelopmentWebFrontier.next_fetch_at <= _now())),
             )
             .order_by(desc(BusinessDevelopmentWebFrontier.priority), asc(BusinessDevelopmentWebFrontier.discovered_at))
-            .limit(50)
+            .limit(200)
             .all()
         )
-        domain_page_counts = {
-            domain: count
-            for domain, count in (
-                self.db.query(
-                    BusinessDevelopmentWebPage.domain,
-                    func.count(BusinessDevelopmentWebPage.id),
-                )
-                .filter(
-                    BusinessDevelopmentWebPage.tenant_id == self.connector.tenant_id,
-                    BusinessDevelopmentWebPage.connector_id == self.connector.id,
-                )
-                .group_by(BusinessDevelopmentWebPage.domain)
-                .all()
-            )
-        }
+        now = _now()
+        earliest_wait_until: datetime | None = None
+        deferred_for_batch_limit = False
+        domain_rows: dict[str, BusinessDevelopmentWebDomain | None] = {}
         for frontier in rows:
             if frontier.depth > self._max_depth():
                 frontier.status = "blocked"
                 frontier.error_code = "DEPTH_LIMIT"
                 continue
-            if domain_page_counts.get(frontier.domain, 0) >= self._max_pages_per_domain():
-                frontier.status = "blocked"
-                frontier.error_code = "DOMAIN_PAGE_LIMIT"
+            if self.pages_attempted_by_domain.get(frontier.domain, 0) >= self._max_pages_per_domain():
+                deferred_for_batch_limit = True
                 continue
-            domain_row = (
-                self.db.query(BusinessDevelopmentWebDomain)
-                .filter(
-                    BusinessDevelopmentWebDomain.tenant_id == self.connector.tenant_id,
-                    BusinessDevelopmentWebDomain.connector_id == self.connector.id,
-                    BusinessDevelopmentWebDomain.domain == frontier.domain,
-                )
-                .first()
-            )
+            if frontier.domain not in domain_rows:
+                domain_rows[frontier.domain] = self._domain_row(frontier)
+            domain_row = domain_rows[frontier.domain]
             if domain_row and (not domain_row.enabled or domain_row.approval_status == "ignored"):
                 frontier.status = "blocked"
                 frontier.error_code = "DOMAIN_DISABLED"
@@ -1823,15 +1950,25 @@ class IndependentWebDiscoveryEngine:
                 frontier.status = "blocked"
                 frontier.error_code = "DOMAIN_PENDING_REVIEW"
                 continue
+            if frontier.domain not in self.run_domains and len(self.run_domains) >= self._max_domains_per_run():
+                deferred_for_batch_limit = True
+                continue
+            wait_until = _as_utc(frontier.next_fetch_at) or now
             last_crawl_at = _as_utc(domain_row.last_crawl_at) if domain_row else None
             if domain_row and last_crawl_at:
-                wait_until = last_crawl_at + timedelta(seconds=self._domain_delay(domain_row))
-                if wait_until > _now():
-                    frontier.next_fetch_at = wait_until
-                    continue
-            return frontier
+                wait_until = max(wait_until, last_crawl_at + timedelta(seconds=self._domain_delay(domain_row)))
+            if wait_until > now:
+                frontier.next_fetch_at = wait_until
+                if earliest_wait_until is None or wait_until < earliest_wait_until:
+                    earliest_wait_until = wait_until
+                continue
+            return FrontierSelection(frontier=frontier, wait_until=earliest_wait_until, reason="ready")
         self.db.flush()
-        return None
+        if earliest_wait_until is not None:
+            return FrontierSelection(frontier=None, wait_until=earliest_wait_until, reason="frontier_waiting")
+        if deferred_for_batch_limit:
+            return FrontierSelection(frontier=None, wait_until=None, reason="batch_limit_reached")
+        return FrontierSelection(frontier=None, wait_until=None, reason="frontier_exhausted")
 
     def _store_page(
         self,
@@ -1986,7 +2123,7 @@ class IndependentWebDiscoveryEngine:
                     self.listing_detail_links_queued.add(canonical_url)
                     self.metrics["detail_links_queued"] += 1
             processed += 1
-            if processed >= self._max_links_per_page():
+            if processed >= self._max_links_for_page(parsed.page_type):
                 break
 
     def run(self) -> tuple[list[AugmisBusinessDiscoveredOpportunityCandidate], dict[str, Any]]:
@@ -1995,31 +2132,36 @@ class IndependentWebDiscoveryEngine:
         if not seeds:
             return [], {**self.metrics, "status": "no_seeds"}
         max_seeds = _clamp(int(self.config.get("maximum_seeds_per_run", 5) or 5), 1, len(seeds))
+        seeded_due_work = False
         for seed in seeds[:max_seeds]:
             next_crawl_at = _as_utc(seed.next_crawl_at)
             if next_crawl_at and next_crawl_at > _now():
                 continue
+            seeded_due_work = True
             self._seed_frontier(seed)
         self.db.flush()
         discoveries: list[AugmisBusinessDiscoveredOpportunityCandidate] = []
+        stop_reason = "frontier_exhausted"
         try:
             while self.metrics["pages_fetched"] < self._max_total_pages():
-                if (_now() - self.started_at).total_seconds() >= self._run_duration_limit():
+                elapsed_seconds = (_now() - self.started_at).total_seconds()
+                if elapsed_seconds >= self._run_duration_limit():
+                    stop_reason = "run_duration_reached"
                     break
-                frontier = self._pick_frontier()
-                if frontier is None:
+                selection = self._pick_frontier()
+                if selection.frontier is None:
+                    stop_reason = selection.reason
+                    if selection.reason == "frontier_waiting" and selection.wait_until is not None:
+                        wait_seconds = max(0.0, (selection.wait_until - _now()).total_seconds())
+                        remaining_seconds = max(0.0, self._run_duration_limit() - elapsed_seconds)
+                        if wait_seconds > 0 and wait_seconds <= remaining_seconds:
+                            _sleep(wait_seconds)
+                            continue
+                        stop_reason = "frontier_waiting"
                     break
+                frontier = selection.frontier
                 seed = self.seed_by_id.get(frontier.seed_id) if frontier.seed_id else None
-                domain_row, robots = _robots_policy_for_frontier(
-                    self.db,
-                    tenant_id=self.connector.tenant_id,
-                    connector_id=self.connector.id,
-                    seed=seed,
-                    domain=frontier.domain,
-                    found_from_url=frontier.parent_url,
-                    found_context=frontier.anchor_text,
-                    policy=self.policy,
-                )
+                domain_row, robots = self._robots_policy_for_frontier(frontier=frontier, seed=seed)
                 if robots.parser and not robots.parser.can_fetch(settings.AUGMIS_WEB_DISCOVERY_USER_AGENT, frontier.canonical_url):
                     frontier.status = "robots_denied"
                     frontier.error_code = "ROBOTS_DENIED"
@@ -2048,39 +2190,11 @@ class IndependentWebDiscoveryEngine:
                 frontier.status = "fetching"
                 frontier.last_attempted_at = _now()
                 self.metrics["pages_attempted"] += 1
+                self.run_domains.add(frontier.domain)
+                self.pages_attempted_by_domain[frontier.domain] = int(self.pages_attempted_by_domain.get(frontier.domain, 0)) + 1
                 detail_link_queued = frontier.canonical_url in self.listing_detail_links_queued
-                session_bound_reasons = _session_bound_url_reasons(frontier.canonical_url)
-                if session_bound_reasons:
-                    _apply_frontier_failure(
-                        frontier,
-                        diagnostic={
-                            "error_code": "SESSION_BOUND_URL",
-                            "error_message": "URL appears bound to a transient public session and will not be retried as a durable link.",
-                            "http_status": None,
-                            "final_url": frontier.canonical_url,
-                            "redirect_count": 0,
-                            "content_type": None,
-                            "response_bytes": None,
-                            "exception_class": None,
-                            "attempted_at": _now().isoformat(),
-                            "retryable": False,
-                            "server": None,
-                            "retry_after": None,
-                            "session_bound_reasons": session_bound_reasons,
-                        },
-                        domain_row=domain_row,
-                        metrics=self.metrics,
-                        detail_link_queued=detail_link_queued,
-                    )
-                    self.db.flush()
-                    continue
                 try:
-                    result = fetch_public_webpage(
-                        frontier.canonical_url,
-                        policy=self.policy,
-                        session=self._session_for_domain(frontier.domain),
-                        referer=_same_origin_referer(frontier.parent_url, frontier.canonical_url),
-                    )
+                    result = self._fetch_frontier_with_session(frontier=frontier)
                     html = str(result.get("body") or "")
                     frontier.http_status = int(result.get("status_code") or 200)
                     frontier.last_fetched_at = _now()
@@ -2107,6 +2221,7 @@ class IndependentWebDiscoveryEngine:
                     domain_row.last_crawl_at = frontier.last_fetched_at
                     domain_row.status = "ready"
                     self.visited_domains.add(frontier.domain)
+                    self.pages_fetched_by_domain[frontier.domain] = int(self.pages_fetched_by_domain.get(frontier.domain, 0)) + 1
                     self.metrics["pages_fetched"] += 1
                     parsed = _extract_parsed_page(str(result.get("url") or frontier.canonical_url), html, self.policy)
                     if parsed.page_type in {"procurement_list"}:
@@ -2154,6 +2269,8 @@ class IndependentWebDiscoveryEngine:
                     domain_row.next_crawl_at = _now() + timedelta(hours=_page_recheck_interval_hours(parsed.page_type))
                 except SafeWebFetchError as exc:
                     diagnostic = exc.to_diagnostic()
+                    if diagnostic.get("error_code") == "SESSION_BOUND_URL":
+                        diagnostic["session_bound_reasons"] = _session_bound_url_reasons(frontier.canonical_url)
                     _apply_frontier_failure(
                         frontier,
                         diagnostic=diagnostic,
@@ -2185,13 +2302,11 @@ class IndependentWebDiscoveryEngine:
                         detail_link_queued=detail_link_queued,
                     )
                 self.db.flush()
-                if len(self.visited_domains) >= self._max_domains_per_run():
-                    break
             metrics = {
                 **self.metrics,
                 "domains_visited": len(self.visited_domains),
                 "duration_seconds": int((_now() - self.started_at).total_seconds()),
-                "status": "completed",
+                "status": self._resolve_run_status(stop_reason=stop_reason, seeded_due_work=seeded_due_work),
             }
             return discoveries, metrics
         finally:

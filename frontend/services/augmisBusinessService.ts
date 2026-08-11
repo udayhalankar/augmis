@@ -758,6 +758,14 @@ export type AugmisBusinessDiscovery = {
   possible_duplicate_of_discovery_id: string | null;
   imported_opportunity_id: string | null;
   preliminary_relevance_score: number | null;
+  validity_score?: number | null;
+  validity_band?: string | null;
+  validity_class?: string | null;
+  actionability?: string | null;
+  validity_positive_evidence?: string[];
+  validity_negative_evidence?: string[];
+  validity_reason_codes?: string[];
+  validity_eligible_for_inbox?: boolean;
   commercial_priority_score?: number | null;
   commercial_priority_band?: string | null;
   commercial_recommendation?: string | null;
@@ -2066,6 +2074,30 @@ export async function reprocessAugmisBusinessDiscoveryContent(limit = 100) {
         id: string;
         title: string;
         detected_format: string;
+      }>;
+    };
+  };
+}
+
+export async function recalculateAugmisBusinessDiscoveryValidity(limit = 100) {
+  const response = await apiClient.post("/api/augmis-business/discoveries/recalculate-validity", null, {
+    params: { limit },
+  });
+  return response.data as {
+    success: boolean;
+    data: {
+      count: number;
+      limit: number;
+      items: Array<{
+        id: string;
+        title: string;
+        old_status: string;
+        new_status: string;
+        validity_score: number | null;
+        validity_band: string | null;
+        validity_class: string | null;
+        actionability: string | null;
+        eligible_for_inbox: boolean;
       }>;
     };
   };

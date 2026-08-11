@@ -158,6 +158,108 @@ TED_CLOSING_SOON_DAYS = 14
 TED_IRRELEVANT_THRESHOLD = 35.0
 FREELANCER_IRRELEVANT_THRESHOLD = 35.0
 EXTERNAL_WORK_IRRELEVANT_THRESHOLD = 35.0
+VALIDITY_CONFIRMED_THRESHOLD = 85
+VALIDITY_LIKELY_THRESHOLD = 70
+VALIDITY_REVIEW_THRESHOLD = 50
+VALIDITY_CLASS_CONFIRMED = "CONFIRMED_OPPORTUNITY"
+VALIDITY_CLASS_LIKELY = "LIKELY_OPPORTUNITY"
+VALIDITY_CLASS_LISTING = "OPPORTUNITY_LISTING"
+VALIDITY_CLASS_INFORMATIONAL = "INFORMATIONAL_CONTENT"
+VALIDITY_CLASS_MARKETING = "PRODUCT_MARKETING"
+VALIDITY_CLASS_NEWS = "NEWS_CONTENT"
+VALIDITY_CLASS_EXPIRED = "EXPIRED_CLOSED"
+VALIDITY_CLASS_INSUFFICIENT = "INSUFFICIENT_EVIDENCE"
+VALIDITY_CLASS_UNKNOWN = "UNKNOWN"
+ACTIONABILITY_ACTIONABLE = "ACTIONABLE"
+ACTIONABILITY_PARTIAL = "PARTIALLY_ACTIONABLE"
+ACTIONABILITY_RESEARCH = "RESEARCH_REQUIRED"
+ACTIONABILITY_PLATFORM_ONLY = "PLATFORM_ONLY"
+ACTIONABILITY_NOT = "NOT_ACTIONABLE"
+INFORMATIONAL_CONTENT_TERMS = (
+    "how to",
+    "guide",
+    "use case",
+    "use cases",
+    "best practice",
+    "best practices",
+    "everything you need to know",
+    "examples",
+    "strategies",
+    "blog",
+    "article",
+    "whitepaper",
+    "tutorial",
+)
+PRODUCT_MARKETING_TERMS = (
+    "pricing",
+    "book a demo",
+    "request a demo",
+    "schedule a demo",
+    "product features",
+    "feature overview",
+    "solution overview",
+    "platform overview",
+    "why choose",
+    "software",
+    "tracker",
+    "automation strategies",
+)
+PROCUREMENT_NOTICE_TERMS = (
+    "request for proposal",
+    "rfp",
+    "request for quotation",
+    "rfq",
+    "expression of interest",
+    "eoi",
+    "invitation to tender",
+    "request for bid",
+    "tender notice",
+    "notice inviting tender",
+)
+PROCUREMENT_SCOPE_TERMS = (
+    "implementation",
+    "workflow",
+    "records management",
+    "document management",
+    "integration",
+    "training",
+    "deliverable",
+    "scope of work",
+    "services",
+    "system",
+    "platform",
+)
+SUBMISSION_ROUTE_TERMS = (
+    "submit proposal",
+    "submit bid",
+    "apply now",
+    "tender portal",
+    "procurement portal",
+    "bid submission",
+    "application form",
+)
+LISTING_TERMS = (
+    "tenders by organisation",
+    "tenders by organization",
+    "active tenders",
+    "browse tenders",
+    "latest tenders",
+    "open opportunities",
+    "current vacancies",
+    "open roles",
+    "all jobs",
+)
+EXPIRY_TERMS = (
+    "closed",
+    "deadline passed",
+    "expired",
+    "award notice",
+    "contract awarded",
+)
+REFERENCE_PATTERNS = (
+    re.compile(r"\b(?:reference|ref|notice|tender|rfp|rfq|eoi|bid)\s*(?:number|no\.?|id)?\s*[:#-]?\s*([A-Z0-9][A-Z0-9/_-]{2,})", re.IGNORECASE),
+    re.compile(r"\b(?:tender|rfp|rfq|eoi|bid)-\d{2,}(?:[-/][A-Z0-9]+)*\b", re.IGNORECASE),
+)
 TED_HIGH_RELEVANCE_CPV: dict[str, str] = {
     "48170000": "Compliance software package",
     "48211000": "Platform interconnectivity software package",
@@ -321,6 +423,259 @@ def _clean_text(value: str | None) -> str | None:
         return None
     cleaned = WHITESPACE_PATTERN.sub(" ", value).strip()
     return cleaned or None
+
+
+def _limited_unique_strings(values: list[str], *, limit: int = 8) -> list[str]:
+    items: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        cleaned = _clean_text(value)
+        if not cleaned:
+            continue
+        normalized = cleaned.lower()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        items.append(cleaned)
+        if len(items) >= limit:
+            break
+    return items
+
+
+def _contains_any_term(value: str, terms: tuple[str, ...]) -> bool:
+    lowered = value.lower()
+    return any(term in lowered for term in terms)
+
+
+def _match_terms(value: str, terms: tuple[str, ...], *, limit: int = 6) -> list[str]:
+    lowered = value.lower()
+    matches = [term for term in terms if term in lowered]
+    return _limited_unique_strings(matches, limit=limit)
+
+
+def _extract_reference_hint(value: str) -> str | None:
+    for pattern in REFERENCE_PATTERNS:
+        match = pattern.search(value)
+        if match:
+            extracted = _clean_text(match.group(1) if match.lastindex else match.group(0))
+            if extracted and extracted.lower() not in {"number", "id", "no"}:
+                return extracted
+    return None
+
+
+def _extract_validity_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    validity = payload.get("opportunity_validity")
+    return dict(validity) if isinstance(validity, dict) else {}
+
+
+def _validity_band(score: int) -> str:
+    if score >= VALIDITY_CONFIRMED_THRESHOLD:
+        return "confirmed"
+    if score >= VALIDITY_LIKELY_THRESHOLD:
+        return "likely"
+    if score >= VALIDITY_REVIEW_THRESHOLD:
+        return "review"
+    return "not_opportunity"
+
+
+def _opportunity_validity_payload(
+    candidate: AugmisBusinessDiscoveredOpportunityCandidate,
+) -> dict[str, Any]:
+    source_metadata = dict(candidate.source_metadata or {})
+    raw_content = dict(candidate.raw_content_json or {})
+    page_type = str(raw_content.get("page_type") or source_metadata.get("opportunity_class") or "").strip().lower()
+    title = _clean_text(candidate.title) or ""
+    summary = _clean_text(candidate.requirement_summary or candidate.raw_summary or "") or ""
+    raw_text = _clean_text(candidate.raw_text or "") or ""
+    searchable = " ".join(part for part in [title, summary, raw_text[:6000]] if part).lower()
+    provider = str(raw_content.get("provider") or source_metadata.get("provider") or "").strip().lower()
+    organization_name = _clean_text(candidate.organization_name)
+    reference_number = _clean_text(
+        str(source_metadata.get("reference_number") or raw_content.get("reference_number") or _extract_reference_hint(searchable) or "")
+    )
+    application_url = _clean_text(
+        str(source_metadata.get("application_url") or raw_content.get("application_url") or "")
+    )
+    contact_routes = source_metadata.get("contact_routes") or raw_content.get("contact_routes") or []
+    evidence_entries = list(candidate.evidence or [])
+    procurement_doc_url = _clean_text(str(raw_content.get("document_url") or source_metadata.get("document_url") or ""))
+    procurement_intent_terms = _match_terms(searchable, PROCUREMENT_NOTICE_TERMS)
+    informational_terms = _match_terms(searchable, INFORMATIONAL_CONTENT_TERMS)
+    marketing_terms = _match_terms(searchable, PRODUCT_MARKETING_TERMS)
+    listing_terms = _match_terms(searchable, LISTING_TERMS)
+    news_terms = _match_terms(searchable, NEWS_TERMS)
+    expiry_terms = _match_terms(searchable, EXPIRY_TERMS)
+    scope_terms = _match_terms(searchable, PROCUREMENT_SCOPE_TERMS)
+    submission_terms = _match_terms(searchable, SUBMISSION_ROUTE_TERMS)
+    has_detail_page = page_type in {"procurement_detail", "rfp", "rfq", "eoi", "tender", "job_detail"}
+    is_listing_page = page_type in {"procurement_list", "career_list"} or bool(listing_terms)
+    has_contact = any(isinstance(item, dict) and _clean_text(str(item.get("value") or "")) for item in contact_routes) or any(
+        isinstance(item, dict) and str(item.get("type") or "").lower() == "contact_evidence"
+        for item in evidence_entries
+    )
+    has_submission_route = bool(application_url) and (
+        _contains_any_term(application_url, ("apply", "submit", "tender", "bid", "procurement", "jobs", "career", "project"))
+        or bool(submission_terms)
+    )
+    if not has_submission_route and candidate.source_type in {"employment_contract", "marketplace_project"}:
+        has_submission_route = bool(_clean_text(candidate.source_url))
+    has_reference = bool(reference_number)
+    has_buyer = bool(organization_name)
+    closing_at = _as_utc(candidate.closing_date)
+    is_expired = False
+    if closing_at is not None and closing_at < _now():
+        is_expired = True
+    elif expiry_terms:
+        is_expired = True
+
+    score = 0
+    positive_evidence: list[str] = []
+    negative_evidence: list[str] = []
+    reason_codes: list[str] = []
+
+    if candidate.source_type == "public_procurement" or procurement_intent_terms:
+        score += 25
+        positive_evidence.append("Explicit procurement notice wording detected.")
+        reason_codes.append("procurement_intent")
+    elif candidate.source_type == "employment_contract":
+        score += 18
+        positive_evidence.append("Specific employment or contract opportunity context detected.")
+        reason_codes.append("employment_intent")
+    elif candidate.source_type == "marketplace_project":
+        score += 18
+        positive_evidence.append("Marketplace project context detected.")
+        reason_codes.append("marketplace_intent")
+
+    if has_buyer:
+        score += 15
+        positive_evidence.append(f"Specific buyer or issuer identified: {organization_name}.")
+        reason_codes.append("buyer_identified")
+    if scope_terms or len(summary) >= 90:
+        score += 20
+        positive_evidence.append("Specific requirement or scope evidence detected.")
+        reason_codes.append("scope_detected")
+    if has_reference:
+        score += 10
+        positive_evidence.append(f"Reference or notice identifier detected: {reference_number}.")
+        reason_codes.append("reference_detected")
+    if closing_at is not None:
+        score += 8
+        positive_evidence.append(
+            f"Closing or expiry date detected: {closing_at.date().isoformat()}."
+        )
+        reason_codes.append("deadline_detected")
+    if has_submission_route:
+        score += 10
+        positive_evidence.append("Submission or application route is available.")
+        reason_codes.append("submission_route")
+    if has_detail_page:
+        score += 7
+        positive_evidence.append("Detail-page structure detected.")
+        reason_codes.append("detail_page")
+    if has_contact or procurement_doc_url:
+        score += 5
+        positive_evidence.append("Supporting contact or document evidence is available.")
+        reason_codes.append("supporting_contact_or_document")
+
+    if informational_terms:
+        score -= min(30, 8 * len(informational_terms))
+        negative_evidence.append(f"Informational content signals detected: {', '.join(informational_terms)}.")
+        reason_codes.append("informational_content")
+    if marketing_terms:
+        score -= min(28, 9 * len(marketing_terms))
+        negative_evidence.append(f"Product-marketing signals detected: {', '.join(marketing_terms)}.")
+        reason_codes.append("product_marketing")
+    if news_terms and candidate.source_type == "web_discovery":
+        score -= 18
+        negative_evidence.append(f"News or article signals detected: {', '.join(news_terms)}.")
+        reason_codes.append("news_content")
+    if is_listing_page:
+        score -= 22
+        negative_evidence.append("Listing page detected; this is not one actionable opportunity.")
+        reason_codes.append("listing_page")
+    if is_expired:
+        score -= 45
+        negative_evidence.append("Opportunity appears expired or already closed.")
+        reason_codes.append("expired_or_closed")
+    if not has_buyer:
+        score -= 12
+        negative_evidence.append("No specific buyer, issuer, employer, or client was identified.")
+        reason_codes.append("missing_buyer")
+    if not has_submission_route and candidate.source_type != "marketplace_project":
+        score -= 10
+        negative_evidence.append("No submission or application route was identified.")
+        reason_codes.append("missing_submission_route")
+
+    score = max(0, min(100, score))
+    band = _validity_band(score)
+
+    validity_class = VALIDITY_CLASS_UNKNOWN
+    if is_expired:
+        validity_class = VALIDITY_CLASS_EXPIRED
+    elif is_listing_page:
+        validity_class = VALIDITY_CLASS_LISTING
+    elif marketing_terms and score < VALIDITY_REVIEW_THRESHOLD:
+        validity_class = VALIDITY_CLASS_MARKETING
+    elif (informational_terms or news_terms) and score < VALIDITY_REVIEW_THRESHOLD:
+        validity_class = VALIDITY_CLASS_INFORMATIONAL if informational_terms else VALIDITY_CLASS_NEWS
+    elif score >= VALIDITY_CONFIRMED_THRESHOLD:
+        validity_class = VALIDITY_CLASS_CONFIRMED
+    elif score >= VALIDITY_LIKELY_THRESHOLD:
+        validity_class = VALIDITY_CLASS_LIKELY
+    elif score >= VALIDITY_REVIEW_THRESHOLD:
+        validity_class = VALIDITY_CLASS_INSUFFICIENT
+    elif candidate.source_type == "public_procurement" and (has_reference or closing_at or has_submission_route):
+        validity_class = VALIDITY_CLASS_INSUFFICIENT
+    elif candidate.source_type == "web_discovery":
+        validity_class = VALIDITY_CLASS_INFORMATIONAL if informational_terms else VALIDITY_CLASS_MARKETING if marketing_terms else VALIDITY_CLASS_UNKNOWN
+    else:
+        validity_class = VALIDITY_CLASS_INSUFFICIENT
+
+    actionability = ACTIONABILITY_NOT
+    if validity_class == VALIDITY_CLASS_EXPIRED:
+        actionability = ACTIONABILITY_NOT
+    elif validity_class in {VALIDITY_CLASS_INFORMATIONAL, VALIDITY_CLASS_MARKETING, VALIDITY_CLASS_NEWS, VALIDITY_CLASS_LISTING, VALIDITY_CLASS_UNKNOWN}:
+        actionability = ACTIONABILITY_NOT
+    elif candidate.source_type == "marketplace_project":
+        actionability = ACTIONABILITY_PLATFORM_ONLY
+    elif has_submission_route and not is_expired:
+        actionability = ACTIONABILITY_ACTIONABLE
+    elif has_buyer and (has_reference or scope_terms or has_detail_page):
+        actionability = ACTIONABILITY_RESEARCH
+    else:
+        actionability = ACTIONABILITY_PARTIAL
+
+    eligible_for_inbox = validity_class in {VALIDITY_CLASS_CONFIRMED, VALIDITY_CLASS_LIKELY} and not is_expired
+    review_candidate = band == "review" and validity_class == VALIDITY_CLASS_INSUFFICIENT
+    if validity_class in {VALIDITY_CLASS_INFORMATIONAL, VALIDITY_CLASS_MARKETING, VALIDITY_CLASS_NEWS, VALIDITY_CLASS_LISTING, VALIDITY_CLASS_EXPIRED, VALIDITY_CLASS_UNKNOWN}:
+        eligible_for_inbox = False
+
+    return {
+        "validity_score": score,
+        "validity_band": band,
+        "validity_class": validity_class,
+        "actionability": actionability,
+        "eligible_for_inbox": eligible_for_inbox,
+        "review_candidate": review_candidate,
+        "positive_evidence": _limited_unique_strings(positive_evidence, limit=5),
+        "negative_evidence": _limited_unique_strings(negative_evidence, limit=5),
+        "reason_codes": _limited_unique_strings(reason_codes, limit=10),
+        "source_url": candidate.source_url,
+        "page_type": page_type or None,
+        "provider": provider or None,
+        "reference_number": reference_number,
+        "application_url": application_url,
+        "has_submission_route": has_submission_route,
+        "has_buyer": has_buyer,
+        "is_expired": is_expired,
+    }
+
+
+def _validity_filter_reason(validity: dict[str, Any]) -> str:
+    validity_class = str(validity.get("validity_class") or VALIDITY_CLASS_UNKNOWN)
+    return f"validity:{validity_class.lower()}"
 
 
 def _normalized_content_payload(
@@ -833,7 +1188,7 @@ def _connector_metadata_for_type(connector_type: str) -> AugmisBusinessConnector
 
 @dataclass
 class IngestionOutcome:
-    row: BusinessDevelopmentDiscoveredOpportunity
+    row: BusinessDevelopmentDiscoveredOpportunity | None
     outcome: str
     duplicate_of_id: str | None = None
 
@@ -2326,6 +2681,7 @@ def _serialize_discovery(row: BusinessDevelopmentDiscoveredOpportunity) -> dict[
         else None
     )
     source_identity = _discovery_source_identity(row)
+    validity = _extract_validity_payload(row.raw_content_json or {})
     return {
         "id": row.id,
         "tenant_id": row.tenant_id,
@@ -2363,6 +2719,14 @@ def _serialize_discovery(row: BusinessDevelopmentDiscoveredOpportunity) -> dict[
         "possible_duplicate_of_discovery_id": row.possible_duplicate_of_discovery_id,
         "imported_opportunity_id": row.imported_opportunity_id,
         "preliminary_relevance_score": row.preliminary_relevance_score,
+        "validity_score": validity.get("validity_score"),
+        "validity_band": validity.get("validity_band"),
+        "validity_class": validity.get("validity_class"),
+        "actionability": validity.get("actionability"),
+        "validity_positive_evidence": validity.get("positive_evidence") or [],
+        "validity_negative_evidence": validity.get("negative_evidence") or [],
+        "validity_reason_codes": validity.get("reason_codes") or [],
+        "validity_eligible_for_inbox": bool(validity.get("eligible_for_inbox")),
         **serialize_discovery_commercial_intelligence(row),
         "source_language_code": source_language_code,
         "source_language_label": language_label(source_language_code),
@@ -2576,6 +2940,83 @@ def _claim_connector_run(
         return False
     db.flush()
     return True
+
+
+def _candidate_from_discovery_row(
+    row: BusinessDevelopmentDiscoveredOpportunity,
+) -> AugmisBusinessDiscoveredOpportunityCandidate:
+    raw_content = dict(row.raw_content_json or {})
+    source_metadata = dict(raw_content.get("source_metadata") or {})
+    if not source_metadata:
+        source_metadata = {
+            key: raw_content.get(key)
+            for key in (
+                "provider",
+                "opportunity_class",
+                "contact_routes",
+                "application_url",
+                "reference_number",
+                "crawl_source",
+                "seed_name",
+            )
+            if raw_content.get(key) is not None
+        }
+    if raw_content.get("crawler_diagnostics") is not None:
+        source_metadata["crawler_diagnostics"] = raw_content.get("crawler_diagnostics")
+    return AugmisBusinessDiscoveredOpportunityCandidate(
+        external_id=row.external_id,
+        source_type=row.source_type,
+        source_name=row.source_name,
+        source_url=row.source_url,
+        source_country=row.source_country,
+        title=row.title,
+        organization_name=row.organization_name,
+        published_date=row.published_date,
+        closing_date=row.closing_date,
+        country=row.country,
+        region=row.region,
+        industry=row.industry,
+        requirement_summary=row.requirement_summary,
+        raw_summary=row.raw_summary,
+        raw_text=row.raw_text,
+        budget_min=row.budget_min,
+        budget_max=row.budget_max,
+        currency=row.currency,
+        evidence=list(row.evidence_json or []),
+        source_metadata=source_metadata,
+        raw_content_json=raw_content,
+        retrieval_timestamp=row.retrieval_timestamp,
+    )
+
+
+def _apply_validity_to_discovery_row(
+    db: Session,
+    row: BusinessDevelopmentDiscoveredOpportunity,
+) -> dict[str, Any]:
+    row.published_date = _as_utc(row.published_date)
+    row.closing_date = _as_utc(row.closing_date)
+    row.retrieval_timestamp = _as_utc(row.retrieval_timestamp)
+    candidate = _candidate_from_discovery_row(row)
+    validity = _opportunity_validity_payload(candidate)
+    raw_content = dict(row.raw_content_json or {})
+    raw_content["opportunity_validity"] = validity
+    crawler = raw_content.get("crawler_diagnostics") if isinstance(raw_content.get("crawler_diagnostics"), dict) else {}
+    raw_content["crawler_diagnostics"] = {
+        **crawler,
+        "validity_score": validity.get("validity_score"),
+        "validity_class": validity.get("validity_class"),
+    }
+    row.raw_content_json = raw_content
+    row.updated_at = _now()
+    refresh_discovery_commercial_intelligence(db, row)
+    if row.discovery_status not in {"imported", "shortlisted", "rejected"}:
+        if not validity.get("eligible_for_inbox"):
+            row.discovery_status = "irrelevant"
+        elif (row.preliminary_relevance_score or 0.0) < _preliminary_irrelevant_threshold(row.source_type):
+            row.discovery_status = "irrelevant"
+        else:
+            row.discovery_status = "new"
+    return validity
 
 
 def _require_discovery(
@@ -3544,7 +3985,7 @@ def _calculate_preliminary_relevance(
     if candidate.source_type == "public_procurement":
         raw = candidate.raw_content_json or candidate.source_metadata or {}
         if candidate.source_name == INDEPENDENT_WEB_CONNECTOR_NAME or raw.get("provider") == "augmis_internal":
-            return _calculate_independent_procurement_preliminary_relevance(candidate)
+            return _calculate_independent_procurement_preliminary_relevance(candidate, profile)
         return _calculate_ted_preliminary_relevance(candidate)
     if candidate.source_type == "marketplace_project":
         return _calculate_freelancer_preliminary_relevance(candidate, profile)
@@ -3593,6 +4034,7 @@ def _calculate_preliminary_relevance(
 
 def _calculate_independent_procurement_preliminary_relevance(
     candidate: AugmisBusinessDiscoveredOpportunityCandidate,
+    profile: BusinessDevelopmentSearchProfile | None,
 ) -> tuple[float, list[str], list[str]]:
     score, reasons, matched = _calculate_ted_preliminary_relevance(candidate)
     raw = candidate.raw_content_json or candidate.source_metadata or {}
@@ -3600,6 +4042,7 @@ def _calculate_independent_procurement_preliminary_relevance(
     page_type = str(raw.get("page_type") or candidate.source_metadata.get("opportunity_class") or "").lower()
     detail_signal_count = int(crawler.get("detail_signal_count", 0) or 0)
     contact_routes = raw.get("contact_routes") if isinstance(raw.get("contact_routes"), list) else []
+    searchable = _searchable_text(candidate)
     if page_type in {"procurement_detail", "rfp", "rfq", "eoi"}:
         score += 12.0 + min(8.0, detail_signal_count * 2.0)
         reasons.append("Matched signal: Independent crawl captured a procurement-detail page with explicit notice structure.")
@@ -3618,6 +4061,28 @@ def _calculate_independent_procurement_preliminary_relevance(
     if contact_routes:
         score += min(3.0, float(len(contact_routes)))
         reasons.append("Matched signal: Official contact routes were extracted from the source page.")
+    if profile:
+        include_terms = sorted(
+            {
+                _normalize_text(item)
+                for item in [
+                    *(profile.include_keywords_json or []),
+                    *(profile.include_technologies_json or []),
+                    *(profile.include_capabilities_json or []),
+                ]
+                if _normalize_text(item)
+            }
+        )
+        exclude_terms = sorted({_normalize_text(item) for item in (profile.exclude_keywords_json or []) if _normalize_text(item)})
+        matched_terms = [term for term in include_terms if term in searchable]
+        excluded_hits = [term for term in exclude_terms if term in searchable]
+        if matched_terms:
+            score += min(18.0, float(len(matched_terms)) * 4.0)
+            reasons.append("Matched signal: tenant profile capability terms were found in the independent procurement notice.")
+            matched.extend(matched_terms[:5])
+        if excluded_hits:
+            score -= min(45.0, float(len(excluded_hits)) * 15.0)
+            reasons.append("Negative signal: tenant profile excluded terms were found in the independent procurement notice.")
     return round(max(0.0, min(100.0, score)), 1), reasons, list(dict.fromkeys(matched))
 
 
@@ -3853,15 +4318,16 @@ def _refresh_existing_discovery_from_candidate(
         candidate.closing_date.date().isoformat() if candidate.closing_date else None,
         source_domain,
     )
-    refresh_discovery_commercial_intelligence(object_session(row), row)  # type: ignore[arg-type]
-    row.updated_at = _now()
-    if row.discovery_status in {"imported", "shortlisted", "rejected"}:
-        return
-    row.discovery_status = (
-        "irrelevant"
-        if relevance_score < _preliminary_irrelevant_threshold(row.source_type)
-        else "new"
-    )
+    row.raw_content_json = {
+        **(candidate.raw_content_json or candidate.source_metadata or {}),
+        "source_metadata": dict(candidate.source_metadata or {}),
+        "opportunity_validity": _opportunity_validity_payload(candidate),
+    }
+    session = object_session(row)
+    if session is not None:
+        _apply_validity_to_discovery_row(session, row)
+    else:
+        row.updated_at = _now()
 
 
 def _update_independent_page_candidate_decision(
@@ -3873,6 +4339,7 @@ def _update_independent_page_candidate_decision(
     page_type: str | None,
     decision: str,
     reason_codes: list[str],
+    validity: dict[str, Any] | None = None,
 ) -> None:
     if not canonical_url:
         return
@@ -3892,6 +4359,7 @@ def _update_independent_page_candidate_decision(
         "decision": decision,
         "page_type": page_type,
         "reason_codes": list(dict.fromkeys(reason_codes))[:8],
+        "opportunity_validity": dict(validity or {}),
     }
     page.source_metadata_json = source_metadata
     candidate_payload = dict(page.opportunity_candidate_json or {})
@@ -3922,6 +4390,8 @@ def ingest_discovered_opportunity(
     canonical_url, source_domain = _normalize_url(candidate.source_url)
     normalized_title = _normalize_title(candidate.title)
     normalized_organization_name = _normalize_text(candidate.organization_name)
+    validity = _opportunity_validity_payload(candidate)
+    validity_reason_codes = [str(code) for code in validity.get("reason_codes") or [] if _clean_text(str(code))]
     duplicate_of, duplicate_reason = _find_duplicate(
         db,
         tenant_id,
@@ -3936,9 +4406,55 @@ def ingest_discovered_opportunity(
     )
     candidate_raw_content = dict(candidate.raw_content_json or candidate.source_metadata or {})
     candidate_diagnostics = candidate_raw_content.get("crawler_diagnostics") if isinstance(candidate_raw_content.get("crawler_diagnostics"), dict) else {}
+    candidate_raw_content["source_metadata"] = dict(candidate.source_metadata or {})
+    candidate_raw_content["opportunity_validity"] = validity
     discovery_status = "new"
     duplicate_of_id = None
     outcome_reason_codes: list[str] = []
+    if connector.connector_type == INDEPENDENT_WEB_CONNECTOR_TYPE and not validity.get("eligible_for_inbox"):
+        outcome_reason_codes.append(_validity_filter_reason(validity))
+        outcome_reason_codes.extend(validity_reason_codes)
+        candidate_raw_content["crawler_diagnostics"] = {
+            **candidate_diagnostics,
+            "discovery_status": "irrelevant",
+            "reason_codes": list(dict.fromkeys(outcome_reason_codes))[:8],
+            "relevance_score": relevance_score,
+            "validity_score": validity.get("validity_score"),
+            "validity_class": validity.get("validity_class"),
+        }
+        connector_run.items_filtered += 1
+        connector_run.items_found += 1
+        _update_independent_page_candidate_decision(
+            db,
+            tenant_id=tenant_id,
+            connector_id=connector.id,
+            canonical_url=canonical_url,
+            page_type=str(candidate_raw_content.get("page_type") or ""),
+            decision="validity_rejected",
+            reason_codes=outcome_reason_codes,
+            validity=validity,
+        )
+        run_metadata = dict(connector_run.run_metadata_json or {})
+        filter_reason_counts = dict(run_metadata.get("filter_reason_counts") or {})
+        for code in list(dict.fromkeys(outcome_reason_codes))[:8]:
+            filter_reason_counts[code] = int(filter_reason_counts.get(code, 0) or 0) + 1
+        candidate_outcomes = list(run_metadata.get("candidate_outcomes") or [])
+        candidate_outcomes.append(
+            {
+                "title": candidate.title,
+                "source_url": candidate.source_url,
+                "page_type": str(candidate_raw_content.get("page_type") or ""),
+                "discovery_status": "irrelevant",
+                "relevance_score": relevance_score,
+                "reason_codes": list(dict.fromkeys(outcome_reason_codes))[:8],
+                "validity_score": validity.get("validity_score"),
+                "validity_class": validity.get("validity_class"),
+            }
+        )
+        run_metadata["filter_reason_counts"] = filter_reason_counts
+        run_metadata["candidate_outcomes"] = candidate_outcomes[-20:]
+        connector_run.run_metadata_json = run_metadata
+        return IngestionOutcome(row=None, outcome="filtered", duplicate_of_id=None)
     if duplicate_of:
         discovery_status = "duplicate"
         duplicate_of_id = duplicate_of.id
@@ -3978,6 +4494,7 @@ def ingest_discovered_opportunity(
                     page_type=str(candidate_raw_content.get("page_type") or ""),
                     decision="duplicate",
                     reason_codes=["duplicate:external_id", *(candidate_diagnostics.get("reason_codes") or [])],
+                    validity=validity,
                 )
             return IngestionOutcome(
                 row=duplicate_of,
@@ -3991,6 +4508,7 @@ def ingest_discovered_opportunity(
         relevance_reasons = ["Low preliminary match based on deterministic filtering.", *relevance_reasons]
     else:
         outcome_reason_codes.append("accepted_preliminary_relevance")
+    outcome_reason_codes.extend(validity_reason_codes)
     if candidate_diagnostics.get("reason_codes"):
         outcome_reason_codes.extend(
             str(code) for code in candidate_diagnostics.get("reason_codes") if _clean_text(str(code))
@@ -4000,6 +4518,8 @@ def ingest_discovered_opportunity(
         "discovery_status": discovery_status,
         "reason_codes": list(dict.fromkeys(outcome_reason_codes))[:8],
         "relevance_score": relevance_score,
+        "validity_score": validity.get("validity_score"),
+        "validity_class": validity.get("validity_class"),
     }
     row = BusinessDevelopmentDiscoveredOpportunity(
         id=f"BD-DSC-{str(uuid4())[:12].upper()}",
@@ -4070,6 +4590,7 @@ def ingest_discovered_opportunity(
             page_type=str(candidate_raw_content.get("page_type") or ""),
             decision=discovery_status,
             reason_codes=outcome_reason_codes,
+            validity=validity,
         )
         run_metadata = dict(connector_run.run_metadata_json or {})
         filter_reason_counts = dict(run_metadata.get("filter_reason_counts") or {})
@@ -4085,6 +4606,8 @@ def ingest_discovered_opportunity(
                 "discovery_status": discovery_status,
                 "relevance_score": relevance_score,
                 "reason_codes": list(dict.fromkeys(outcome_reason_codes))[:8],
+                "validity_score": validity.get("validity_score"),
+                "validity_class": validity.get("validity_class"),
             }
         )
         run_metadata["filter_reason_counts"] = filter_reason_counts
@@ -4198,7 +4721,8 @@ def run_connector_scan(
                         AugmisBusinessDiscoveredOpportunityCandidate.model_validate(candidate),
                         search_profile,
                     )
-                ingested_rows.append(_serialize_discovery(outcome.row))
+                if outcome.row is not None:
+                    ingested_rows.append(_serialize_discovery(outcome.row))
             except Exception as exc:
                 run.items_failed += 1
                 messages = list((run.run_metadata_json or {}).get("item_errors", []))
@@ -4561,6 +5085,60 @@ def reprocess_discovery_content(
         resource_type="bd_discovery",
         resource_id=None,
         metadata={"count": len(processed), "limit": bounded_limit},
+    )
+    return {"success": True, "data": {"count": len(processed), "limit": bounded_limit, "items": processed}}
+
+
+def recalculate_independent_discovery_validity(
+    db: Session,
+    tenant_id: str,
+    current_user: dict,
+    *,
+    limit: int = 100,
+) -> dict[str, Any]:
+    bounded_limit = max(1, min(int(limit or 100), 250))
+    rows = (
+        db.query(BusinessDevelopmentDiscoveredOpportunity)
+        .join(
+            BusinessDevelopmentConnector,
+            BusinessDevelopmentConnector.id == BusinessDevelopmentDiscoveredOpportunity.connector_id,
+        )
+        .filter(
+            BusinessDevelopmentDiscoveredOpportunity.tenant_id == tenant_id,
+            BusinessDevelopmentConnector.connector_type == INDEPENDENT_WEB_CONNECTOR_TYPE,
+        )
+        .order_by(BusinessDevelopmentDiscoveredOpportunity.discovered_at.desc())
+        .limit(bounded_limit)
+        .all()
+    )
+    processed: list[dict[str, Any]] = []
+    for row in rows:
+        old_status = row.discovery_status
+        validity = _apply_validity_to_discovery_row(db, row)
+        processed.append(
+            {
+                "id": row.id,
+                "title": row.title,
+                "old_status": old_status,
+                "new_status": row.discovery_status,
+                "validity_score": validity.get("validity_score"),
+                "validity_band": validity.get("validity_band"),
+                "validity_class": validity.get("validity_class"),
+                "actionability": validity.get("actionability"),
+                "eligible_for_inbox": bool(validity.get("eligible_for_inbox")),
+            }
+        )
+    db.commit()
+    create_audit_log(
+        db=db,
+        tenant_id=tenant_id,
+        user_id=current_user["user_id"],
+        event_type="UPDATE",
+        event_category="AUGMIS_BUSINESS",
+        description="Recalculated independent discovery validity and actionability",
+        resource_type="bd_discovery",
+        resource_id=None,
+        metadata={"count": len(processed), "limit": bounded_limit, "connector_type": INDEPENDENT_WEB_CONNECTOR_TYPE},
     )
     return {"success": True, "data": {"count": len(processed), "limit": bounded_limit, "items": processed}}
 

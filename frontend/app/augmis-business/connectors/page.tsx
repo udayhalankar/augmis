@@ -90,6 +90,7 @@ import {
   listAugmisBusinessSearchProfiles,
   listAugmisBusinessSearchProviders,
   recalculateAugmisBusinessDiscoveryPriorities,
+  recalculateAugmisBusinessDiscoveryValidity,
   reprocessAugmisBusinessDiscoveryContent,
   rejectAugmisBusinessDiscovery,
   scanAugmisBusinessConnector,
@@ -551,6 +552,57 @@ function discoveryRecommendationChip(recommendation: string | null | undefined) 
     default:
       return { bgcolor: "#FFFBEB", color: "#B45309", borderColor: "#FDE68A" };
   }
+}
+
+function discoveryValidityBandChip(band: string | null | undefined) {
+  switch ((band || "").toLowerCase()) {
+    case "confirmed":
+      return { bgcolor: "#DCFCE7", color: "#166534", borderColor: "#86EFAC" };
+    case "likely":
+      return { bgcolor: "#ECFDF3", color: "#067647", borderColor: "#ABEFC6" };
+    case "review":
+      return { bgcolor: "#FFFBEB", color: "#B45309", borderColor: "#FDE68A" };
+    default:
+      return { bgcolor: "#F2F4F7", color: "#344054", borderColor: "#D0D5DD" };
+  }
+}
+
+function actionabilityChip(actionability: string | null | undefined) {
+  switch ((actionability || "").toUpperCase()) {
+    case "ACTIONABLE":
+      return { bgcolor: "#DCFCE7", color: "#166534", borderColor: "#86EFAC" };
+    case "PLATFORM_ONLY":
+      return { bgcolor: "#EEF2FF", color: "#4338CA", borderColor: "#C7D2FE" };
+    case "RESEARCH_REQUIRED":
+      return { bgcolor: "#FFF7ED", color: "#B45309", borderColor: "#FED7AA" };
+    case "PARTIALLY_ACTIONABLE":
+      return { bgcolor: "#EFF6FF", color: "#1D4ED8", borderColor: "#BFDBFE" };
+    default:
+      return { bgcolor: "#F2F4F7", color: "#344054", borderColor: "#D0D5DD" };
+  }
+}
+
+function formatDiscoveryValidityBand(band: string | null | undefined) {
+  switch ((band || "").toLowerCase()) {
+    case "confirmed":
+      return "Confirmed";
+    case "likely":
+      return "Likely";
+    case "review":
+      return "Review";
+    case "not_opportunity":
+      return "Not Opportunity";
+    default:
+      return "Unknown";
+  }
+}
+
+function formatDiscoveryValidityClass(value: string | null | undefined) {
+  return (value || "Unknown").replaceAll("_", " ");
+}
+
+function formatDiscoveryActionability(value: string | null | undefined) {
+  return (value || "Not available").replaceAll("_", " ");
 }
 
 function connectorCategoryLabel(connector: AugmisBusinessConnector) {
@@ -1505,6 +1557,27 @@ export default function AugmisBusinessConnectorsPage() {
       );
     } catch (error) {
       showToast(getBackendErrorMessage(error, "Unable to reprocess discovery content."), "error");
+    } finally {
+      setBusy(false);
+      setActiveActionLabel(null);
+    }
+  }
+
+  async function handleRecalculateDiscoveryValidity() {
+    setBusy(true);
+    setActiveActionLabel("Recalculating opportunity validity");
+    try {
+      const result = await recalculateAugmisBusinessDiscoveryValidity(100);
+      await loadDiscoveries();
+      if (selectedDiscovery) {
+        await openDiscoveryDrawer(selectedDiscovery);
+      }
+      showToast(
+        `Recalculated validity for ${result.data.count} AUGMIS Web discovery item${result.data.count === 1 ? "" : "s"}.`,
+        "success"
+      );
+    } catch (error) {
+      showToast(getBackendErrorMessage(error, "Unable to recalculate opportunity validity."), "error");
     } finally {
       setBusy(false);
       setActiveActionLabel(null);
@@ -2498,6 +2571,18 @@ export default function AugmisBusinessConnectorsPage() {
                             Reprocess Content
                           </Button>
                         ) : null}
+                        {canAdmin ? (
+                          <Button
+                            variant="outlined"
+                            size="small"
+                            startIcon={<RuleFolderOutlinedIcon />}
+                            disabled={busy}
+                            onClick={() => void handleRecalculateDiscoveryValidity()}
+                            sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700 }}
+                          >
+                            Recalculate Validity
+                          </Button>
+                        ) : null}
                         <TextField
                           size="small"
                           value={search}
@@ -2695,6 +2780,32 @@ export default function AugmisBusinessConnectorsPage() {
                               <Typography sx={{ fontSize: 12.5, color: "#0F172A", fontWeight: 600 }}>
                                 {discovery.organization_name || "Not available"}
                               </Typography>
+                              <Stack direction="row" spacing={0.5} sx={{ flexWrap: "wrap", rowGap: 0.5 }}>
+                                <Chip
+                                  size="small"
+                                  label={
+                                    discovery.validity_score == null
+                                      ? "Validity unknown"
+                                      : `${Math.round(discovery.validity_score)} · ${formatDiscoveryValidityBand(discovery.validity_band)}`
+                                  }
+                                  sx={{
+                                    maxWidth: "100%",
+                                    border: "1px solid",
+                                    ...discoveryValidityBandChip(discovery.validity_band),
+                                  }}
+                                />
+                                {discovery.actionability ? (
+                                  <Chip
+                                    size="small"
+                                    label={formatDiscoveryActionability(discovery.actionability)}
+                                    sx={{
+                                      maxWidth: "100%",
+                                      border: "1px solid",
+                                      ...actionabilityChip(discovery.actionability),
+                                    }}
+                                  />
+                                ) : null}
+                              </Stack>
                               <Typography sx={{ fontSize: 12, color: "#64748B" }}>
                                 {discovery.country || "Not available"}
                               </Typography>
@@ -5044,6 +5155,53 @@ export default function AugmisBusinessConnectorsPage() {
                       ))
                     ) : (
                       <Typography sx={{ color: "#475569", fontSize: 13 }}>No negative signals recorded.</Typography>
+                    )}
+                  </Stack>
+                </Box>
+              </Paper>
+
+              <Paper elevation={0} sx={{ p: 1.5, borderRadius: "8px", border: "1px solid #E2E8F0" }}>
+                <Typography sx={{ fontWeight: 700, color: "#0F172A" }}>Opportunity Validity</Typography>
+                <Typography sx={{ mt: 0.8, color: "#475569" }}>
+                  Validity: {selectedDiscovery.validity_score == null ? "Not scored" : `${selectedDiscovery.validity_score.toFixed(1)} · ${formatDiscoveryValidityBand(selectedDiscovery.validity_band)}`}
+                </Typography>
+                <Stack direction="row" spacing={0.75} sx={{ mt: 1, flexWrap: "wrap", rowGap: 0.75 }}>
+                  <Chip
+                    label={formatDiscoveryValidityClass(selectedDiscovery.validity_class)}
+                    size="small"
+                    sx={{ textTransform: "capitalize", border: "1px solid", ...discoveryValidityBandChip(selectedDiscovery.validity_band) }}
+                  />
+                  <Chip
+                    label={formatDiscoveryActionability(selectedDiscovery.actionability)}
+                    size="small"
+                    sx={{ textTransform: "capitalize", border: "1px solid", ...actionabilityChip(selectedDiscovery.actionability) }}
+                  />
+                </Stack>
+                <Box sx={{ mt: 1.25 }}>
+                  <Typography sx={{ fontWeight: 700, color: "#0F172A", fontSize: 13 }}>Why considered an opportunity</Typography>
+                  <Stack spacing={0.8} sx={{ mt: 0.8 }}>
+                    {(selectedDiscovery.validity_positive_evidence || []).length ? (
+                      selectedDiscovery.validity_positive_evidence?.map((reason) => (
+                        <Typography key={`validity-positive-${reason}`} sx={{ color: "#166534", fontSize: 13 }}>
+                          • {reason}
+                        </Typography>
+                      ))
+                    ) : (
+                      <Typography sx={{ color: "#475569", fontSize: 13 }}>No positive validity evidence recorded.</Typography>
+                    )}
+                  </Stack>
+                </Box>
+                <Box sx={{ mt: 1.25 }}>
+                  <Typography sx={{ fontWeight: 700, color: "#0F172A", fontSize: 13 }}>Risks</Typography>
+                  <Stack spacing={0.8} sx={{ mt: 0.8 }}>
+                    {(selectedDiscovery.validity_negative_evidence || []).length ? (
+                      selectedDiscovery.validity_negative_evidence?.map((reason) => (
+                        <Typography key={`validity-negative-${reason}`} sx={{ color: "#B45309", fontSize: 13 }}>
+                          • {reason}
+                        </Typography>
+                      ))
+                    ) : (
+                      <Typography sx={{ color: "#475569", fontSize: 13 }}>No validity risks recorded.</Typography>
                     )}
                   </Stack>
                 </Box>

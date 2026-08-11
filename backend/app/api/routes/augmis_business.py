@@ -62,6 +62,7 @@ from app.services.augmis_business_listener_service import (
     list_discoveries,
     list_discovery_duplicates,
     list_search_profiles,
+    recalculate_independent_discovery_validity,
     reject_discovery,
     reprocess_discovery_content,
     run_connector_scan,
@@ -664,6 +665,22 @@ def reprocess_augmis_business_discovery_content(
     db: Session = Depends(get_db),
 ):
     return reprocess_discovery_content(
+        db,
+        current_user["tenant_id"],
+        current_user,
+        limit=limit,
+    )
+
+
+@router.post("/discoveries/recalculate-validity")
+def recalculate_augmis_business_discovery_validity(
+    limit: int = Query(100, ge=1, le=250),
+    current_user: dict = Depends(
+        require_saas_access("augmis_business", "business_development:admin")
+    ),
+    db: Session = Depends(get_db),
+):
+    return recalculate_independent_discovery_validity(
         db,
         current_user["tenant_id"],
         current_user,

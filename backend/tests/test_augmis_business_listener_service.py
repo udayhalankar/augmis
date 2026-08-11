@@ -23,6 +23,7 @@ from app.db_models import (
     BusinessDevelopmentOpportunity,
     BusinessDevelopmentSearchProvider,
     BusinessDevelopmentSearchProfile,
+    BusinessDevelopmentWebPage,
     Tenant,
     User,
 )
@@ -55,6 +56,7 @@ class AugmisBusinessListenerServiceTest(unittest.TestCase):
                 BusinessDevelopmentConnectorRun.__table__,
                 BusinessDevelopmentDiscoveredOpportunity.__table__,
                 BusinessDevelopmentDiscoveryTranslation.__table__,
+                BusinessDevelopmentWebPage.__table__,
             ],
         )
         self.Session = sessionmaker(bind=self.engine)
@@ -154,6 +156,54 @@ class AugmisBusinessListenerServiceTest(unittest.TestCase):
                 "cpv_codes": cpv_codes,
                 "contract_nature": ["services"],
                 "notice_type": "cn-standard",
+            },
+            retrieval_timestamp=self.fixed_now,
+        )
+
+    def _make_independent_candidate(
+        self,
+        *,
+        title: str,
+        summary: str,
+        organization_name: str | None = None,
+        closing_date: datetime | None = None,
+        reference_number: str | None = None,
+        application_url: str | None = None,
+        page_type: str = "rfp",
+        source_url: str = "https://buyer.example/tenders/notice-1",
+    ):
+        return service.AugmisBusinessDiscoveredOpportunityCandidate(
+            external_id=f"AWD-{abs(hash((title, source_url)))}",
+            source_type="public_procurement" if page_type in {"procurement_detail", "rfp", "rfq", "eoi", "tender"} else "web_discovery",
+            source_name="AUGMIS Web",
+            source_url=source_url,
+            source_country="IND",
+            title=title,
+            organization_name=organization_name,
+            published_date=self.fixed_now,
+            closing_date=closing_date,
+            country="IND",
+            region=None,
+            industry="Public Procurement",
+            requirement_summary=summary,
+            raw_summary=summary,
+            raw_text=summary,
+            budget_min=None,
+            budget_max=None,
+            currency=None,
+            evidence=[],
+            source_metadata={
+                "provider": "augmis_internal",
+                "opportunity_class": page_type,
+                "application_url": application_url,
+                "reference_number": reference_number,
+            },
+            raw_content_json={
+                "provider": "augmis_internal",
+                "page_type": page_type,
+                "application_url": application_url,
+                "reference_number": reference_number,
+                "crawler_diagnostics": {"detail_signal_count": 3, "reason_codes": ["candidate_ready"]},
             },
             retrieval_timestamp=self.fixed_now,
         )
@@ -457,6 +507,322 @@ class AugmisBusinessListenerServiceTest(unittest.TestCase):
         self.assertEqual(row.raw_content_json["provider_description"], candidate.raw_content_json["provider_description"])
         self.assertEqual(row.requirement_summary, "Build workflow dashboards")
         self.assertIn("<strong>workflow</strong>", row.normalized_content_json["requirement"]["safe_html"])
+
+    def test_product_marketing_rfp_page_is_rejected_by_validity_gate(self):
+        connector = service.ensure_independent_web_connector(self.db, "TENANT-1", self.current_user)
+        connector_run = BusinessDevelopmentConnectorRun(
+            id="BD-RUN-VALIDITY-1",
+            tenant_id="TENANT-1",
+            connector_id=connector.id,
+            run_type="manual",
+            status="running",
+            started_at=self.fixed_now,
+            run_metadata_json={},
+            initiated_by="USER-1",
+        )
+        self.db.add(connector_run)
+        self.db.commit()
+        candidate = self._make_independent_candidate(
+            title="RFP Tracker: Solutions, Metrics, and Smart Automation Strategies",
+            summary="RFP tracker product features, workflow automation strategies, smart procurement insights, demo overview, and solution benefits for revenue teams.",
+            organization_name=None,
+            reference_number=None,
+            application_url=None,
+            page_type="web_article",
+            source_url="https://autorfp.example/blog/rfp-tracker-solutions-metrics",
+        )
+
+        outcome = service.ingest_discovered_opportunity(
+            self.db,
+            "TENANT-1",
+            connector,
+            connector_run,
+            candidate,
+            service.ensure_default_search_profile(self.db, "TENANT-1", self.current_user),
+        )
+
+        self.assertIsNone(outcome.row)
+        self.assertEqual(outcome.outcome, "filtered")
+        self.assertEqual(
+            self.db.query(BusinessDevelopmentDiscoveredOpportunity).filter(
+                BusinessDevelopmentDiscoveredOpportunity.tenant_id == "TENANT-1"
+            ).count(),
+            0,
+        )
+
+    def test_real_software_rfp_is_confirmed_and_actionable(self):
+        connector = service.ensure_independent_web_connector(self.db, "TENANT-1", self.current_user)
+        connector_run = BusinessDevelopmentConnectorRun(
+            id="BD-RUN-VALIDITY-2",
+            tenant_id="TENANT-1",
+            connector_id=connector.id,
+            run_type="manual",
+            status="running",
+            started_at=self.fixed_now,
+            run_metadata_json={},
+            initiated_by="USER-1",
+        )
+        self.db.add(connector_run)
+        self.db.commit()
+        candidate = self._make_independent_candidate(
+            title="Request for Proposal — Enterprise Document and Records Management System",
+            summary="Example Government Authority invites proposals for implementation, workflow automation, records management, integration, migration, and training services. Submit proposal through the official procurement portal before closing date.",
+            organization_name="Example Government Authority",
+            closing_date=datetime(2026, 9, 1, 12, 0, 0, tzinfo=timezone.utc),
+            reference_number="RFP-2026-104",
+            application_url="https://buyer.example/portal/submit-rfp-2026-104",
+            page_type="rfp",
+            source_url="https://buyer.example/tenders/rfp-2026-104",
+        )
+
+        outcome = service.ingest_discovered_opportunity(
+            self.db,
+            "TENANT-1",
+            connector,
+            connector_run,
+            candidate,
+            service.ensure_default_search_profile(self.db, "TENANT-1", self.current_user),
+        )
+
+        self.assertIsNotNone(outcome.row)
+        row = service._require_discovery(self.db, "TENANT-1", outcome.row.id)  # type: ignore[union-attr]
+        validity = row.raw_content_json["opportunity_validity"]
+        self.assertEqual(validity["validity_class"], "CONFIRMED_OPPORTUNITY")
+        self.assertEqual(validity["actionability"], "ACTIONABLE")
+        self.assertEqual(row.discovery_status, "new")
+
+    def test_informational_procurement_article_is_rejected_without_invented_fields(self):
+        connector = service.ensure_independent_web_connector(self.db, "TENANT-1", self.current_user)
+        connector_run = BusinessDevelopmentConnectorRun(
+            id="BD-RUN-VALIDITY-2B",
+            tenant_id="TENANT-1",
+            connector_id=connector.id,
+            run_type="manual",
+            status="running",
+            started_at=self.fixed_now,
+            run_metadata_json={},
+            initiated_by="USER-1",
+        )
+        self.db.add(connector_run)
+        self.db.commit()
+        candidate = self._make_independent_candidate(
+            title="Procurement Analytics Use Cases: 12 High-Impact Examples",
+            summary="A procurement analytics article covering use cases, examples, best practices, and strategy ideas for transformation teams. No buyer, no reference number, and no application route are provided.",
+            organization_name=None,
+            reference_number=None,
+            application_url=None,
+            page_type="web_article",
+            source_url="https://content.example/articles/procurement-analytics-use-cases",
+        )
+
+        validity = service._opportunity_validity_payload(candidate)
+        self.assertEqual(validity["validity_class"], "INFORMATIONAL_CONTENT")
+        self.assertFalse(validity["has_buyer"])
+        self.assertFalse(validity["has_submission_route"])
+        self.assertIsNone(validity["reference_number"])
+
+        outcome = service.ingest_discovered_opportunity(
+            self.db,
+            "TENANT-1",
+            connector,
+            connector_run,
+            candidate,
+            service.ensure_default_search_profile(self.db, "TENANT-1", self.current_user),
+        )
+
+        self.assertIsNone(outcome.row)
+        self.assertEqual(outcome.outcome, "filtered")
+
+    def test_real_but_irrelevant_procurement_stays_valid_and_low_match(self):
+        connector = service.ensure_independent_web_connector(self.db, "TENANT-1", self.current_user)
+        profile = service.ensure_default_search_profile(self.db, "TENANT-1", self.current_user)
+        profile.include_keywords_json = ["document management", "records management", "workflow automation"]
+        profile.include_technologies_json = ["fastapi"]
+        profile.include_capabilities_json = ["approval workflows"]
+        profile.exclude_keywords_json = ["catering", "cleaning"]
+        self.db.commit()
+        connector_run = BusinessDevelopmentConnectorRun(
+            id="BD-RUN-VALIDITY-3",
+            tenant_id="TENANT-1",
+            connector_id=connector.id,
+            run_type="manual",
+            status="running",
+            started_at=self.fixed_now,
+            run_metadata_json={},
+            initiated_by="USER-1",
+        )
+        self.db.add(connector_run)
+        self.db.commit()
+        candidate = self._make_independent_candidate(
+            title="Request for Proposal — Facilities Catering, Cleaning, and Janitorial Services",
+            summary="Municipal Services Authority seeks catering, canteen operations, cleaning, janitorial, housekeeping, and washroom support services for public facilities. Reference FAC-2026-77. Submit bid through the official procurement portal before the published deadline.",
+            organization_name="Municipal Services Authority",
+            closing_date=datetime(2026, 8, 30, 12, 0, 0, tzinfo=timezone.utc),
+            reference_number="FAC-2026-77",
+            application_url="https://buyer.example/procurement/fac-2026-77/submit",
+            page_type="rfp",
+            source_url="https://buyer.example/tenders/fac-2026-77",
+        )
+
+        outcome = service.ingest_discovered_opportunity(
+            self.db,
+            "TENANT-1",
+            connector,
+            connector_run,
+            candidate,
+            profile,
+        )
+
+        self.assertIsNotNone(outcome.row)
+        row = service._require_discovery(self.db, "TENANT-1", outcome.row.id)  # type: ignore[union-attr]
+        validity = row.raw_content_json["opportunity_validity"]
+        self.assertEqual(validity["validity_class"], "CONFIRMED_OPPORTUNITY")
+        self.assertLess(row.preliminary_relevance_score or 100.0, 35.0)
+        self.assertEqual(row.discovery_status, "irrelevant")
+
+    def test_expired_procurement_is_not_imported_as_active_discovery(self):
+        connector = service.ensure_independent_web_connector(self.db, "TENANT-1", self.current_user)
+        connector_run = BusinessDevelopmentConnectorRun(
+            id="BD-RUN-VALIDITY-4",
+            tenant_id="TENANT-1",
+            connector_id=connector.id,
+            run_type="manual",
+            status="running",
+            started_at=self.fixed_now,
+            run_metadata_json={},
+            initiated_by="USER-1",
+        )
+        self.db.add(connector_run)
+        self.db.commit()
+        candidate = self._make_independent_candidate(
+            title="Request for Proposal — Legacy Archive Digitization",
+            summary="Archive Authority invites bids for archive digitization and metadata migration. Reference ARC-2026-08. Submit bid through the official portal.",
+            organization_name="Archive Authority",
+            closing_date=datetime(2026, 8, 1, 12, 0, 0, tzinfo=timezone.utc),
+            reference_number="ARC-2026-08",
+            application_url="https://buyer.example/procurement/arc-2026-08/submit",
+            page_type="rfp",
+            source_url="https://buyer.example/tenders/arc-2026-08",
+        )
+
+        outcome = service.ingest_discovered_opportunity(
+            self.db,
+            "TENANT-1",
+            connector,
+            connector_run,
+            candidate,
+            service.ensure_default_search_profile(self.db, "TENANT-1", self.current_user),
+        )
+
+        self.assertIsNone(outcome.row)
+        self.assertEqual(outcome.outcome, "filtered")
+
+    def test_recalculate_independent_discovery_validity_reassesses_existing_rows(self):
+        connector = service.ensure_independent_web_connector(self.db, "TENANT-1", self.current_user)
+        self.db.add_all(
+            [
+                BusinessDevelopmentDiscoveredOpportunity(
+                    id="DISC-INVALID-1",
+                    tenant_id="TENANT-1",
+                    connector_id=connector.id,
+                    connector_run_id=None,
+                    external_id="AWD-OLD-1",
+                    source_type="web_discovery",
+                    source_name="AUGMIS Web",
+                    source_url="https://autorfp.example/blog/rfp-tracker-solutions-metrics",
+                    canonical_source_url="https://autorfp.example/blog/rfp-tracker-solutions-metrics",
+                    source_domain="autorfp.example",
+                    source_country="IND",
+                    title="RFP Tracker: Solutions, Metrics, and Smart Automation Strategies",
+                    normalized_title="rfp tracker solutions metrics and smart automation strategies",
+                    organization_name=None,
+                    normalized_organization_name=None,
+                    raw_summary="RFP tracker product features and workflow strategy article.",
+                    requirement_summary="RFP tracker product features and workflow strategy article.",
+                    normalized_content_json={},
+                    raw_content_json={"provider": "augmis_internal", "page_type": "web_article"},
+                    raw_text="RFP tracker product features, strategy, and automation guide with no buyer, no deadline, and no submission route.",
+                    country="IND",
+                    region=None,
+                    industry=None,
+                    budget_min=None,
+                    budget_max=None,
+                    currency=None,
+                    discovered_at=self.fixed_now,
+                    retrieval_timestamp=self.fixed_now,
+                    discovery_status="new",
+                    duplicate_of_discovery_id=None,
+                    possible_duplicate_of_discovery_id=None,
+                    imported_opportunity_id=None,
+                    preliminary_relevance_score=82.0,
+                    relevance_reasons_json=[],
+                    matched_keywords_json=[],
+                    evidence_json=[],
+                    normalized_search_text="rfp tracker product features strategy",
+                    url_fingerprint="discinvalid1",
+                    composite_fingerprint="discinvalid1",
+                    updated_at=self.fixed_now,
+                ),
+                BusinessDevelopmentDiscoveredOpportunity(
+                    id="DISC-VALID-1",
+                    tenant_id="TENANT-1",
+                    connector_id=connector.id,
+                    connector_run_id=None,
+                    external_id="AWD-OLD-2",
+                    source_type="public_procurement",
+                    source_name="AUGMIS Web",
+                    source_url="https://buyer.example/tenders/rfp-2026-104",
+                    canonical_source_url="https://buyer.example/tenders/rfp-2026-104",
+                    source_domain="buyer.example",
+                    source_country="IND",
+                    title="Request for Proposal — Enterprise Document and Records Management System",
+                    normalized_title="request for proposal enterprise document and records management system",
+                    organization_name="Example Government Authority",
+                    normalized_organization_name="example government authority",
+                    published_date=self.fixed_now,
+                    closing_date=datetime(2026, 9, 1, 12, 0, 0, tzinfo=timezone.utc),
+                    raw_summary="Example Government Authority seeks document and records management implementation.",
+                    requirement_summary="Example Government Authority seeks document and records management implementation.",
+                    normalized_content_json={},
+                    raw_content_json={"provider": "augmis_internal", "page_type": "rfp", "reference_number": "RFP-2026-104", "application_url": "https://buyer.example/portal/submit-rfp-2026-104"},
+                    raw_text="Example Government Authority seeks implementation, workflow automation, records management, integration, and training services. Reference RFP-2026-104. Submit through the official procurement portal before closing date.",
+                    country="IND",
+                    region=None,
+                    industry=None,
+                    budget_min=None,
+                    budget_max=None,
+                    currency=None,
+                    discovered_at=self.fixed_now,
+                    retrieval_timestamp=self.fixed_now,
+                    discovery_status="new",
+                    duplicate_of_discovery_id=None,
+                    possible_duplicate_of_discovery_id=None,
+                    imported_opportunity_id=None,
+                    preliminary_relevance_score=84.0,
+                    relevance_reasons_json=[],
+                    matched_keywords_json=[],
+                    evidence_json=[],
+                    normalized_search_text="document records management implementation",
+                    url_fingerprint="discvalid1",
+                    composite_fingerprint="discvalid1",
+                    updated_at=self.fixed_now,
+                ),
+            ]
+        )
+        self.db.commit()
+
+        result = service.recalculate_independent_discovery_validity(
+            self.db,
+            "TENANT-1",
+            self.current_user,
+            limit=10,
+        )
+
+        self.assertEqual(result["data"]["count"], 2)
+        item_by_title = {item["title"]: item for item in result["data"]["items"]}
+        self.assertEqual(item_by_title["RFP Tracker: Solutions, Metrics, and Smart Automation Strategies"]["new_status"], "irrelevant")
+        self.assertEqual(item_by_title["RFP Tracker: Solutions, Metrics, and Smart Automation Strategies"]["validity_class"], "PRODUCT_MARKETING")
+        self.assertEqual(item_by_title["Request for Proposal — Enterprise Document and Records Management System"]["validity_class"], "CONFIRMED_OPPORTUNITY")
 
     def test_content_backfill_tenant_scoped(self):
         self.db.add_all(
