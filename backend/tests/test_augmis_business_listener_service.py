@@ -302,6 +302,237 @@ class AugmisBusinessListenerServiceTest(unittest.TestCase):
         rows = service.list_discoveries(self.db, "TENANT-2")["data"]
         self.assertEqual(rows, [])
 
+    def test_same_source_type_can_serialize_different_provider_identity(self):
+        independent_connector = service.ensure_independent_web_connector(self.db, "TENANT-1", self.current_user)
+        ted_connector = service.ensure_ted_connector(self.db, "TENANT-1", self.current_user)
+        self.db.add_all(
+            [
+                BusinessDevelopmentDiscoveredOpportunity(
+                    id="DISC-AUGMIS",
+                    tenant_id="TENANT-1",
+                    connector_id=independent_connector.id,
+                    connector_run_id=None,
+                    external_id="AUGMIS-1",
+                    source_type="public_procurement",
+                    source_name="AUGMIS Web",
+                    source_url="https://buyer.example/tenders/1",
+                    canonical_source_url="https://buyer.example/tenders/1",
+                    source_domain="buyer.example",
+                    source_country="IND",
+                    title="Workflow Automation RFP",
+                    normalized_title="workflow automation rfp",
+                    organization_name="Buyer",
+                    normalized_organization_name="buyer",
+                    raw_summary="Workflow automation",
+                    requirement_summary="Workflow automation",
+                    normalized_content_json={},
+                    raw_content_json={"provider": "augmis_internal", "page_type": "rfp"},
+                    raw_text="Workflow automation",
+                    country="IND",
+                    region=None,
+                    industry=None,
+                    budget_min=None,
+                    budget_max=None,
+                    currency=None,
+                    discovered_at=self.fixed_now,
+                    retrieval_timestamp=self.fixed_now,
+                    discovery_status="new",
+                    duplicate_of_discovery_id=None,
+                    possible_duplicate_of_discovery_id=None,
+                    imported_opportunity_id=None,
+                    preliminary_relevance_score=55.0,
+                    relevance_reasons_json=[],
+                    matched_keywords_json=[],
+                    evidence_json=[],
+                    normalized_search_text="workflow automation",
+                    url_fingerprint="augmis1",
+                    composite_fingerprint="augmis1",
+                    updated_at=self.fixed_now,
+                ),
+                BusinessDevelopmentDiscoveredOpportunity(
+                    id="DISC-TED",
+                    tenant_id="TENANT-1",
+                    connector_id=ted_connector.id,
+                    connector_run_id=None,
+                    external_id="TED-1",
+                    source_type="public_procurement",
+                    source_name="TED",
+                    source_url="https://ted.example/1",
+                    canonical_source_url="https://ted.example/1",
+                    source_domain="ted.example",
+                    source_country="DEU",
+                    title="Digital Health Support",
+                    normalized_title="digital health support",
+                    organization_name="Authority",
+                    normalized_organization_name="authority",
+                    raw_summary="Digital health support",
+                    requirement_summary="Digital health support",
+                    normalized_content_json={},
+                    raw_content_json={"provider": "ted"},
+                    raw_text="Digital health support",
+                    country="DEU",
+                    region=None,
+                    industry=None,
+                    budget_min=None,
+                    budget_max=None,
+                    currency=None,
+                    discovered_at=self.fixed_now,
+                    retrieval_timestamp=self.fixed_now,
+                    discovery_status="new",
+                    duplicate_of_discovery_id=None,
+                    possible_duplicate_of_discovery_id=None,
+                    imported_opportunity_id=None,
+                    preliminary_relevance_score=55.0,
+                    relevance_reasons_json=[],
+                    matched_keywords_json=[],
+                    evidence_json=[],
+                    normalized_search_text="digital health support",
+                    url_fingerprint="ted1",
+                    composite_fingerprint="ted1",
+                    updated_at=self.fixed_now,
+                ),
+            ]
+        )
+        self.db.commit()
+
+        rows = service.list_discoveries(self.db, "TENANT-1")["data"]
+        row_by_id = {row["id"]: row for row in rows}
+        self.assertEqual(row_by_id["DISC-AUGMIS"]["display_source"], "AUGMIS Web")
+        self.assertEqual(row_by_id["DISC-AUGMIS"]["source_provider_key"], "augmis_internal")
+        self.assertEqual(row_by_id["DISC-TED"]["display_source"], "TED")
+        self.assertEqual(row_by_id["DISC-TED"]["source_provider_key"], "ted")
+
+    def test_original_raw_payload_preserved(self):
+        connector = service.ensure_fixture_connector(self.db, "TENANT-1", self.current_user)
+        connector_run = BusinessDevelopmentConnectorRun(
+            id="BD-RUN-RAW-1",
+            tenant_id="TENANT-1",
+            connector_id=connector.id,
+            run_type="manual",
+            status="running",
+            started_at=self.fixed_now,
+            run_metadata_json={},
+            initiated_by="USER-1",
+        )
+        self.db.add(connector_run)
+        self.db.commit()
+        candidate = service.AugmisBusinessDiscoveredOpportunityCandidate(
+            external_id="RAW-HTML-1",
+            source_type="employment_contract",
+            source_name="Remote OK",
+            source_url="https://example.com/jobs/1",
+            source_country="GBR",
+            title="Workflow Automation Engineer",
+            organization_name="Acme",
+            published_date=self.fixed_now,
+            closing_date=None,
+            country="GBR",
+            region="London",
+            industry="Software",
+            requirement_summary='<p onclick="alert(1)">Build <strong>workflow</strong> dashboards</p>',
+            raw_summary='<p onclick="alert(1)">Build <strong>workflow</strong> dashboards</p>',
+            raw_text='<p onclick="alert(1)">Build <strong>workflow</strong> dashboards</p>',
+            budget_min=5000,
+            budget_max=8000,
+            currency="GBP",
+            evidence=[],
+            source_metadata={"provider": "remoteok"},
+            raw_content_json={
+                "provider_description": '<p onclick="alert(1)">Build <strong>workflow</strong> dashboards</p>',
+                "provider_payload": {"html": True},
+            },
+            retrieval_timestamp=self.fixed_now,
+        )
+
+        result = service.ingest_discovered_opportunity(
+            self.db,
+            "TENANT-1",
+            connector,
+            connector_run,
+            candidate,
+            service.ensure_default_search_profile(self.db, "TENANT-1", self.current_user),
+        )
+
+        row = service._require_discovery(self.db, "TENANT-1", result.row.id)
+        self.assertEqual(row.raw_content_json["provider_description"], candidate.raw_content_json["provider_description"])
+        self.assertEqual(row.requirement_summary, "Build workflow dashboards")
+        self.assertIn("<strong>workflow</strong>", row.normalized_content_json["requirement"]["safe_html"])
+
+    def test_content_backfill_tenant_scoped(self):
+        self.db.add_all(
+            [
+                BusinessDevelopmentDiscoveredOpportunity(
+                    id="BD-DISC-1",
+                    tenant_id="TENANT-1",
+                    connector_id="BD-CNX-1",
+                    connector_run_id=None,
+                    external_id="DISC-1",
+                    source_type="web_search",
+                    source_name="Web Search",
+                    title="Tenant One",
+                    normalized_title="tenant one",
+                    organization_name="Org One",
+                    normalized_organization_name="org one",
+                    requirement_summary="<p>Tenant <strong>One</strong></p>",
+                    raw_summary="<p>Tenant <strong>One</strong></p>",
+                    raw_text="<p>Tenant <strong>One</strong></p>",
+                    raw_content_json={"original": "<p>Tenant <strong>One</strong></p>"},
+                    normalized_content_json={},
+                    discovery_status="new",
+                    evidence_json=[],
+                    matched_keywords_json=[],
+                    relevance_reasons_json=[],
+                    discovered_at=self.fixed_now,
+                    retrieval_timestamp=self.fixed_now,
+                    created_at=self.fixed_now,
+                    updated_at=self.fixed_now,
+                ),
+                BusinessDevelopmentDiscoveredOpportunity(
+                    id="BD-DISC-2",
+                    tenant_id="TENANT-2",
+                    connector_id="BD-CNX-2",
+                    connector_run_id=None,
+                    external_id="DISC-2",
+                    source_type="web_search",
+                    source_name="Web Search",
+                    title="Tenant Two",
+                    normalized_title="tenant two",
+                    organization_name="Org Two",
+                    normalized_organization_name="org two",
+                    requirement_summary="<p>Tenant <strong>Two</strong></p>",
+                    raw_summary="<p>Tenant <strong>Two</strong></p>",
+                    raw_text="<p>Tenant <strong>Two</strong></p>",
+                    raw_content_json={"original": "<p>Tenant <strong>Two</strong></p>"},
+                    normalized_content_json={},
+                    discovery_status="new",
+                    evidence_json=[],
+                    matched_keywords_json=[],
+                    relevance_reasons_json=[],
+                    discovered_at=self.fixed_now,
+                    retrieval_timestamp=self.fixed_now,
+                    created_at=self.fixed_now,
+                    updated_at=self.fixed_now,
+                ),
+            ]
+        )
+        self.db.commit()
+
+        result = service.reprocess_discovery_content(
+            self.db,
+            "TENANT-1",
+            self.current_user,
+            limit=10,
+        )
+
+        self.assertEqual(result["data"]["count"], 1)
+        tenant_one = service._require_discovery(self.db, "TENANT-1", "BD-DISC-1")
+        tenant_two = service._require_discovery(self.db, "TENANT-2", "BD-DISC-2")
+        self.assertEqual(tenant_one.requirement_summary, "Tenant One")
+        self.assertEqual(tenant_one.raw_content_json["original"], "<p>Tenant <strong>One</strong></p>")
+        self.assertTrue(tenant_one.normalized_content_json["requirement"]["safe_html"].startswith("<p>"))
+        self.assertEqual(tenant_two.requirement_summary, "<p>Tenant <strong>Two</strong></p>")
+        self.assertEqual(tenant_two.normalized_content_json, {})
+
     def test_update_connector_enables_and_disables_status(self):
         connector = service.ensure_fixture_connector(self.db, "TENANT-1", self.current_user)
         disabled = service.update_connector(

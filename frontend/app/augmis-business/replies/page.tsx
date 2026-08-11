@@ -50,7 +50,6 @@ import {
   AdminFormField,
   AdminFormTextField,
 } from "@/components/forms/AdminFormDialog";
-import { OutletPage } from "@/components/layout/OutletPage";
 import { useAuth } from "@/context/AuthContext";
 import { parseApiValidationError } from "@/services/apiErrorParser";
 import {
@@ -87,6 +86,7 @@ import {
   updateAugmisBusinessLeadStage,
   updateAugmisBusinessReplyResponse,
 } from "@/services/augmisBusinessService";
+import BusinessPageFrame from "../components/BusinessPageFrame";
 
 type ToastSeverity = "success" | "error" | "info" | "warning";
 type DetailTab = "message" | "analysis" | "response" | "context" | "history";
@@ -769,7 +769,7 @@ export default function AugmisBusinessRepliesPage() {
   }
 
   return (
-    <OutletPage
+    <BusinessPageFrame
       title="Replies Workspace"
       description="Capture inbound prospect replies, analyze intent, draft responses, and apply operator-approved next actions without any automatic sending."
     >
@@ -1745,6 +1745,6 @@ export default function AugmisBusinessRepliesPage() {
         severity={toast.severity}
         onClose={() => setToast((current) => ({ ...current, open: false }))}
       />
-    </OutletPage>
+    </BusinessPageFrame>
   );
 }

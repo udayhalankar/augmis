@@ -44,9 +44,24 @@ class Settings(BaseSettings):
     TAVILY_SEARCH_BASE_URL: str = "https://api.tavily.com/search"
     BRAVE_SEARCH_API_KEY: str | None = None
     BRAVE_SEARCH_BASE_URL: str = "https://api.search.brave.com/res/v1/web/search"
+    FREELANCER_ACCESS_TOKEN: str | None = None
+    FREELANCER_API_BASE_URL: str = "https://www.freelancer.com/api"
+    FREELANCER_SANDBOX_API_BASE_URL: str = "https://www.freelancer-sandbox.com/api"
+    ADZUNA_APP_ID: str | None = None
+    ADZUNA_APP_KEY: str | None = None
     AUGMIS_WEB_SEARCH_TIMEOUT_SECONDS: int = 20
     AUGMIS_WEB_FETCH_TIMEOUT_SECONDS: int = 15
     AUGMIS_WEB_FETCH_MAX_BYTES: int = 300000
     AUGMIS_WEB_FETCH_MAX_REDIRECTS: int = 3
+    AUGMIS_WEB_DISCOVERY_USER_AGENT: str = "AUGMISOpportunityBot/1.0 (+https://augmis.com/contact)"
+    AUGMIS_WEB_DISCOVERY_MAX_DOMAINS_PER_RUN: int = 10
+    AUGMIS_WEB_DISCOVERY_MAX_PAGES_PER_DOMAIN: int = 50
+    AUGMIS_WEB_DISCOVERY_MAX_TOTAL_PAGES_PER_RUN: int = 200
+    AUGMIS_WEB_DISCOVERY_MAX_DEPTH: int = 3
+    AUGMIS_WEB_DISCOVERY_MAX_LINKS_PER_PAGE: int = 60
+    AUGMIS_WEB_DISCOVERY_MAX_RUN_DURATION_SECONDS: int = 300
+    AUGMIS_WEB_DISCOVERY_MIN_DOMAIN_DELAY_SECONDS: int = 2
+    AUGMIS_WEB_DISCOVERY_MAX_DOMAIN_DELAY_SECONDS: int = 30
+    AUGMIS_WEB_DISCOVERY_DEFAULT_RECRAWL_HOURS: int = 168
 
 settings = Settings()

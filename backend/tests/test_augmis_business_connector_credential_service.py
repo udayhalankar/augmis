@@ -299,6 +299,25 @@ class AugmisBusinessConnectorCredentialServiceTest(unittest.TestCase):
         self.assertEqual(result["data"]["last_test_status"], "failed")
         self.assertNotIn("tvly-tenant-1234", result["data"]["result"]["message"])
 
+    @patch("app.services.augmis_business_connector_credential_service.FreelancerClient")
+    def test_freelancer_credential_test_uses_access_token(self, mock_client_class: Mock):
+        mock_client = mock_client_class.return_value
+        mock_client.test_connection.return_value = {
+            "success": True,
+            "message": "Freelancer access token is configured and the official API is reachable.",
+            "provider": "freelancer",
+        }
+        save_connector_credential(
+            self.db,
+            "TENANT-1",
+            "freelancer",
+            self.current_user,
+            "frl-tenant-1234",
+        )
+        result = test_connector_credential(self.db, "TENANT-1", "freelancer", self.current_user)
+        self.assertTrue(result["data"]["result"]["success"])
+        mock_client_class.assert_called_once_with(access_token="frl-tenant-1234")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -54,8 +54,8 @@ import {
 
 import { AppNotificationToast } from "@/components/feedback/AppNotificationToast";
 import { AdminFormDialog, AdminFormTextField } from "@/components/forms/AdminFormDialog";
-import { OutletPage } from "@/components/layout/OutletPage";
 import { useAuth } from "@/context/AuthContext";
+import BusinessPageFrame from "../components/BusinessPageFrame";
 import {
   type AugmisBusinessContact,
   type AugmisBusinessProspect,
@@ -1213,20 +1213,20 @@ export default function AugmisBusinessProspectsPage() {
 
   if (!canRead) {
     return (
-      <OutletPage
+      <BusinessPageFrame
         title="Prospects"
         description="Prospect management requires business development read access."
       >
         <Alert severity="warning">
           You do not currently have permission to view tenant prospect records.
         </Alert>
-      </OutletPage>
+      </BusinessPageFrame>
     );
   }
 
   return (
     <>
-      <OutletPage
+      <BusinessPageFrame
         title="Prospects"
         description="Manage tenant-scoped target organizations, buyer contacts, related opportunities, and live activity history."
       >
@@ -1544,7 +1544,7 @@ export default function AugmisBusinessProspectsPage() {
             )}
           </Paper>
         </Stack>
-      </OutletPage>
+      </BusinessPageFrame>
 
       <Menu anchorEl={menuAnchorEl} open={Boolean(menuAnchorEl)} onClose={closeActionMenu}>
         <MenuItem

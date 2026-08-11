@@ -37,12 +37,14 @@ import {
   MenuItem,
   Paper,
   Stack,
+  Tab,
   Table,
   TableBody,
   TableCell,
   TableHead,
   TablePagination,
   TableRow,
+  Tabs,
   TextField,
   Tooltip,
   Typography,
@@ -50,7 +52,6 @@ import {
 
 import { AppNotificationToast } from "@/components/feedback/AppNotificationToast";
 import { AdminFormDialog, AdminFormTextField } from "@/components/forms/AdminFormDialog";
-import { OutletPage } from "@/components/layout/OutletPage";
 import { useAuth } from "@/context/AuthContext";
 import { parseApiValidationError } from "@/services/apiErrorParser";
 import {
@@ -58,20 +59,37 @@ import {
   type AugmisBusinessConnectorCredentialStatus,
   type AugmisBusinessConnectorRun,
   type AugmisBusinessDiscovery,
+  type AugmisBusinessDiscoveryCommercialIntelligence,
+  type AugmisBusinessDiscoveryDeepAssessment,
+  type AugmisBusinessDiscoveryDeepAssessmentHistoryItem,
   type AugmisBusinessSearchProfile,
   type AugmisBusinessSearchProvider,
+  type AugmisBusinessWebDomain,
+  type AugmisBusinessWebPage,
+  type AugmisBusinessWebSeed,
   createAugmisBusinessSearchProvider,
   createAugmisBusinessSearchProfile,
+  createAugmisBusinessWebSeed,
+  deepAssessAugmisBusinessDiscovery,
+  deleteAugmisBusinessWebSeed,
   deleteAugmisBusinessConnectorCredential,
   deleteAugmisBusinessSearchProvider,
   getAugmisBusinessConnectorCredential,
   getAugmisBusinessDiscovery,
+  getAugmisBusinessDiscoveryCommercialIntelligence,
+  getAugmisBusinessDiscoveryDeepAssessment,
   importAugmisBusinessDiscovery,
+  listAugmisBusinessWebDomains,
+  listAugmisBusinessWebPages,
+  listAugmisBusinessWebSeeds,
   listAugmisBusinessConnectorRuns,
   listAugmisBusinessConnectors,
+  listAugmisBusinessDiscoveryDeepAssessments,
   listAugmisBusinessDiscoveries,
   listAugmisBusinessSearchProfiles,
   listAugmisBusinessSearchProviders,
+  recalculateAugmisBusinessDiscoveryPriorities,
+  reprocessAugmisBusinessDiscoveryContent,
   rejectAugmisBusinessDiscovery,
   scanAugmisBusinessConnector,
   saveAugmisBusinessConnectorCredential,
@@ -84,7 +102,11 @@ import {
   updateAugmisBusinessConnector,
   updateAugmisBusinessSearchProvider,
   updateAugmisBusinessSearchProfile,
+  updateAugmisBusinessWebDomain,
+  updateAugmisBusinessWebSeed,
+  recrawlAugmisBusinessWebDomain,
 } from "@/services/augmisBusinessService";
+import BusinessPageFrame from "../components/BusinessPageFrame";
 
 type ToastSeverity = "success" | "error" | "info" | "warning";
 type SearchProfileArrayField =
@@ -129,6 +151,11 @@ type SearchProfileArrayEditorProps = {
 };
 
 type CredentialDialogMode = "configure" | "replace";
+type CredentialFormState = {
+  apiKey: string;
+  appId: string;
+  appKey: string;
+};
 type SearchProviderForm = {
   display_name: string;
   provider_code: string;
@@ -150,9 +177,50 @@ type SearchProviderForm = {
   page_parameter: string;
   page_size_parameter: string;
 };
+type WebSeedForm = {
+  name: string;
+  seed_url: string;
+  seed_type: string;
+  enabled: boolean;
+  crawl_scope: string;
+  max_depth: string;
+  max_pages: string;
+  crawl_frequency: string;
+  priority: string;
+  country: string;
+  industry: string;
+  organization_name: string;
+  notes: string;
+};
 
 type DiscoverySourceMetadata = {
   provider?: string;
+  opportunity_class?: string;
+  engagement_type?: string;
+  employment_type?: string;
+  remote?: boolean | null;
+  location?: string | null;
+  company_name?: string | null;
+  company_url?: string | null;
+  salary_period?: string | null;
+  category?: string | null;
+  tags?: string[];
+  provider_project_id?: string;
+  project_url?: string;
+  project_type?: string;
+  project_status?: string;
+  skills?: string[];
+  categories?: string[];
+  bid_count?: number;
+  bid_avg?: number | null;
+  client_country?: string;
+  client_location?: string;
+  client_rating?: number | null;
+  client_review_count?: number | null;
+  client_payment_verified?: boolean | null;
+  client_projects_posted?: number | null;
+  client_projects_completed?: number | null;
+  client_username?: string;
   publication_number?: string;
   notice_identifier?: string;
   notice_version?: string;
@@ -176,6 +244,8 @@ type DiscoverySourceMetadata = {
   source_trust?: string;
   fetch_error?: string | null;
   fetch_error_code?: string | null;
+  fixture_mode?: boolean;
+  fixture_version?: string;
 };
 
 type DiscoveryRawContent = {
@@ -212,6 +282,11 @@ type ConnectorRunMetadata = {
   fetch_source_page?: boolean;
   results_per_query?: number;
   recency_days?: number;
+  mode?: string;
+  fixture_mode?: boolean;
+  fixture_version?: string;
+  score_bands?: string[];
+  countries_searched?: string[];
   item_errors?: string[];
   notices_normalized?: number;
   query_diagnostics?: Array<{
@@ -220,11 +295,70 @@ type ConnectorRunMetadata = {
     query?: string;
     primary_term?: string;
     cpv_codes?: string[];
+    skills?: string[];
     raw_results?: number;
     normalized?: number;
     invalid_items?: number;
+    filtered_bids?: number;
     error?: string;
   }>;
+  seeds_processed?: number;
+  domains_visited?: number;
+  urls_queued?: number;
+  pages_attempted?: number;
+  pages_fetched?: number;
+  pages_unchanged?: number;
+  pages_changed?: number;
+  robots_denied?: number;
+  pages_blocked?: number;
+  opportunity_like_pages?: number;
+  detail_pages?: number;
+  listing_pages?: number;
+  unknown_pages?: number;
+  stale_or_error_pages?: number;
+  dynamic_content_only_pages?: number;
+  opportunity_candidates?: number;
+  candidates_created?: number;
+  candidates_accepted?: number;
+  new_discoveries?: number;
+  new_discovered_domains?: number;
+  contacts_found?: number;
+  errors?: number;
+  duration_seconds?: number;
+  outcome_message?: string;
+  classification_counts?: Record<string, number>;
+  candidate_visibility_counts?: Record<string, number>;
+  candidate_exclusion_reason_counts?: Record<string, number>;
+  filter_reason_counts?: Record<string, number>;
+  detail_links_discovered?: number;
+  detail_links_queued?: number;
+  detail_links_skipped_depth?: number;
+  detail_links_skipped_domain_policy?: number;
+  detail_links_fetch_failed?: number;
+  detail_links_robots_denied?: number;
+  candidate_outcomes?: Array<{
+    title?: string;
+    source_url?: string;
+    page_type?: string;
+    discovery_status?: string;
+    relevance_score?: number;
+    reason_codes?: string[];
+  }>;
+};
+
+type IndependentCandidateVisibility = {
+  eligible?: boolean;
+  source_type?: string;
+  page_type?: string;
+  reason_codes?: string[];
+  reason_details?: string[];
+  detail_signal_count?: number;
+};
+
+type IndependentCandidateDecision = {
+  decision?: string;
+  page_type?: string;
+  reason_codes?: string[];
 };
 
 const CONNECTOR_TEST_LABEL = "TEST / FIXTURE";
@@ -380,6 +514,32 @@ function discoveryClosingStatusChip(status: string | null | undefined) {
   }
 }
 
+function discoveryPriorityBandChip(band: string | null | undefined) {
+  switch ((band || "").toUpperCase()) {
+    case "A":
+      return { bgcolor: "#DBEAFE", color: "#1D4ED8", borderColor: "#93C5FD" };
+    case "B":
+      return { bgcolor: "#EFF6FF", color: "#1D4ED8", borderColor: "#BFDBFE" };
+    case "C":
+      return { bgcolor: "#FFFBEB", color: "#B45309", borderColor: "#FDE68A" };
+    case "D":
+      return { bgcolor: "#FFF7ED", color: "#C2410C", borderColor: "#FED7AA" };
+    default:
+      return { bgcolor: "#F8FAFC", color: "#475569", borderColor: "#E2E8F0" };
+  }
+}
+
+function discoveryRecommendationChip(recommendation: string | null | undefined) {
+  switch ((recommendation || "").toLowerCase()) {
+    case "pursue":
+      return { bgcolor: "#DCFCE7", color: "#166534", borderColor: "#86EFAC" };
+    case "skip":
+      return { bgcolor: "#FEF2F2", color: "#B42318", borderColor: "#FECACA" };
+    default:
+      return { bgcolor: "#FFFBEB", color: "#B45309", borderColor: "#FDE68A" };
+  }
+}
+
 function connectorCategoryLabel(connector: AugmisBusinessConnector) {
   if (connector.metadata?.is_test_connector) {
     return CONNECTOR_TEST_LABEL;
@@ -388,8 +548,17 @@ function connectorCategoryLabel(connector: AugmisBusinessConnector) {
 }
 
 function connectorPrimaryIcon(connector: AugmisBusinessConnector) {
+  if (connector.connector_type === "independent_web_discovery") {
+    return <TravelExploreOutlinedIcon sx={{ color: "#1D4ED8", fontSize: 18 }} />;
+  }
   if (connector.connector_type === "ted_procurement" || connector.source_category === "procurement") {
     return <AccountBalanceOutlinedIcon sx={{ color: "#0F766E", fontSize: 18 }} />;
+  }
+  if (connector.connector_type === "freelancer_marketplace" || connector.source_category === "marketplace") {
+    return <TravelExploreOutlinedIcon sx={{ color: "#7C3AED", fontSize: 18 }} />;
+  }
+  if (["remote_job_feed", "job_board_api", "remote_job_api", "job_search_api"].includes(connector.connector_type)) {
+    return <HubOutlinedIcon sx={{ color: "#0F766E", fontSize: 18 }} />;
   }
   if (connector.source_category === "search") {
     return <SearchRoundedIcon sx={{ color: "#1D4ED8", fontSize: 18 }} />;
@@ -397,11 +566,54 @@ function connectorPrimaryIcon(connector: AugmisBusinessConnector) {
   return <CableOutlinedIcon sx={{ color: "#B45309", fontSize: 18 }} />;
 }
 
+function isFreelancerMockMode(connector: AugmisBusinessConnector | null) {
+  return connector?.connector_type === "freelancer_marketplace" && connector.configuration_json?.mode === "mock";
+}
+
 function selectedConnectorProvider(connector: AugmisBusinessConnector | null) {
+  if (connector?.connector_type === "freelancer_marketplace") {
+    return "freelancer";
+  }
+  if (connector?.connector_type === "remote_job_feed") {
+    return "remoteok";
+  }
+  if (connector?.connector_type === "job_board_api") {
+    return "arbeitnow";
+  }
+  if (connector?.connector_type === "remote_job_api") {
+    return "remotive";
+  }
+  if (connector?.connector_type === "job_search_api") {
+    return "adzuna";
+  }
   const configuredProvider = connector?.configuration_json?.provider;
   return typeof configuredProvider === "string" && configuredProvider.trim()
     ? configuredProvider.trim().toLowerCase()
     : "tavily";
+}
+
+function providerSecretLabel(provider: string) {
+  if (provider === "adzuna") return "App Key";
+  return provider === "freelancer" ? "Access Token" : "API Key";
+}
+
+function connectorUsesCredential(connector: AugmisBusinessConnector | null) {
+  if (!connector) return false;
+  if (connector.connector_type === "job_search_api") return true;
+  if (connector.connector_type === "freelancer_marketplace") return !isFreelancerMockMode(connector);
+  return connector.connector_type === "generic_web_search";
+}
+
+function connectorCategoryDisplay(connector: AugmisBusinessConnector) {
+  if (connector.connector_type === "independent_web_discovery") return "Internal Web Discovery";
+  if (connector.connector_type === "ted_procurement") return "Public Procurement";
+  if (connector.connector_type === "freelancer_marketplace") return "Freelance Marketplace";
+  if (connector.connector_type === "remote_job_feed") return "Remote Work";
+  if (connector.connector_type === "job_board_api") return "European Jobs";
+  if (connector.connector_type === "remote_job_api") return "Remote Work";
+  if (connector.connector_type === "job_search_api") return "Job Search";
+  if (connector.source_category === "search") return "Web Search";
+  return connector.source_category;
 }
 
 function credentialStatusChip(status: AugmisBusinessConnectorCredentialStatus | null) {
@@ -473,6 +685,42 @@ function buildDefaultProfileForm(): SearchProfileForm {
   };
 }
 
+function buildWebSeedForm(seed?: AugmisBusinessWebSeed | null): WebSeedForm {
+  return {
+    name: seed?.name ?? "",
+    seed_url: seed?.seed_url ?? "",
+    seed_type: seed?.seed_type ?? "url",
+    enabled: seed?.enabled ?? true,
+    crawl_scope: seed?.crawl_scope ?? "same_domain",
+    max_depth: seed ? String(seed.max_depth) : "2",
+    max_pages: seed ? String(seed.max_pages) : "25",
+    crawl_frequency: seed?.crawl_frequency ?? "weekly",
+    priority: seed ? String(seed.priority) : "50",
+    country: seed?.country ?? "",
+    industry: seed?.industry ?? "",
+    organization_name: seed?.organization_name ?? "",
+    notes: seed?.notes ?? "",
+  };
+}
+
+function webSeedFormToPayload(form: WebSeedForm) {
+  return {
+    name: form.name.trim(),
+    seed_url: form.seed_url.trim(),
+    seed_type: form.seed_type,
+    enabled: form.enabled,
+    crawl_scope: form.crawl_scope,
+    max_depth: Number(form.max_depth || 0),
+    max_pages: Number(form.max_pages || 25),
+    crawl_frequency: form.crawl_frequency,
+    priority: Number(form.priority || 50),
+    country: normalizeOptionalString(form.country),
+    industry: normalizeOptionalString(form.industry),
+    organization_name: normalizeOptionalString(form.organization_name),
+    notes: normalizeOptionalString(form.notes),
+  };
+}
+
 function profileToForm(profile: AugmisBusinessSearchProfile): SearchProfileForm {
   return {
     name: profile.name,
@@ -523,10 +771,88 @@ function extractRunMetadata(run: AugmisBusinessConnectorRun): ConnectorRunMetada
   return (run.run_metadata_json || {}) as ConnectorRunMetadata;
 }
 
+function extractIndependentCandidateVisibility(page: AugmisBusinessWebPage): IndependentCandidateVisibility {
+  const sourceMetadata = (page.source_metadata_json || {}) as Record<string, unknown>;
+  const fromSource = sourceMetadata.candidate_visibility as IndependentCandidateVisibility | undefined;
+  const fromCandidate = ((page.opportunity_candidate_json || {}) as Record<string, unknown>)
+    .candidate_visibility as IndependentCandidateVisibility | undefined;
+  return fromSource || fromCandidate || {};
+}
+
+function extractIndependentCandidateDecision(page: AugmisBusinessWebPage): IndependentCandidateDecision {
+  const sourceMetadata = (page.source_metadata_json || {}) as Record<string, unknown>;
+  const sourceDecision = sourceMetadata.candidate_decision as IndependentCandidateDecision | undefined;
+  const candidateDecision = ((page.opportunity_candidate_json || {}) as Record<string, unknown>)
+    .candidate_decision as IndependentCandidateDecision | undefined;
+  return sourceDecision || candidateDecision || {};
+}
+
+function recordEntriesDescending(record: Record<string, number> | undefined) {
+  return Object.entries(record || {}).sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]));
+}
+
+function formatDiagnosticCode(code: string) {
+  return code.replace(/[:_]/g, " ").replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
+function discoverySourceDisplay(discovery: AugmisBusinessDiscovery) {
+  return discovery.display_source || discovery.source_name || discovery.source_type || "Web Search";
+}
+
+function discoverySourceProviderKey(discovery: AugmisBusinessDiscovery) {
+  return discovery.source_provider_key || String((discovery.raw_content_json || {}).provider || "").trim().toLowerCase() || null;
+}
+
+function discoverySourceChipStyle(discovery: AugmisBusinessDiscovery) {
+  const providerKey = discoverySourceProviderKey(discovery);
+  if (providerKey === "augmis_internal") {
+    return { bgcolor: "#EEF2FF", color: "#3730A3", borderColor: "#C7D2FE" };
+  }
+  if (providerKey === "ted") {
+    return { bgcolor: "#ECFEFF", color: "#0F766E", borderColor: "#99F6E4" };
+  }
+  if (discovery.source_type === "marketplace_project") {
+    return { bgcolor: "#F5F3FF", color: "#6D28D9", borderColor: "#DDD6FE" };
+  }
+  if (discovery.source_type === "employment_contract") {
+    return { bgcolor: "#EFF6FF", color: "#1D4ED8", borderColor: "#BFDBFE" };
+  }
+  return { bgcolor: "#FEF3C7", color: "#B45309", borderColor: "#FCD34D" };
+}
+
 function extractDiscoverySourceMetadata(discovery: AugmisBusinessDiscovery): DiscoverySourceMetadata {
   const rawMetadata = discovery.raw_content_json as Record<string, unknown>;
   return {
     provider: typeof rawMetadata.provider === "string" ? rawMetadata.provider : undefined,
+    provider_project_id:
+      typeof rawMetadata.provider_project_id === "string" ? rawMetadata.provider_project_id : undefined,
+    project_url: typeof rawMetadata.project_url === "string" ? rawMetadata.project_url : undefined,
+    project_type: typeof rawMetadata.project_type === "string" ? rawMetadata.project_type : undefined,
+    project_status: typeof rawMetadata.project_status === "string" ? rawMetadata.project_status : undefined,
+    skills: Array.isArray(rawMetadata.skills)
+      ? rawMetadata.skills.filter((item): item is string => typeof item === "string")
+      : undefined,
+    categories: Array.isArray(rawMetadata.categories)
+      ? rawMetadata.categories.filter((item): item is string => typeof item === "string")
+      : undefined,
+    bid_count: typeof rawMetadata.bid_count === "number" ? rawMetadata.bid_count : undefined,
+    bid_avg: typeof rawMetadata.bid_avg === "number" ? rawMetadata.bid_avg : null,
+    client_country: typeof rawMetadata.client_country === "string" ? rawMetadata.client_country : undefined,
+    client_location: typeof rawMetadata.client_location === "string" ? rawMetadata.client_location : undefined,
+    client_rating: typeof rawMetadata.client_rating === "number" ? rawMetadata.client_rating : null,
+    client_review_count:
+      typeof rawMetadata.client_review_count === "number" ? rawMetadata.client_review_count : null,
+    client_payment_verified:
+      typeof rawMetadata.client_payment_verified === "boolean"
+        ? rawMetadata.client_payment_verified
+        : null,
+    client_projects_posted:
+      typeof rawMetadata.client_projects_posted === "number" ? rawMetadata.client_projects_posted : null,
+    client_projects_completed:
+      typeof rawMetadata.client_projects_completed === "number"
+        ? rawMetadata.client_projects_completed
+        : null,
+    client_username: typeof rawMetadata.client_username === "string" ? rawMetadata.client_username : undefined,
     publication_number:
       typeof rawMetadata.publication_number === "string" ? rawMetadata.publication_number : undefined,
     notice_identifier:
@@ -618,6 +944,88 @@ function translatedDiscoveryDescription(discovery: AugmisBusinessDiscovery) {
 
 function extractDiscoveryRawContent(discovery: AugmisBusinessDiscovery): DiscoveryRawContent {
   return (discovery.raw_content_json || {}) as DiscoveryRawContent;
+}
+
+type NormalizedContentBlock = {
+  plain_text?: string;
+  safe_html?: string;
+  detected_format?: string;
+};
+
+function extractDiscoveryNormalizedContent(
+  discovery: AugmisBusinessDiscovery | null
+): {
+  requirement: NormalizedContentBlock;
+  summary: NormalizedContentBlock;
+  full_text: NormalizedContentBlock;
+} {
+  const raw = (discovery?.normalized_content_json || {}) as Record<string, unknown>;
+  return {
+    requirement: ((raw.requirement as NormalizedContentBlock | undefined) || {}),
+    summary: ((raw.summary as NormalizedContentBlock | undefined) || {}),
+    full_text: ((raw.full_text as NormalizedContentBlock | undefined) || {}),
+  };
+}
+
+function renderRelativeClosing(value: string | null | undefined) {
+  if (!value) {
+    return "No deadline provided";
+  }
+  const target = new Date(value);
+  if (Number.isNaN(target.getTime())) {
+    return value;
+  }
+  const diff = Math.ceil((target.getTime() - Date.now()) / 86400000);
+  if (diff < 0) {
+    return "Expired";
+  }
+  if (diff === 0) {
+    return "Closing today";
+  }
+  if (diff === 1) {
+    return "Closing in 1 day";
+  }
+  return `Closing in ${diff} days`;
+}
+
+function requirementDisplayContent(
+  discovery: AugmisBusinessDiscovery | null,
+  view: "english" | "original"
+) {
+  const normalized = extractDiscoveryNormalizedContent(discovery);
+  if (!discovery) {
+    return {
+      title: "Requirement",
+      subtitle: "Source-provided description",
+      text: "Not available",
+      safeHtml: "",
+      mode: "original" as const,
+    };
+  }
+  if (view === "english" && discovery.active_translation) {
+    return {
+      title: "Requirement",
+      subtitle: "English translation for operator review",
+      text:
+        translatedDiscoveryDescription(discovery) ||
+        translatedDiscoverySummary(discovery) ||
+        "Not available",
+      safeHtml: "",
+      mode: "english" as const,
+    };
+  }
+  return {
+    title: "Requirement",
+    subtitle: "Source-provided description",
+    text:
+      normalized.requirement.plain_text ||
+      normalized.summary.plain_text ||
+      discovery.requirement_summary ||
+      discovery.raw_summary ||
+      "Not available",
+    safeHtml: normalized.requirement.safe_html || normalized.summary.safe_html || "",
+    mode: "original" as const,
+  };
 }
 
 function SearchProfileArrayEditor({
@@ -750,6 +1158,7 @@ export default function AugmisBusinessConnectorsPage() {
   const canUpdate = hasPermission("business_development:update");
   const canScan = hasPermission("business_development:scan");
   const canCreate = hasPermission("business_development:create");
+  const canQualify = hasPermission("business_development:qualify");
 
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -765,6 +1174,10 @@ export default function AugmisBusinessConnectorsPage() {
   const [runs, setRuns] = useState<AugmisBusinessConnectorRun[]>([]);
   const [profiles, setProfiles] = useState<AugmisBusinessSearchProfile[]>([]);
   const [searchProviders, setSearchProviders] = useState<AugmisBusinessSearchProvider[]>([]);
+  const [webSeeds, setWebSeeds] = useState<AugmisBusinessWebSeed[]>([]);
+  const [webDomains, setWebDomains] = useState<AugmisBusinessWebDomain[]>([]);
+  const [webPages, setWebPages] = useState<AugmisBusinessWebPage[]>([]);
+  const [webPagesTotal, setWebPagesTotal] = useState(0);
   const [discoveries, setDiscoveries] = useState<AugmisBusinessDiscovery[]>([]);
   const [discoveriesTotal, setDiscoveriesTotal] = useState(0);
   const [discoveryPage, setDiscoveryPage] = useState(0);
@@ -775,8 +1188,17 @@ export default function AugmisBusinessConnectorsPage() {
   const [relevanceFilter, setRelevanceFilter] = useState("all");
   const [sortBy, setSortBy] = useState("newest");
   const [selectedConnector, setSelectedConnector] = useState<AugmisBusinessConnector | null>(null);
+  const [independentDiagnosticsTab, setIndependentDiagnosticsTab] = useState(0);
   const [selectedDiscovery, setSelectedDiscovery] = useState<AugmisBusinessDiscovery | null>(null);
   const [selectedDiscoveryDuplicates, setSelectedDiscoveryDuplicates] = useState<AugmisBusinessDiscovery[]>([]);
+  const [selectedDiscoveryIntelligence, setSelectedDiscoveryIntelligence] =
+    useState<AugmisBusinessDiscoveryCommercialIntelligence | null>(null);
+  const [selectedDiscoveryDeepAssessment, setSelectedDiscoveryDeepAssessment] =
+    useState<AugmisBusinessDiscoveryDeepAssessment | null>(null);
+  const [selectedDiscoveryDeepAssessmentHistory, setSelectedDiscoveryDeepAssessmentHistory] =
+    useState<AugmisBusinessDiscoveryDeepAssessmentHistoryItem[]>([]);
+  const [showFullRequirement, setShowFullRequirement] = useState(false);
+  const [showSourceDetails, setShowSourceDetails] = useState(false);
   const [discoveryTranslationView, setDiscoveryTranslationView] = useState<"english" | "original">("original");
   const [translatingDiscoveryId, setTranslatingDiscoveryId] = useState<string | null>(null);
   const [connectorDrawerOpen, setConnectorDrawerOpen] = useState(false);
@@ -793,12 +1215,19 @@ export default function AugmisBusinessConnectorsPage() {
   const [credentialDialogOpen, setCredentialDialogOpen] = useState(false);
   const [credentialDialogMode, setCredentialDialogMode] =
     useState<CredentialDialogMode>("configure");
-  const [credentialFormValue, setCredentialFormValue] = useState("");
+  const [credentialForm, setCredentialForm] = useState<CredentialFormState>({
+    apiKey: "",
+    appId: "",
+    appKey: "",
+  });
   const [credentialShowValue, setCredentialShowValue] = useState(false);
   const [credentialTestMessage, setCredentialTestMessage] = useState<string | null>(null);
   const [credentialTestSeverity, setCredentialTestSeverity] =
     useState<ToastSeverity>("info");
   const [clearCredentialDialogOpen, setClearCredentialDialogOpen] = useState(false);
+  const [seedDialogOpen, setSeedDialogOpen] = useState(false);
+  const [seedForm, setSeedForm] = useState<WebSeedForm>(buildWebSeedForm());
+  const [editingSeed, setEditingSeed] = useState<AugmisBusinessWebSeed | null>(null);
   const [toastOpen, setToastOpen] = useState(false);
   const [toastSeverity, setToastSeverity] = useState<ToastSeverity>("info");
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -816,7 +1245,22 @@ export default function AugmisBusinessConnectorsPage() {
     () => connectors.find((connector) => connector.connector_type === "ted_procurement") ?? null,
     [connectors]
   );
-
+  const freelancerConnector = useMemo(
+    () => connectors.find((connector) => connector.connector_type === "freelancer_marketplace") ?? null,
+    [connectors]
+  );
+  const remoteOkConnector = useMemo(
+    () => connectors.find((connector) => connector.connector_type === "remote_job_feed") ?? null,
+    [connectors]
+  );
+  const arbeitnowConnector = useMemo(
+    () => connectors.find((connector) => connector.connector_type === "job_board_api") ?? null,
+    [connectors]
+  );
+  const remotiveConnector = useMemo(
+    () => connectors.find((connector) => connector.connector_type === "remote_job_api") ?? null,
+    [connectors]
+  );
   const showToast = (message: string, severity: ToastSeverity) => {
     setToastMessage(message);
     setToastSeverity(severity);
@@ -848,6 +1292,18 @@ export default function AugmisBusinessConnectorsPage() {
     setDiscoveries(result.data);
     setDiscoveriesTotal(result.pagination.total);
   }, [discoveryPage, discoveryPageSize, relevanceFilter, search, sortBy, sourceCategoryFilter, statusFilter]);
+
+  const loadIndependentConnectorData = useCallback(async (connectorId: string) => {
+    const [seedsResult, domainsResult, pagesResult] = await Promise.all([
+      listAugmisBusinessWebSeeds(connectorId),
+      listAugmisBusinessWebDomains(connectorId),
+      listAugmisBusinessWebPages(connectorId, { page: 1, page_size: 10 }),
+    ]);
+    setWebSeeds(seedsResult.data);
+    setWebDomains(domainsResult.data);
+    setWebPages(pagesResult.data);
+    setWebPagesTotal(pagesResult.total);
+  }, []);
 
   useEffect(() => {
     if (!canRead) return;
@@ -891,6 +1347,12 @@ export default function AugmisBusinessConnectorsPage() {
     return result.data;
   }
 
+  function resetCredentialForm() {
+    setCredentialForm({ apiKey: "", appId: "", appKey: "" });
+    setCredentialShowValue(false);
+    setCredentialTestMessage(null);
+  }
+
   function addProfileArrayValue(field: SearchProfileArrayField, value: string) {
     setProfileForm((current) => {
       if (!current) return current;
@@ -921,8 +1383,16 @@ export default function AugmisBusinessConnectorsPage() {
           setRuns(result.data);
         }),
       ];
-      if (connector.connector_type === "generic_web_search") {
+      if (connectorUsesCredential(connector)) {
         tasks.push(loadCredentialStatus(selectedConnectorProvider(connector)));
+      }
+      if (connector.connector_type === "independent_web_discovery") {
+        tasks.push(loadIndependentConnectorData(connector.id));
+      } else {
+        setWebSeeds([]);
+        setWebDomains([]);
+        setWebPages([]);
+        setWebPagesTotal(0);
       }
       await Promise.all(tasks);
     } catch (error) {
@@ -933,11 +1403,21 @@ export default function AugmisBusinessConnectorsPage() {
   async function openDiscoveryDrawer(discovery: AugmisBusinessDiscovery) {
     setSelectedDiscovery(discovery);
     setDiscoveryDrawerOpen(true);
+    setShowFullRequirement(false);
+    setShowSourceDetails(false);
     setDiscoveryTranslationView(discovery.active_translation ? "english" : "original");
     try {
-      const result = await getAugmisBusinessDiscovery(discovery.id);
+      const [result, intelligenceResult, deepAssessmentResult, historyResult] = await Promise.all([
+        getAugmisBusinessDiscovery(discovery.id),
+        getAugmisBusinessDiscoveryCommercialIntelligence(discovery.id),
+        getAugmisBusinessDiscoveryDeepAssessment(discovery.id),
+        listAugmisBusinessDiscoveryDeepAssessments(discovery.id),
+      ]);
       setSelectedDiscovery(result.data);
       setSelectedDiscoveryDuplicates(result.duplicates || []);
+      setSelectedDiscoveryIntelligence(intelligenceResult.data);
+      setSelectedDiscoveryDeepAssessment(deepAssessmentResult.data);
+      setSelectedDiscoveryDeepAssessmentHistory(historyResult.data || []);
       setDiscoveryTranslationView(result.data.active_translation ? "english" : "original");
     } catch (error) {
       showToast(getBackendErrorMessage(error, "Unable to load discovery detail."), "error");
@@ -948,9 +1428,17 @@ export default function AugmisBusinessConnectorsPage() {
     setTranslatingDiscoveryId(discovery.id);
     try {
       const result = await translateAugmisBusinessDiscovery(discovery.id, { force });
-      const latest = await getAugmisBusinessDiscovery(discovery.id);
+      const [latest, intelligenceResult, deepAssessmentResult, historyResult] = await Promise.all([
+        getAugmisBusinessDiscovery(discovery.id),
+        getAugmisBusinessDiscoveryCommercialIntelligence(discovery.id),
+        getAugmisBusinessDiscoveryDeepAssessment(discovery.id),
+        listAugmisBusinessDiscoveryDeepAssessments(discovery.id),
+      ]);
       setSelectedDiscovery(latest.data);
       setSelectedDiscoveryDuplicates(latest.duplicates || []);
+      setSelectedDiscoveryIntelligence(intelligenceResult.data);
+      setSelectedDiscoveryDeepAssessment(deepAssessmentResult.data);
+      setSelectedDiscoveryDeepAssessmentHistory(historyResult.data || []);
       setDiscoveryTranslationView("english");
       await loadDiscoveries();
       showToast(result.cached ? "Saved English translation reused." : "Discovery translated to English.", "success");
@@ -961,8 +1449,51 @@ export default function AugmisBusinessConnectorsPage() {
     }
   }
 
+  async function handleDeepAssessDiscovery(discovery: AugmisBusinessDiscovery) {
+    setBusy(true);
+    setActiveActionLabel(`Assessing ${discovery.title}`);
+    try {
+      const result = await deepAssessAugmisBusinessDiscovery(discovery.id);
+      const [intelligenceResult, historyResult] = await Promise.all([
+        getAugmisBusinessDiscoveryCommercialIntelligence(discovery.id),
+        listAugmisBusinessDiscoveryDeepAssessments(discovery.id),
+      ]);
+      setSelectedDiscoveryDeepAssessment(result.data);
+      setSelectedDiscoveryDeepAssessmentHistory(historyResult.data || []);
+      setSelectedDiscoveryIntelligence(intelligenceResult.data);
+      await loadDiscoveries();
+      showToast("Deep assessment completed.", "success");
+    } catch (error) {
+      showToast(getBackendErrorMessage(error, "Deep assessment failed."), "error");
+    } finally {
+      setBusy(false);
+      setActiveActionLabel(null);
+    }
+  }
+
   async function refreshWorkspace() {
     await Promise.all([loadConnectors(), loadDiscoveries()]);
+  }
+
+  async function handleReprocessDiscoveryContent() {
+    setBusy(true);
+    setActiveActionLabel("Reprocessing discovery content");
+    try {
+      const result = await reprocessAugmisBusinessDiscoveryContent(100);
+      await loadDiscoveries();
+      if (selectedDiscovery) {
+        await openDiscoveryDrawer(selectedDiscovery);
+      }
+      showToast(
+        `Reprocessed ${result.data.count} discovery item${result.data.count === 1 ? "" : "s"}.`,
+        "success"
+      );
+    } catch (error) {
+      showToast(getBackendErrorMessage(error, "Unable to reprocess discovery content."), "error");
+    } finally {
+      setBusy(false);
+      setActiveActionLabel(null);
+    }
   }
 
   async function handleInlineProviderSave(connector: AugmisBusinessConnector) {
@@ -1036,6 +1567,82 @@ export default function AugmisBusinessConnectorsPage() {
     }
   }
 
+  function openSeedDialog(seed?: AugmisBusinessWebSeed | null) {
+    setEditingSeed(seed ?? null);
+    setSeedForm(buildWebSeedForm(seed ?? null));
+    setSeedDialogOpen(true);
+  }
+
+  async function handleSaveWebSeed() {
+    if (!selectedConnector) return;
+    setBusy(true);
+    setActiveActionLabel(editingSeed ? `Updating ${seedForm.name}` : `Adding ${seedForm.name}`);
+    try {
+      if (editingSeed) {
+        await updateAugmisBusinessWebSeed(selectedConnector.id, editingSeed.id, webSeedFormToPayload(seedForm));
+      } else {
+        await createAugmisBusinessWebSeed(selectedConnector.id, webSeedFormToPayload(seedForm));
+      }
+      await loadIndependentConnectorData(selectedConnector.id);
+      setSeedDialogOpen(false);
+      setEditingSeed(null);
+      showToast(editingSeed ? "Seed updated." : "Seed added.", "success");
+    } catch (error) {
+      showToast(getBackendErrorMessage(error, "Unable to save web seed."), "error");
+    } finally {
+      setBusy(false);
+      setActiveActionLabel(null);
+    }
+  }
+
+  async function handleDeleteWebSeed(seed: AugmisBusinessWebSeed) {
+    if (!selectedConnector) return;
+    setBusy(true);
+    setActiveActionLabel(`Removing ${seed.name}`);
+    try {
+      await deleteAugmisBusinessWebSeed(selectedConnector.id, seed.id);
+      await loadIndependentConnectorData(selectedConnector.id);
+      showToast("Seed removed.", "success");
+    } catch (error) {
+      showToast(getBackendErrorMessage(error, "Unable to delete web seed."), "error");
+    } finally {
+      setBusy(false);
+      setActiveActionLabel(null);
+    }
+  }
+
+  async function handleDomainApproval(domain: AugmisBusinessWebDomain, approval_status: string) {
+    if (!selectedConnector) return;
+    setBusy(true);
+    setActiveActionLabel(`Updating ${domain.domain}`);
+    try {
+      await updateAugmisBusinessWebDomain(selectedConnector.id, domain.id, { approval_status });
+      await loadIndependentConnectorData(selectedConnector.id);
+      showToast("Domain policy updated.", "success");
+    } catch (error) {
+      showToast(getBackendErrorMessage(error, "Unable to update domain policy."), "error");
+    } finally {
+      setBusy(false);
+      setActiveActionLabel(null);
+    }
+  }
+
+  async function handleDomainRecrawl(domain: AugmisBusinessWebDomain) {
+    if (!selectedConnector) return;
+    setBusy(true);
+    setActiveActionLabel(`Queueing ${domain.domain}`);
+    try {
+      await recrawlAugmisBusinessWebDomain(selectedConnector.id, domain.id);
+      await loadIndependentConnectorData(selectedConnector.id);
+      showToast("Domain re-crawl queued.", "success");
+    } catch (error) {
+      showToast(getBackendErrorMessage(error, "Unable to queue domain re-crawl."), "error");
+    } finally {
+      setBusy(false);
+      setActiveActionLabel(null);
+    }
+  }
+
   async function handleSaveConnectorProvider() {
     if (!selectedConnector) return;
     const provider = selectedConnectorProvider(selectedConnector);
@@ -1099,13 +1706,22 @@ export default function AugmisBusinessConnectorsPage() {
     }
   }
 
-  async function handleTestCredential(provider: string, transientApiKey?: string) {
+  async function handleTestCredential(
+    provider: string,
+    transientCredential?: { apiKey?: string; appId?: string; appKey?: string }
+  ) {
     setBusy(true);
     setActiveActionLabel(`Testing ${provider} credential`);
     try {
       const result = await testAugmisBusinessConnectorCredential(
         provider,
-        transientApiKey ? { api_key: transientApiKey } : {}
+        transientCredential
+          ? {
+              api_key: transientCredential.apiKey || undefined,
+              app_id: transientCredential.appId || undefined,
+              app_key: transientCredential.appKey || undefined,
+            }
+          : {}
       );
       setCredentialStatuses((current) => ({
         ...current,
@@ -1129,16 +1745,16 @@ export default function AugmisBusinessConnectorsPage() {
     setActiveActionLabel(`Saving ${provider} credential`);
     try {
       const result = await saveAugmisBusinessConnectorCredential(provider, {
-        api_key: credentialFormValue,
+        api_key: credentialForm.apiKey || undefined,
+        app_id: credentialForm.appId || undefined,
+        app_key: credentialForm.appKey || undefined,
       });
       setCredentialStatuses((current) => ({
         ...current,
         [provider]: result.data,
       }));
       setCredentialDialogOpen(false);
-      setCredentialFormValue("");
-      setCredentialShowValue(false);
-      setCredentialTestMessage(null);
+      resetCredentialForm();
       showToast("Provider credential saved.", "success");
     } catch (error) {
       const message = getBackendErrorMessage(error, "Unable to save provider credential.");
@@ -1328,14 +1944,14 @@ export default function AugmisBusinessConnectorsPage() {
 
   if (!canRead) {
     return (
-      <OutletPage
+      <BusinessPageFrame
         title="Connectors"
         description="Discovery connectors, scans, and inbox review remain within your AUGMIS workspace."
       >
         <Alert severity="warning">
           You do not currently have permission to view listener connectors or discoveries.
         </Alert>
-      </OutletPage>
+      </BusinessPageFrame>
     );
   }
 
@@ -1348,10 +1964,15 @@ export default function AugmisBusinessConnectorsPage() {
   const selectedDiscoveryRawContent = selectedDiscovery
     ? extractDiscoveryRawContent(selectedDiscovery)
     : null;
+  const selectedDiscoveryNormalizedContent = extractDiscoveryNormalizedContent(selectedDiscovery);
+  const selectedRequirementContent = requirementDisplayContent(
+    selectedDiscovery,
+    discoveryTranslationView
+  );
 
   return (
     <>
-      <OutletPage
+      <BusinessPageFrame
         title="Connectors"
         description="Manage live web discovery scans, review staged findings, and import verified opportunities into AUGMIS Business."
       >
@@ -1436,7 +2057,7 @@ export default function AugmisBusinessConnectorsPage() {
                     </Typography>
                   </Stack>
                   <Typography sx={{ color: "#475569", fontSize: 13 }}>
-                    Web Opportunity Search and TED European Procurement are the live production listeners. The fixture connector remains available for regression-safe testing.
+                    Web Opportunity Search, TED European Procurement, and Freelancer Marketplace are the live production listeners. The fixture connector remains available for regression-safe testing.
                   </Typography>
                 </Stack>
                 <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap" }}>
@@ -1562,22 +2183,32 @@ export default function AugmisBusinessConnectorsPage() {
                                 </Button>
                               ) : null}
                             </Stack>
+                          ) : connector.connector_type === "freelancer_marketplace" ? (
+                            <Chip
+                              label={connector.configuration_json.mode === "mock" ? "Freelancer / Mock" : "Freelancer"}
+                              size="small"
+                              sx={{ borderRadius: "8px", bgcolor: "#F5F3FF", color: "#6D28D9", border: "1px solid #DDD6FE" }}
+                            />
                           ) : connector.connector_type === "ted_procurement" ? (
                             <Chip
                               label="TED"
                               size="small"
                               sx={{ borderRadius: "8px", bgcolor: "#ECFDF3", color: "#0F766E", border: "1px solid #A7F3D0" }}
                             />
+                          ) : connector.connector_type === "remote_job_feed" ? (
+                            <Chip label="Remote OK" size="small" sx={{ borderRadius: "8px", bgcolor: "#ECFEFF", color: "#0F766E", border: "1px solid #A5F3FC" }} />
+                          ) : connector.connector_type === "job_board_api" ? (
+                            <Chip label="Arbeitnow" size="small" sx={{ borderRadius: "8px", bgcolor: "#F0FDF4", color: "#15803D", border: "1px solid #BBF7D0" }} />
+                          ) : connector.connector_type === "remote_job_api" ? (
+                            <Chip label="Remotive" size="small" sx={{ borderRadius: "8px", bgcolor: "#EEF2FF", color: "#4338CA", border: "1px solid #C7D2FE" }} />
+                          ) : connector.connector_type === "job_search_api" ? (
+                            <Chip label="Adzuna" size="small" sx={{ borderRadius: "8px", bgcolor: "#FFF7ED", color: "#C2410C", border: "1px solid #FED7AA" }} />
                           ) : (
                             "—"
                           )}
                         </TableCell>
                         <TableCell sx={{ textTransform: "capitalize" }}>
-                          {connector.source_category === "search"
-                            ? "Web Search"
-                            : connector.source_category === "procurement"
-                              ? "Public Procurement"
-                              : connector.source_category}
+                          {connectorCategoryDisplay(connector)}
                         </TableCell>
                         <TableCell>
                           <Chip
@@ -1726,8 +2357,7 @@ export default function AugmisBusinessConnectorsPage() {
                                   void loadCredentialStatus(provider.provider_code);
                                   setCredentialDialogMode(provider.credential_configured ? "replace" : "configure");
                                   setCredentialDialogOpen(true);
-                                  setCredentialTestMessage(null);
-                                  setCredentialShowValue(false);
+                                  resetCredentialForm();
                                 }}
                               >
                                 <VisibilityOutlinedIcon fontSize="small" sx={{ color: "#2563EB" }} />
@@ -1772,7 +2402,7 @@ export default function AugmisBusinessConnectorsPage() {
             <Box
               sx={{
                 px: 2.2,
-                py: 1.5,
+                py: 0.72,
                 background: "linear-gradient(90deg, #DCFCE7 0%, #F8FAFC 100%)",
                 borderBottom: "1px solid #E2E8F0",
               }}
@@ -1782,131 +2412,162 @@ export default function AugmisBusinessConnectorsPage() {
                 spacing={1.5}
                 sx={{ justifyContent: "space-between", alignItems: { lg: "center" } }}
               >
-                <Stack spacing={0.35}>
+                <Stack spacing={0.1}>
                   <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
-                    <TravelExploreOutlinedIcon sx={{ color: "#15803D", fontSize: 20 }} />
+                    <TravelExploreOutlinedIcon sx={{ color: "#15803D", fontSize: 18 }} />
                     <Typography sx={{ fontWeight: 700, color: "#0F172A" }}>Discovery Inbox</Typography>
                   </Stack>
-                  <Typography sx={{ color: "#475569", fontSize: 13 }}>
+                  <Typography sx={{ color: "#475569", fontSize: 12, lineHeight: 1.25 }}>
                     Review search-driven discoveries, inspect source evidence, and import only verified opportunities.
                   </Typography>
-                </Stack>
-                <Stack
-                  direction={{ xs: "column", md: "row" }}
-                  spacing={1}
-                  sx={{
-                    width: "100%",
-                    minWidth: 0,
-                    flexWrap: "wrap",
-                    justifyContent: { md: "flex-end" },
-                    "& .MuiTextField-root": {
-                      minWidth: { xs: "100%", md: 0 },
-                    },
-                  }}
-                >
-                  <TextField
-                    size="small"
-                    value={search}
-                    onChange={(event) => {
-                      setSearch(event.target.value);
-                      setDiscoveryPage(0);
-                    }}
-                    placeholder="Search title, organisation, summary"
-                    sx={{ flex: { md: "1 1 300px" }, minWidth: 0 }}
-                    slotProps={{
-                      input: {
-                        startAdornment: (
-                          <InputAdornment position="start">
-                            <SearchRoundedIcon fontSize="small" />
-                          </InputAdornment>
-                        ),
-                      },
-                    }}
-                  />
-                  <TextField
-                    select
-                    size="small"
-                    label="Source"
-                    value={sourceCategoryFilter}
-                    onChange={(event) => {
-                      setSourceCategoryFilter(event.target.value);
-                      setDiscoveryPage(0);
-                    }}
-                    sx={{ width: { xs: "100%", md: 150 } }}
-                  >
-                    <MenuItem value="all">All sources</MenuItem>
-                    <MenuItem value="search">Web Opportunity Search</MenuItem>
-                    <MenuItem value="procurement">TED</MenuItem>
-                    <MenuItem value="fixture">Fixture</MenuItem>
-                  </TextField>
-                  <TextField
-                    select
-                    size="small"
-                    label="Status"
-                    value={statusFilter}
-                    onChange={(event) => {
-                      setStatusFilter(event.target.value);
-                      setDiscoveryPage(0);
-                    }}
-                    sx={{ width: { xs: "100%", md: 150 } }}
-                    slotProps={{
-                      input: {
-                        startAdornment: (
-                          <InputAdornment position="start">
-                            <FilterAltOutlinedIcon fontSize="small" />
-                          </InputAdornment>
-                        ),
-                      },
-                    }}
-                  >
-                    <MenuItem value="all">All statuses</MenuItem>
-                    <MenuItem value="new">New</MenuItem>
-                    <MenuItem value="shortlisted">Shortlisted</MenuItem>
-                    <MenuItem value="duplicate">Duplicate</MenuItem>
-                    <MenuItem value="rejected">Rejected</MenuItem>
-                    <MenuItem value="imported">Imported</MenuItem>
-                    <MenuItem value="irrelevant">Irrelevant</MenuItem>
-                  </TextField>
-                  <TextField
-                    select
-                    size="small"
-                    label="Relevance"
-                    value={relevanceFilter}
-                    onChange={(event) => {
-                      setRelevanceFilter(event.target.value);
-                      setDiscoveryPage(0);
-                    }}
-                    sx={{ width: { xs: "100%", md: 150 } }}
-                  >
-                    <MenuItem value="all">All relevance</MenuItem>
-                    <MenuItem value="strong">Strong</MenuItem>
-                    <MenuItem value="good">Good</MenuItem>
-                    <MenuItem value="possible">Possible</MenuItem>
-                    <MenuItem value="weak">Weak</MenuItem>
-                    <MenuItem value="low">Low</MenuItem>
-                  </TextField>
-                  <TextField
-                    select
-                    size="small"
-                    label="Sort"
-                    value={sortBy}
-                    onChange={(event) => {
-                      setSortBy(event.target.value);
-                      setDiscoveryPage(0);
-                    }}
-                    sx={{ width: { xs: "100%", md: 150 } }}
-                  >
-                    <MenuItem value="newest">Newest</MenuItem>
-                    <MenuItem value="highest_match">Highest Match</MenuItem>
-                    <MenuItem value="lowest_match">Lowest Match</MenuItem>
-                    <MenuItem value="closing_soon">Closing Soon</MenuItem>
-                  </TextField>
                 </Stack>
               </Stack>
             </Box>
             <Box sx={{ p: 2 }}>
               {discoveries.length ? (
                 <>
+                  <Box
+                    sx={{
+                      mb: 1.25,
+                      pb: 1.25,
+                      borderBottom: "1px solid #E2E8F0",
+                    }}
+                  >
+                    <Stack
+                      direction={{ xs: "column", md: "row" }}
+                      spacing={1}
+                      sx={{
+                        width: "100%",
+                        minWidth: 0,
+                        flexWrap: "wrap",
+                        justifyContent: { md: "space-between" },
+                        alignItems: { md: "center" },
+                        "& .MuiTextField-root": {
+                          minWidth: { xs: "100%", md: 0 },
+                        },
+                      }}
+                    >
+                      <Stack direction={{ xs: "column", md: "row" }} spacing={1} sx={{ flex: { md: "1 1 auto" }, minWidth: 0 }}>
+                        {canAdmin ? (
+                          <Button
+                            variant="outlined"
+                            size="small"
+                            startIcon={<AutorenewRoundedIcon />}
+                            disabled={busy}
+                            onClick={() => void handleReprocessDiscoveryContent()}
+                            sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700 }}
+                          >
+                            Reprocess Content
+                          </Button>
+                        ) : null}
+                        <TextField
+                          size="small"
+                          value={search}
+                          onChange={(event) => {
+                            setSearch(event.target.value);
+                            setDiscoveryPage(0);
+                          }}
+                          placeholder="Search title, organisation, summary"
+                          sx={{ flex: { md: "1 1 340px" }, minWidth: 0 }}
+                          slotProps={{
+                            input: {
+                              startAdornment: (
+                                <InputAdornment position="start">
+                                  <SearchRoundedIcon fontSize="small" />
+                                </InputAdornment>
+                              ),
+                            },
+                          }}
+                        />
+                      </Stack>
+                      <Stack direction={{ xs: "column", md: "row" }} spacing={1} sx={{ minWidth: 0 }}>
+                        <TextField
+                          select
+                          size="small"
+                          label="Source"
+                          value={sourceCategoryFilter}
+                          onChange={(event) => {
+                            setSourceCategoryFilter(event.target.value);
+                            setDiscoveryPage(0);
+                          }}
+                          sx={{ width: { xs: "100%", md: 150 } }}
+                        >
+                          <MenuItem value="all">All sources</MenuItem>
+                          <MenuItem value="company_source">AUGMIS Web</MenuItem>
+                          <MenuItem value="search">Web Opportunity Search</MenuItem>
+                          <MenuItem value="procurement">TED</MenuItem>
+                          <MenuItem value="marketplace">Freelancer</MenuItem>
+                          <MenuItem value="remoteok">Remote OK</MenuItem>
+                          <MenuItem value="arbeitnow">Arbeitnow</MenuItem>
+                          <MenuItem value="remotive">Remotive</MenuItem>
+                          <MenuItem value="adzuna">Adzuna</MenuItem>
+                          <MenuItem value="fixture">Fixture</MenuItem>
+                        </TextField>
+                        <TextField
+                          select
+                          size="small"
+                          label="Status"
+                          value={statusFilter}
+                          onChange={(event) => {
+                            setStatusFilter(event.target.value);
+                            setDiscoveryPage(0);
+                          }}
+                          sx={{ width: { xs: "100%", md: 150 } }}
+                          slotProps={{
+                            input: {
+                              startAdornment: (
+                                <InputAdornment position="start">
+                                  <FilterAltOutlinedIcon fontSize="small" />
+                                </InputAdornment>
+                              ),
+                            },
+                          }}
+                        >
+                          <MenuItem value="all">All statuses</MenuItem>
+                          <MenuItem value="new">New</MenuItem>
+                          <MenuItem value="shortlisted">Shortlisted</MenuItem>
+                          <MenuItem value="duplicate">Duplicate</MenuItem>
+                          <MenuItem value="rejected">Rejected</MenuItem>
+                          <MenuItem value="imported">Imported</MenuItem>
+                          <MenuItem value="irrelevant">Irrelevant</MenuItem>
+                        </TextField>
+                        <TextField
+                          select
+                          size="small"
+                          label="Relevance"
+                          value={relevanceFilter}
+                          onChange={(event) => {
+                            setRelevanceFilter(event.target.value);
+                            setDiscoveryPage(0);
+                          }}
+                          sx={{ width: { xs: "100%", md: 150 } }}
+                        >
+                          <MenuItem value="all">All relevance</MenuItem>
+                          <MenuItem value="strong">Strong</MenuItem>
+                          <MenuItem value="good">Good</MenuItem>
+                          <MenuItem value="possible">Possible</MenuItem>
+                          <MenuItem value="weak">Weak</MenuItem>
+                          <MenuItem value="low">Low</MenuItem>
+                        </TextField>
+                        <TextField
+                          select
+                          size="small"
+                          label="Sort"
+                          value={sortBy}
+                          onChange={(event) => {
+                            setSortBy(event.target.value);
+                            setDiscoveryPage(0);
+                          }}
+                          sx={{ width: { xs: "100%", md: 150 } }}
+                        >
+                          <MenuItem value="newest">Newest</MenuItem>
+                          <MenuItem value="highest_match">Highest Match</MenuItem>
+                          <MenuItem value="lowest_match">Lowest Match</MenuItem>
+                          <MenuItem value="closing_soon">Closing Soon</MenuItem>
+                        </TextField>
+                      </Stack>
+                    </Stack>
+                  </Box>
                   <Table
                     size="small"
                     sx={{
@@ -1917,28 +2578,35 @@ export default function AugmisBusinessConnectorsPage() {
                         py: 1.05,
                         verticalAlign: "top",
                       },
+                      "& thead th": {
+                        py: 0.8,
+                        verticalAlign: "middle",
+                        lineHeight: 1.2,
+                      },
                     }}
                   >
                     <TableHead>
                       <TableRow>
-                        <TableCell sx={{ width: { md: 108 } }}>Discovered</TableCell>
-                        <TableCell sx={{ width: { md: 320 } }}>Opportunity</TableCell>
-                        <TableCell sx={{ width: { md: 160 } }}>Organisation</TableCell>
-                        <TableCell sx={{ width: { md: 112 } }}>Source</TableCell>
-                        <TableCell sx={{ width: { md: 92 } }}>Country</TableCell>
-                        <TableCell sx={{ width: { md: 112 } }}>Closing</TableCell>
-                        <TableCell sx={{ width: { md: 118 } }}>Preliminary Match</TableCell>
-                        <TableCell sx={{ width: { md: 104 } }}>Relevance Band</TableCell>
+                        <TableCell sx={{ width: { md: 520 } }}>Opportunity</TableCell>
+                        <TableCell sx={{ width: { md: 132 } }}>Source</TableCell>
+                        <TableCell sx={{ width: { md: 250 } }}>Closing</TableCell>
+                        <TableCell sx={{ width: { md: 104 } }}>Match</TableCell>
+                        <TableCell sx={{ width: { md: 118 } }}>Commercial</TableCell>
+                        <TableCell sx={{ width: { md: 104 } }}>Recommendation</TableCell>
                         <TableCell sx={{ width: { md: 90 } }}>Status</TableCell>
-                        <TableCell align="right" sx={{ width: { md: 64 } }}>Actions</TableCell>
                       </TableRow>
                     </TableHead>
                     <TableBody>
                       {discoveries.map((discovery) => (
-                        <TableRow key={discovery.id} hover>
-                          <TableCell sx={{ color: "#475569", fontSize: 12, whiteSpace: "normal", overflowWrap: "anywhere" }}>
-                            {formatDate(discovery.discovered_at)}
-                          </TableCell>
+                        <TableRow
+                          key={discovery.id}
+                          hover
+                          selected={selectedDiscovery?.id === discovery.id}
+                          sx={{
+                            "&.Mui-selected": { bgcolor: "#F8FBFF" },
+                            "&.Mui-selected:hover": { bgcolor: "#EFF6FF" },
+                          }}
+                        >
                           <TableCell>
                             <Stack spacing={0.55} sx={{ minWidth: 0 }}>
                               <Button
@@ -1986,55 +2654,103 @@ export default function AugmisBusinessConnectorsPage() {
                                   </Typography>
                                 ) : null}
                               </Stack>
+                              <Typography sx={{ fontSize: 12.5, color: "#0F172A", fontWeight: 600 }}>
+                                {discovery.organization_name || "Not available"}
+                              </Typography>
+                              <Typography sx={{ fontSize: 12, color: "#64748B" }}>
+                                {discovery.country || "Not available"}
+                              </Typography>
+                              <Stack direction="row" spacing={0.35} sx={{ flexWrap: "wrap", rowGap: 0.5, pt: 0.45 }}>
+                                {discovery.source_url ? (
+                                  <Tooltip title="Open Source">
+                                    <span>
+                                      <IconButton
+                                        size="small"
+                                        component="a"
+                                        href={discovery.source_url}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        sx={{ border: "1px solid #E2E8F0", bgcolor: "#FFFFFF" }}
+                                      >
+                                        <OpenInNewRoundedIcon fontSize="small" sx={{ color: "#475569" }} />
+                                      </IconButton>
+                                    </span>
+                                  </Tooltip>
+                                ) : null}
+                                <Tooltip title="View">
+                                  <span>
+                                    <IconButton
+                                      size="small"
+                                      onClick={() => void openDiscoveryDrawer(discovery)}
+                                      sx={{ border: "1px solid #DBEAFE", bgcolor: "#F8FBFF" }}
+                                    >
+                                      <PreviewOutlinedIcon fontSize="small" sx={{ color: "#2563EB" }} />
+                                    </IconButton>
+                                  </span>
+                                </Tooltip>
+                                <Tooltip title="Shortlist">
+                                  <span>
+                                    <IconButton
+                                      size="small"
+                                      disabled={!canAdmin || busy || discovery.discovery_status === "imported"}
+                                      onClick={() => void handleDiscoveryAction("shortlist", discovery)}
+                                      sx={{ border: "1px solid #D1FADF", bgcolor: "#F6FEF9" }}
+                                    >
+                                      <TaskAltOutlinedIcon fontSize="small" sx={{ color: "#15803D" }} />
+                                    </IconButton>
+                                  </span>
+                                </Tooltip>
+                                <Tooltip title="Reject">
+                                  <span>
+                                    <IconButton
+                                      size="small"
+                                      disabled={!canAdmin || busy || discovery.discovery_status === "imported"}
+                                      onClick={() => void handleDiscoveryAction("reject", discovery)}
+                                      sx={{ border: "1px solid #FECACA", bgcolor: "#FEF2F2" }}
+                                    >
+                                      <ErrorOutlineRoundedIcon fontSize="small" sx={{ color: "#B42318" }} />
+                                    </IconButton>
+                                  </span>
+                                </Tooltip>
+                                <Tooltip title="Import as Opportunity">
+                                  <span>
+                                    <IconButton
+                                      size="small"
+                                      disabled={!canCreate || busy || discovery.discovery_status === "duplicate" || discovery.discovery_status === "imported"}
+                                      onClick={() => void handleDiscoveryAction("import", discovery)}
+                                      sx={{ border: "1px solid #C7D2FE", bgcolor: "#EEF2FF" }}
+                                    >
+                                      <ImportExportOutlinedIcon fontSize="small" sx={{ color: "#4338CA" }} />
+                                    </IconButton>
+                                  </span>
+                                </Tooltip>
+                              </Stack>
                             </Stack>
                           </TableCell>
-                          <TableCell sx={{ color: "#0F172A" }}>
-                            <Box
-                              sx={{
-                                display: "-webkit-box",
-                                WebkitBoxOrient: "vertical",
-                                WebkitLineClamp: 2,
-                                overflow: "hidden",
-                                whiteSpace: "normal",
-                                overflowWrap: "anywhere",
-                              }}
-                            >
-                              {discovery.organization_name || "Not available"}
-                            </Box>
-                          </TableCell>
                           <TableCell sx={{ color: "#475569" }}>
-                            <Box
+                            <Chip
+                              size="small"
+                              label={discoverySourceDisplay(discovery)}
                               sx={{
-                                display: "-webkit-box",
-                                WebkitBoxOrient: "vertical",
-                                WebkitLineClamp: 2,
-                                overflow: "hidden",
-                                whiteSpace: "normal",
-                                overflowWrap: "anywhere",
+                                maxWidth: "100%",
+                                border: "1px solid",
+                                fontWeight: 700,
+                                ...discoverySourceChipStyle(discovery),
                               }}
-                            >
-                              {discovery.source_type === "public_procurement"
-                                ? "TED / EU Procurement"
-                                : discovery.source_name}
-                            </Box>
-                          </TableCell>
-                          <TableCell sx={{ color: "#475569" }}>
-                            <Box
-                              sx={{
-                                display: "-webkit-box",
-                                WebkitBoxOrient: "vertical",
-                                WebkitLineClamp: 2,
-                                overflow: "hidden",
-                                whiteSpace: "normal",
-                                overflowWrap: "anywhere",
-                              }}
-                            >
-                              {discovery.country || "Not available"}
-                            </Box>
+                            />
                           </TableCell>
                           <TableCell sx={{ color: "#475569", fontSize: 12, whiteSpace: "normal", overflowWrap: "anywhere" }}>
                             <Stack spacing={0.5}>
-                              <Typography sx={{ fontSize: 12, color: "#475569" }}>
+                              <Typography sx={{ fontSize: 11, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: ".04em" }}>
+                                Discovered
+                              </Typography>
+                              <Typography sx={{ fontSize: 11.5, color: "#64748B" }}>
+                                {formatDate(discovery.discovered_at)}
+                              </Typography>
+                              <Typography sx={{ fontSize: 12, fontWeight: 700, color: "#0F172A" }}>
+                                {renderRelativeClosing(discovery.closing_date)}
+                              </Typography>
+                              <Typography sx={{ fontSize: 11.5, color: "#64748B" }}>
                                 {formatDate(discovery.closing_date)}
                               </Typography>
                               <Chip
@@ -2045,21 +2761,48 @@ export default function AugmisBusinessConnectorsPage() {
                             </Stack>
                           </TableCell>
                           <TableCell>
-                            <Chip
-                              label={
-                                discovery.preliminary_relevance_score == null
-                                  ? "Not scored"
-                                  : `Preliminary ${discovery.preliminary_relevance_score.toFixed(1)}`
-                              }
-                              size="small"
-                              sx={{ bgcolor: "#EFF6FF", color: "#1D4ED8", maxWidth: "100%" }}
-                            />
+                            <Stack spacing={0.35}>
+                              <Typography sx={{ fontSize: 13, fontWeight: 800, color: "#0F172A" }}>
+                                {discovery.preliminary_relevance_score == null
+                                  ? "N/A"
+                                  : Math.round(discovery.preliminary_relevance_score)}
+                              </Typography>
+                              <Chip
+                                label={discovery.relevance_band || "Unknown"}
+                                size="small"
+                                sx={{ textTransform: "capitalize", border: "1px solid", maxWidth: "100%", ...discoveryRelevanceBandChip(discovery.relevance_band) }}
+                              />
+                            </Stack>
+                          </TableCell>
+                          <TableCell>
+                            <Stack spacing={0.35}>
+                              <Typography sx={{ fontSize: 13, fontWeight: 800, color: "#0F172A" }}>
+                                {discovery.commercial_priority_score == null
+                                  ? "N/A"
+                                  : Math.round(discovery.commercial_priority_score)}
+                              </Typography>
+                              <Chip
+                                label={`Priority ${discovery.commercial_priority_band || "?"}`}
+                                size="small"
+                                sx={{
+                                  textTransform: "capitalize",
+                                  border: "1px solid",
+                                  maxWidth: "100%",
+                                  ...discoveryPriorityBandChip(discovery.commercial_priority_band),
+                                }}
+                              />
+                            </Stack>
                           </TableCell>
                           <TableCell>
                             <Chip
-                              label={discovery.relevance_band || "Unknown"}
+                              label={(discovery.commercial_recommendation || "watch").toUpperCase()}
                               size="small"
-                              sx={{ textTransform: "capitalize", border: "1px solid", maxWidth: "100%", ...discoveryRelevanceBandChip(discovery.relevance_band) }}
+                              sx={{
+                                textTransform: "uppercase",
+                                border: "1px solid",
+                                maxWidth: "100%",
+                                ...discoveryRecommendationChip(discovery.commercial_recommendation),
+                              }}
                             />
                           </TableCell>
                           <TableCell>
@@ -2068,53 +2811,6 @@ export default function AugmisBusinessConnectorsPage() {
                               size="small"
                               sx={{ textTransform: "capitalize", border: "1px solid", maxWidth: "100%", ...discoveryStatusChip(discovery.discovery_status) }}
                             />
-                          </TableCell>
-                          <TableCell align="right">
-                            <Stack direction="row" spacing={0.15} sx={{ justifyContent: "flex-end", flexWrap: "nowrap" }}>
-                              {discovery.source_url ? (
-                                <Tooltip title="Open Source">
-                                  <span>
-                                    <IconButton
-                                      size="small"
-                                      component="a"
-                                      href={discovery.source_url}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                    >
-                                      <OpenInNewRoundedIcon fontSize="small" sx={{ color: "#475569" }} />
-                                    </IconButton>
-                                  </span>
-                                </Tooltip>
-                              ) : null}
-                              <Tooltip title="View">
-                                <span>
-                                  <IconButton size="small" onClick={() => void openDiscoveryDrawer(discovery)}>
-                                    <PreviewOutlinedIcon fontSize="small" sx={{ color: "#2563EB" }} />
-                                  </IconButton>
-                                </span>
-                              </Tooltip>
-                              <Tooltip title="Shortlist">
-                                <span>
-                                  <IconButton size="small" disabled={!canAdmin || busy || discovery.discovery_status === "imported"} onClick={() => void handleDiscoveryAction("shortlist", discovery)}>
-                                    <TaskAltOutlinedIcon fontSize="small" sx={{ color: "#15803D" }} />
-                                  </IconButton>
-                                </span>
-                              </Tooltip>
-                              <Tooltip title="Reject">
-                                <span>
-                                  <IconButton size="small" disabled={!canAdmin || busy || discovery.discovery_status === "imported"} onClick={() => void handleDiscoveryAction("reject", discovery)}>
-                                    <ErrorOutlineRoundedIcon fontSize="small" sx={{ color: "#B42318" }} />
-                                  </IconButton>
-                                </span>
-                              </Tooltip>
-                              <Tooltip title="Import as Opportunity">
-                                <span>
-                                  <IconButton size="small" disabled={!canCreate || busy || discovery.discovery_status === "duplicate" || discovery.discovery_status === "imported"} onClick={() => void handleDiscoveryAction("import", discovery)}>
-                                    <ImportExportOutlinedIcon fontSize="small" sx={{ color: "#4338CA" }} />
-                                  </IconButton>
-                                </span>
-                              </Tooltip>
-                            </Stack>
                           </TableCell>
                         </TableRow>
                       ))}
@@ -2139,7 +2835,7 @@ export default function AugmisBusinessConnectorsPage() {
                     No discoveries in the inbox yet
                   </Typography>
                   <Typography sx={{ mt: 0.75, color: "#475569" }}>
-                    Run Web Opportunity Search or TED for live discovery, or use the fixture connector for safe regression testing.
+                    Run Web Opportunity Search, TED, Freelancer, or the connected job feeds for live discovery, or use the fixture connector for safe regression testing.
                   </Typography>
                   <Stack direction="row" spacing={1} sx={{ mt: 2, justifyContent: "center", flexWrap: "wrap" }}>
                     {webConnector ? (
@@ -2164,6 +2860,50 @@ export default function AugmisBusinessConnectorsPage() {
                         Scan TED
                       </Button>
                     ) : null}
+                    {freelancerConnector ? (
+                      <Button
+                        variant="contained"
+                        startIcon={<PlayCircleOutlineRoundedIcon />}
+                        onClick={() => void handleScan(freelancerConnector)}
+                        disabled={!canScan || busy}
+                        sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700, bgcolor: "#7C3AED" }}
+                      >
+                        Scan Freelancer
+                      </Button>
+                    ) : null}
+                    {remoteOkConnector ? (
+                      <Button
+                        variant="contained"
+                        startIcon={<PlayCircleOutlineRoundedIcon />}
+                        onClick={() => void handleScan(remoteOkConnector)}
+                        disabled={!canScan || busy}
+                        sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700, bgcolor: "#0F766E" }}
+                      >
+                        Scan Remote OK
+                      </Button>
+                    ) : null}
+                    {arbeitnowConnector ? (
+                      <Button
+                        variant="contained"
+                        startIcon={<PlayCircleOutlineRoundedIcon />}
+                        onClick={() => void handleScan(arbeitnowConnector)}
+                        disabled={!canScan || busy}
+                        sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700, bgcolor: "#15803D" }}
+                      >
+                        Scan Arbeitnow
+                      </Button>
+                    ) : null}
+                    {remotiveConnector ? (
+                      <Button
+                        variant="contained"
+                        startIcon={<PlayCircleOutlineRoundedIcon />}
+                        onClick={() => void handleScan(remotiveConnector)}
+                        disabled={!canScan || busy}
+                        sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700, bgcolor: "#4338CA" }}
+                      >
+                        Scan Remotive
+                      </Button>
+                    ) : null}
                     {fixtureConnector ? (
                       <Button
                         variant="outlined"
@@ -2181,7 +2921,7 @@ export default function AugmisBusinessConnectorsPage() {
             </Box>
           </Paper>
         </Stack>
-      </OutletPage>
+      </BusinessPageFrame>
 
       <Drawer anchor="right" open={connectorDrawerOpen} onClose={() => setConnectorDrawerOpen(false)}>
         <Box sx={{ width: { xs: "100vw", sm: 560 }, p: 2.2 }}>
@@ -2447,7 +3187,7 @@ export default function AugmisBusinessConnectorsPage() {
                 </Box>
               </Paper>
 
-              {selectedConnector.connector_type === "generic_web_search" ? (
+              {connectorUsesCredential(selectedConnector) ? (
                 <Paper elevation={0} sx={{ p: 1.5, borderRadius: "8px", border: "1px solid #E2E8F0" }}>
                   <Stack
                     direction={{ xs: "column", sm: "row" }}
@@ -2455,63 +3195,82 @@ export default function AugmisBusinessConnectorsPage() {
                     sx={{ justifyContent: "space-between", alignItems: { sm: "center" } }}
                   >
                     <Box sx={{ minWidth: 0 }}>
-                      <Typography sx={{ fontWeight: 700, color: "#0F172A" }}>Search Provider</Typography>
+                      <Typography sx={{ fontWeight: 700, color: "#0F172A" }}>
+                        {selectedConnector.connector_type === "freelancer_marketplace"
+                          ? "Freelancer Credential"
+                          : selectedConnector.connector_type === "job_search_api"
+                            ? "Adzuna Credential"
+                            : "Search Provider"}
+                      </Typography>
                       <Typography sx={{ mt: 0.55, color: "#475569", fontSize: 13 }}>
-                        Choose which provider powers Web Opportunity Search. No fallback is applied automatically.
+                        {selectedConnector.connector_type === "freelancer_marketplace"
+                          ? "Official Freelancer API access uses a tenant-scoped encrypted access token."
+                          : selectedConnector.connector_type === "job_search_api"
+                            ? "Adzuna uses a tenant-scoped encrypted App ID and App Key."
+                          : "Choose which provider powers Web Opportunity Search. No fallback is applied automatically."}
                       </Typography>
                     </Box>
-                    <Button
-                      variant="contained"
-                      size="small"
-                      onClick={() => void handleSaveConnectorProvider()}
-                      disabled={!canAdmin || busy}
-                      sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700, bgcolor: "#2563EB" }}
-                    >
-                      Save Provider
-                    </Button>
+                    {selectedConnector.connector_type === "generic_web_search" ? (
+                      <Button
+                        variant="contained"
+                        size="small"
+                        onClick={() => void handleSaveConnectorProvider()}
+                        disabled={!canAdmin || busy}
+                        sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700, bgcolor: "#2563EB" }}
+                      >
+                        Save Provider
+                      </Button>
+                    ) : null}
                   </Stack>
-                  <TextField
-                    select
-                    size="small"
-                    label="Search Provider"
-                    value={selectedConnectorProvider(selectedConnector)}
-                    onChange={(event) => {
-                      const nextProvider = event.target.value;
-                      setSelectedConnector((current) =>
-                        current
-                          ? {
-                              ...current,
-                              configuration_json: {
-                                ...current.configuration_json,
-                                provider: nextProvider,
-                              },
-                            }
-                          : current
-                      );
-                      if (!credentialStatuses[nextProvider]) {
-                        void loadCredentialStatus(nextProvider).catch((error) => {
-                          showToast(getBackendErrorMessage(error, "Unable to load provider credential status."), "error");
-                        });
-                      }
-                    }}
-                    sx={{ mt: 1.2, maxWidth: 280 }}
-                  >
-                    {searchProviders
-                      .filter(
-                        (provider) =>
-                          provider.enabled || provider.provider_code === selectedConnectorProvider(selectedConnector)
-                      )
-                      .map((provider) => (
-                        <MenuItem key={provider.id} value={provider.provider_code}>
-                          {provider.display_name}
-                        </MenuItem>
-                      ))}
-                  </TextField>
+                  {selectedConnector.connector_type === "generic_web_search" ? (
+                    <TextField
+                      select
+                      size="small"
+                      label="Search Provider"
+                      value={selectedConnectorProvider(selectedConnector)}
+                      onChange={(event) => {
+                        const nextProvider = event.target.value;
+                        setSelectedConnector((current) =>
+                          current
+                            ? {
+                                ...current,
+                                configuration_json: {
+                                  ...current.configuration_json,
+                                  provider: nextProvider,
+                                },
+                              }
+                            : current
+                        );
+                        if (!credentialStatuses[nextProvider]) {
+                          void loadCredentialStatus(nextProvider).catch((error) => {
+                            showToast(getBackendErrorMessage(error, "Unable to load provider credential status."), "error");
+                          });
+                        }
+                      }}
+                      sx={{ mt: 1.2, maxWidth: 280 }}
+                    >
+                      {searchProviders
+                        .filter(
+                          (provider) =>
+                            provider.enabled || provider.provider_code === selectedConnectorProvider(selectedConnector)
+                        )
+                        .map((provider) => (
+                          <MenuItem key={provider.id} value={provider.provider_code}>
+                            {provider.display_name}
+                          </MenuItem>
+                        ))}
+                    </TextField>
+                  ) : null}
                   <Stack direction="row" spacing={1} sx={{ mt: 1.1, alignItems: "center", flexWrap: "wrap" }}>
                     <Chip
-                      label={selectedProvider.toUpperCase()}
+                      label={selectedConnector.connector_type === "freelancer_marketplace" ? "FREELANCER" : selectedProvider.toUpperCase()}
                       size="small"
-                      sx={{ borderRadius: "8px", bgcolor: "#EFF6FF", color: "#1D4ED8", border: "1px solid #BFDBFE" }}
+                      sx={{
+                        borderRadius: "8px",
+                        bgcolor: selectedConnector.connector_type === "freelancer_marketplace" ? "#F5F3FF" : "#EFF6FF",
+                        color: selectedConnector.connector_type === "freelancer_marketplace" ? "#6D28D9" : "#1D4ED8",
+                        border: selectedConnector.connector_type === "freelancer_marketplace" ? "1px solid #DDD6FE" : "1px solid #BFDBFE",
+                      }}
                     />
                     <Chip
                       label={
@@ -2562,7 +3321,7 @@ export default function AugmisBusinessConnectorsPage() {
                   </Box>
                   {selectedCredentialStatus?.masked_hint ? (
                     <Typography sx={{ mt: 1.1, color: "#475569", fontSize: 13 }}>
-                      API Key: {selectedCredentialStatus.masked_hint}
+                      {providerSecretLabel(selectedProvider)}: {selectedCredentialStatus.masked_hint}
                     </Typography>
                   ) : null}
                   {selectedCredentialStatus?.storage_message ? (
@@ -2587,13 +3346,12 @@ export default function AugmisBusinessConnectorsPage() {
                           selectedCredentialStatus?.configured ? "replace" : "configure"
                         );
                         setCredentialDialogOpen(true);
-                        setCredentialTestMessage(null);
-                        setCredentialShowValue(false);
+                        resetCredentialForm();
                       }}
                       disabled={!canAdmin || busy || !selectedCredentialStatus?.storage_available}
                       sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700, bgcolor: "#2563EB" }}
                     >
-                      {selectedCredentialStatus?.configured ? "Replace Key" : "Configure Key"}
+                      {selectedCredentialStatus?.configured ? `Replace ${providerSecretLabel(selectedProvider)}` : `Configure ${providerSecretLabel(selectedProvider)}`}
                     </Button>
                     <Button
                       variant="outlined"
@@ -2612,10 +3370,469 @@ export default function AugmisBusinessConnectorsPage() {
                       disabled={!canAdmin || busy || selectedCredentialStatus?.credential_source !== "tenant_secret"}
                       sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700 }}
                     >
-                      Clear Stored Key
+                      {`Clear Stored ${providerSecretLabel(selectedProvider)}`}
                     </Button>
                   </Stack>
                 </Paper>
+              ) : null}
+
+              {selectedConnector.connector_type === "independent_web_discovery" ? (
+                <Stack spacing={1.5}>
+                  <Paper elevation={0} sx={{ p: 1.5, borderRadius: "8px", border: "1px solid #E2E8F0" }}>
+                    <Stack
+                      direction={{ xs: "column", sm: "row" }}
+                      spacing={1.2}
+                      sx={{ justifyContent: "space-between", alignItems: { sm: "center" } }}
+                    >
+                      <Box sx={{ minWidth: 0 }}>
+                        <Typography sx={{ fontWeight: 700, color: "#0F172A" }}>Independent Engine Settings</Typography>
+                        <Typography sx={{ mt: 0.55, color: "#475569", fontSize: 13 }}>
+                          First-party AUGMIS crawl and index configuration. No Tavily, Brave, or other external search-provider credential is required.
+                        </Typography>
+                      </Box>
+                      <Button
+                        variant="contained"
+                        size="small"
+                        onClick={() => void handleSaveRuntimeSettings()}
+                        disabled={!canAdmin || busy}
+                        sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700, bgcolor: "#2563EB" }}
+                      >
+                        Save Settings
+                      </Button>
+                    </Stack>
+                    <Box sx={{ mt: 1.2, display: "grid", gap: 1, gridTemplateColumns: { xs: "1fr", md: "repeat(2, minmax(0, 1fr))" } }}>
+                      <TextField size="small" label="Credential" value="None Required" disabled />
+                      <TextField size="small" label="Provider" value="AUGMIS Internal" disabled />
+                      <TextField
+                        select
+                        size="small"
+                        label="Allowed Domain Mode"
+                        value={String(selectedConnector.configuration_json.allowed_domain_mode || "approved_only")}
+                        onChange={(event) =>
+                          setSelectedConnector((current) =>
+                            current
+                              ? { ...current, configuration_json: { ...current.configuration_json, allowed_domain_mode: event.target.value } }
+                              : current
+                          )
+                        }
+                      >
+                        <MenuItem value="approved_only">Approved domains only</MenuItem>
+                        <MenuItem value="cross_domain_trusted">Trusted cross-domain links</MenuItem>
+                      </TextField>
+                      <TextField
+                        select
+                        size="small"
+                        label="Maximum Domains / Run"
+                        value={String(connectorNumberConfig(selectedConnector, "maximum_domains_per_run", 5))}
+                        onChange={(event) =>
+                          setSelectedConnector((current) =>
+                            current
+                              ? { ...current, configuration_json: { ...current.configuration_json, maximum_domains_per_run: Number(event.target.value) } }
+                              : current
+                          )
+                        }
+                      >
+                        <MenuItem value="1">1</MenuItem>
+                        <MenuItem value="3">3</MenuItem>
+                        <MenuItem value="5">5</MenuItem>
+                        <MenuItem value="10">10</MenuItem>
+                      </TextField>
+                      <TextField
+                        select
+                        size="small"
+                        label="Maximum Pages / Domain"
+                        value={String(connectorNumberConfig(selectedConnector, "maximum_pages_per_domain", 25))}
+                        onChange={(event) =>
+                          setSelectedConnector((current) =>
+                            current
+                              ? { ...current, configuration_json: { ...current.configuration_json, maximum_pages_per_domain: Number(event.target.value) } }
+                              : current
+                          )
+                        }
+                      >
+                        <MenuItem value="10">10</MenuItem>
+                        <MenuItem value="25">25</MenuItem>
+                        <MenuItem value="50">50</MenuItem>
+                      </TextField>
+                      <TextField
+                        select
+                        size="small"
+                        label="Maximum Total Pages / Run"
+                        value={String(connectorNumberConfig(selectedConnector, "maximum_total_pages_per_run", 100))}
+                        onChange={(event) =>
+                          setSelectedConnector((current) =>
+                            current
+                              ? { ...current, configuration_json: { ...current.configuration_json, maximum_total_pages_per_run: Number(event.target.value) } }
+                              : current
+                          )
+                        }
+                      >
+                        <MenuItem value="25">25</MenuItem>
+                        <MenuItem value="50">50</MenuItem>
+                        <MenuItem value="100">100</MenuItem>
+                        <MenuItem value="200">200</MenuItem>
+                      </TextField>
+                      <TextField
+                        select
+                        size="small"
+                        label="Maximum Depth"
+                        value={String(connectorNumberConfig(selectedConnector, "maximum_depth", 2))}
+                        onChange={(event) =>
+                          setSelectedConnector((current) =>
+                            current
+                              ? { ...current, configuration_json: { ...current.configuration_json, maximum_depth: Number(event.target.value) } }
+                              : current
+                          )
+                        }
+                      >
+                        <MenuItem value="0">0</MenuItem>
+                        <MenuItem value="1">1</MenuItem>
+                        <MenuItem value="2">2</MenuItem>
+                        <MenuItem value="3">3</MenuItem>
+                      </TextField>
+                      <TextField
+                        select
+                        size="small"
+                        label="Per-Domain Delay"
+                        value={String(connectorNumberConfig(selectedConnector, "per_domain_delay_seconds", 2))}
+                        onChange={(event) =>
+                          setSelectedConnector((current) =>
+                            current
+                              ? { ...current, configuration_json: { ...current.configuration_json, per_domain_delay_seconds: Number(event.target.value) } }
+                              : current
+                          )
+                        }
+                      >
+                        <MenuItem value="2">2 sec</MenuItem>
+                        <MenuItem value="5">5 sec</MenuItem>
+                        <MenuItem value="10">10 sec</MenuItem>
+                        <MenuItem value="15">15 sec</MenuItem>
+                      </TextField>
+                      <TextField
+                        select
+                        size="small"
+                        label="Request Timeout"
+                        value={String(connectorNumberConfig(selectedConnector, "request_timeout_seconds", 15))}
+                        onChange={(event) =>
+                          setSelectedConnector((current) =>
+                            current
+                              ? { ...current, configuration_json: { ...current.configuration_json, request_timeout_seconds: Number(event.target.value) } }
+                              : current
+                          )
+                        }
+                      >
+                        <MenuItem value="10">10 sec</MenuItem>
+                        <MenuItem value="15">15 sec</MenuItem>
+                        <MenuItem value="20">20 sec</MenuItem>
+                        <MenuItem value="30">30 sec</MenuItem>
+                      </TextField>
+                    </Box>
+                  </Paper>
+
+                  <Paper elevation={0} sx={{ p: 1.5, borderRadius: "8px", border: "1px solid #E2E8F0" }}>
+                    <Stack direction={{ xs: "column", sm: "row" }} spacing={1.2} sx={{ justifyContent: "space-between", alignItems: { sm: "center" } }}>
+                      <Box sx={{ minWidth: 0 }}>
+                        <Typography sx={{ fontWeight: 700, color: "#0F172A" }}>Seeds</Typography>
+                        <Typography sx={{ mt: 0.55, color: "#475569", fontSize: 13 }}>
+                          Tenant-scoped crawl entry points that bootstrap the internal index.
+                        </Typography>
+                      </Box>
+                      <Button
+                        variant="contained"
+                        size="small"
+                        onClick={() => openSeedDialog()}
+                        disabled={!canAdmin || busy}
+                        sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700, bgcolor: "#2563EB" }}
+                      >
+                        Add Seed
+                      </Button>
+                    </Stack>
+                    <Box sx={{ mt: 1, width: "100%", overflowX: "auto" }}>
+                      <Table size="small" sx={{ width: "100%", minWidth: 420, tableLayout: "fixed" }}>
+                        <TableHead>
+                          <TableRow>
+                            <TableCell sx={{ width: "82%" }}>Name</TableCell>
+                            <TableCell align="right" sx={{ width: "18%" }}>Actions</TableCell>
+                          </TableRow>
+                        </TableHead>
+                        <TableBody>
+                          {webSeeds.length ? (
+                            webSeeds.map((seed) => (
+                              <TableRow key={seed.id} hover>
+                                <TableCell>
+                                  <Typography sx={{ fontWeight: 700, color: "#0F172A", fontSize: 13, overflowWrap: "anywhere" }}>{seed.name}</Typography>
+                                  <Typography sx={{ fontSize: 12, color: "#64748B", overflowWrap: "anywhere" }}>
+                                    {seed.organization_name || seed.country || "Not tagged"}
+                                  </Typography>
+                                  <Typography
+                                    sx={{
+                                      mt: 0.4,
+                                      fontSize: 12,
+                                      color: "#1D4ED8",
+                                      overflow: "hidden",
+                                      textOverflow: "ellipsis",
+                                      whiteSpace: "nowrap",
+                                    }}
+                                  >
+                                    {seed.seed_url}
+                                  </Typography>
+                                  <Typography sx={{ mt: 0.4, fontSize: 12, color: "#475569" }}>
+                                    Type: {seed.seed_type}
+                                  </Typography>
+                                  <Typography sx={{ fontSize: 12, color: "#475569" }}>
+                                    Depth: {seed.max_depth} | Max Pages: {seed.max_pages}
+                                  </Typography>
+                                  <Typography sx={{ fontSize: 12, color: "#475569", overflowWrap: "anywhere" }}>
+                                    Last Crawled: {formatDate(seed.last_crawled_at)}
+                                  </Typography>
+                                  <Typography sx={{ fontSize: 12, color: "#475569", overflowWrap: "anywhere" }}>
+                                    Next Crawl: {formatDate(seed.next_crawl_at)}
+                                  </Typography>
+                                </TableCell>
+                                <TableCell align="right">
+                                  <Stack direction="row" spacing={0.25} sx={{ justifyContent: "flex-end", flexWrap: "wrap" }}>
+                                    <Tooltip title="Edit Seed">
+                                      <IconButton size="small" onClick={() => openSeedDialog(seed)}>
+                                        <SettingsSuggestOutlinedIcon sx={{ fontSize: 18, color: "#1D4ED8" }} />
+                                      </IconButton>
+                                    </Tooltip>
+                                    <Tooltip title="Delete Seed">
+                                      <IconButton size="small" disabled={!canAdmin || busy} onClick={() => void handleDeleteWebSeed(seed)}>
+                                        <VisibilityOffOutlinedIcon sx={{ fontSize: 18, color: "#B42318" }} />
+                                      </IconButton>
+                                    </Tooltip>
+                                  </Stack>
+                                </TableCell>
+                              </TableRow>
+                            ))
+                          ) : (
+                            <TableRow>
+                              <TableCell colSpan={2}>
+                                <Typography sx={{ color: "#64748B", fontSize: 13 }}>
+                                  No independent web seeds have been configured yet.
+                                </Typography>
+                              </TableCell>
+                            </TableRow>
+                          )}
+                        </TableBody>
+                      </Table>
+                    </Box>
+                  </Paper>
+
+                  <Paper elevation={0} sx={{ p: 1.5, borderRadius: "8px", border: "1px solid #E2E8F0" }}>
+                    <Typography sx={{ fontWeight: 700, color: "#0F172A" }}>Domain Registry</Typography>
+                    <Box sx={{ mt: 1, width: "100%", overflowX: "auto" }}>
+                      <Table size="small" sx={{ width: "100%", minWidth: 420, tableLayout: "fixed" }}>
+                        <TableHead>
+                          <TableRow>
+                            <TableCell sx={{ width: "72%" }}>Domain</TableCell>
+                            <TableCell align="right" sx={{ width: "28%" }}>Actions</TableCell>
+                          </TableRow>
+                        </TableHead>
+                        <TableBody>
+                          {webDomains.length ? (
+                            webDomains.slice(0, 12).map((domain) => (
+                              <TableRow key={domain.id} hover>
+                                <TableCell>
+                                  <Typography sx={{ fontWeight: 700, color: "#0F172A", fontSize: 13, overflowWrap: "anywhere" }}>{domain.domain}</Typography>
+                                  <Typography sx={{ fontSize: 12, color: "#64748B", overflowWrap: "anywhere" }}>
+                                    {domain.trust_source_type || "public_web"}
+                                  </Typography>
+                                  <Typography sx={{ mt: 0.4, fontSize: 12, color: "#475569", textTransform: "lowercase" }}>
+                                    Robots: {domain.robots_status}
+                                  </Typography>
+                                  <Typography sx={{ fontSize: 12, color: "#475569" }}>
+                                    Indexed: {domain.pages_indexed} | Opportunities: {domain.opportunities_found}
+                                  </Typography>
+                                  <Typography sx={{ fontSize: 12, color: "#475569", textTransform: "lowercase" }}>
+                                    Status: {domain.status} | Approval: {domain.approval_status}
+                                  </Typography>
+                                </TableCell>
+                                <TableCell align="right">
+                                  <Stack direction="row" spacing={0.5} sx={{ justifyContent: "flex-end", flexWrap: "wrap", rowGap: 0.5 }}>
+                                    <Button size="small" variant="outlined" disabled={!canAdmin || busy} onClick={() => void handleDomainApproval(domain, "approved")} sx={{ borderRadius: "8px", textTransform: "none", px: 1 }}>
+                                      Approve
+                                    </Button>
+                                    <Button size="small" variant="outlined" color="warning" disabled={!canAdmin || busy} onClick={() => void handleDomainApproval(domain, "ignored")} sx={{ borderRadius: "8px", textTransform: "none", px: 1 }}>
+                                      Ignore
+                                    </Button>
+                                    <Button size="small" variant="outlined" disabled={!canAdmin || busy} onClick={() => void handleDomainRecrawl(domain)} sx={{ borderRadius: "8px", textTransform: "none", px: 1 }}>
+                                      Re-crawl
+                                    </Button>
+                                  </Stack>
+                                </TableCell>
+                              </TableRow>
+                            ))
+                        ) : (
+                          <TableRow>
+                            <TableCell colSpan={2}>
+                              <Typography sx={{ color: "#64748B", fontSize: 13 }}>
+                                No domains have been registered yet. Add a seed and run the connector to bootstrap discovery.
+                              </Typography>
+                            </TableCell>
+                          </TableRow>
+                          )}
+                        </TableBody>
+                      </Table>
+                    </Box>
+                  </Paper>
+
+                  <Paper elevation={0} sx={{ p: 1.5, borderRadius: "8px", border: "1px solid #E2E8F0" }}>
+                    <Typography sx={{ fontWeight: 700, color: "#0F172A" }}>Page Store</Typography>
+                    <Typography sx={{ mt: 0.55, color: "#475569", fontSize: 13 }}>
+                      Indexed pages stored in the first-party AUGMIS corpus. Showing the latest {webPages.length} of {webPagesTotal}.
+                    </Typography>
+                    <Tabs
+                      value={independentDiagnosticsTab}
+                      onChange={(_, value: number) => setIndependentDiagnosticsTab(value)}
+                      variant="scrollable"
+                      allowScrollButtonsMobile
+                      sx={{ mt: 1.2, minHeight: 36, "& .MuiTab-root": { minHeight: 36, textTransform: "none", fontWeight: 700 } }}
+                    >
+                      <Tab label="Pages" />
+                      <Tab label="Run Diagnostics" />
+                      <Tab label="Domains" />
+                    </Tabs>
+                    {independentDiagnosticsTab === 1 ? (
+                      <Box sx={{ mt: 1 }}>
+                        <Typography sx={{ color: "#475569", fontSize: 13 }}>
+                          Candidate visibility and filter-reason diagnostics persisted from the latest independent run.
+                        </Typography>
+                        <Stack direction="row" spacing={0.75} sx={{ mt: 1, flexWrap: "wrap", rowGap: 0.75 }}>
+                          {recordEntriesDescending(selectedRunMetadata?.candidate_visibility_counts).map(([code, count]) => (
+                            <Chip key={`visibility-${code}`} size="small" label={`${formatDiagnosticCode(code)} · ${count}`} sx={{ bgcolor: "#F8FAFC", borderRadius: "8px" }} />
+                          ))}
+                          {!recordEntriesDescending(selectedRunMetadata?.candidate_visibility_counts).length ? (
+                            <Chip size="small" label="No persisted visibility counts" sx={{ bgcolor: "#F8FAFC", borderRadius: "8px" }} />
+                          ) : null}
+                        </Stack>
+                        <Stack direction="row" spacing={0.75} sx={{ mt: 1, flexWrap: "wrap", rowGap: 0.75 }}>
+                          {recordEntriesDescending(selectedRunMetadata?.candidate_exclusion_reason_counts).map(([code, count]) => (
+                            <Chip key={`excluded-${code}`} size="small" label={`${formatDiagnosticCode(code)} · ${count}`} sx={{ bgcolor: "#FEF2F2", color: "#991B1B", borderRadius: "8px" }} />
+                          ))}
+                        </Stack>
+                      </Box>
+                    ) : null}
+                    {independentDiagnosticsTab === 2 ? (
+                      <Box sx={{ mt: 1, width: "100%", overflowX: "auto" }}>
+                        <Table size="small" sx={{ width: "100%", minWidth: 420, tableLayout: "fixed" }}>
+                          <TableHead>
+                            <TableRow>
+                              <TableCell sx={{ width: "66%" }}>Domain</TableCell>
+                              <TableCell sx={{ width: "34%" }}>Policy</TableCell>
+                            </TableRow>
+                          </TableHead>
+                          <TableBody>
+                            {webDomains.length ? (
+                              webDomains.map((domain) => (
+                                <TableRow key={`diagnostic-domain-${domain.id}`} hover>
+                                  <TableCell>
+                                    <Typography sx={{ fontWeight: 700, color: "#0F172A", fontSize: 13 }}>{domain.domain}</Typography>
+                                    <Typography sx={{ mt: 0.35, color: "#64748B", fontSize: 12 }}>
+                                      Source: {domain.source || "n/a"} · Trust: {domain.trust_source_type || "n/a"}
+                                    </Typography>
+                                  </TableCell>
+                                  <TableCell sx={{ fontSize: 12, color: "#475569" }}>
+                                    {domain.approval_status} · {domain.status}
+                                  </TableCell>
+                                </TableRow>
+                              ))
+                            ) : (
+                              <TableRow>
+                                <TableCell colSpan={2}>
+                                  <Typography sx={{ color: "#64748B", fontSize: 13 }}>No domains have been discovered yet.</Typography>
+                                </TableCell>
+                              </TableRow>
+                            )}
+                          </TableBody>
+                        </Table>
+                      </Box>
+                    ) : null}
+                    {independentDiagnosticsTab === 0 ? (
+                    <Box sx={{ mt: 1, width: "100%", overflowX: "auto" }}>
+                      <Table size="small" sx={{ width: "100%", minWidth: 1080, tableLayout: "fixed" }}>
+                        <TableHead>
+                          <TableRow>
+                            <TableCell sx={{ width: "28%" }}>Title</TableCell>
+                            <TableCell sx={{ width: "14%" }}>Domain</TableCell>
+                            <TableCell sx={{ width: "12%" }}>Page Type</TableCell>
+                            <TableCell sx={{ width: "14%" }}>Crawl Status</TableCell>
+                            <TableCell sx={{ width: "12%" }}>Decision</TableCell>
+                            <TableCell sx={{ width: "12%" }}>Reason</TableCell>
+                            <TableCell sx={{ width: "8%" }}>Last Seen</TableCell>
+                          </TableRow>
+                        </TableHead>
+                        <TableBody>
+                          {webPages.length ? (
+                            webPages.map((page) => {
+                              const visibility = extractIndependentCandidateVisibility(page);
+                              const decision = extractIndependentCandidateDecision(page);
+                              const sourceMetadata = (page.source_metadata_json || {}) as Record<string, unknown>;
+                              return (
+                              <TableRow key={page.id} hover>
+                                <TableCell>
+                                  <Typography sx={{ fontWeight: 700, color: "#0F172A", fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                    {page.title || "Untitled page"}
+                                  </Typography>
+                                  <Typography sx={{ fontSize: 12, color: "#64748B", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                    {page.canonical_url}
+                                  </Typography>
+                                </TableCell>
+                                <TableCell>
+                                  <Typography sx={{ fontWeight: 700, color: "#0F172A", fontSize: 13, overflowWrap: "anywhere" }}>
+                                    {page.domain}
+                                  </Typography>
+                                  <Typography sx={{ mt: 0.4, fontSize: 12, color: "#64748B" }}>
+                                    HTTP {page.http_status ?? "n/a"}
+                                  </Typography>
+                                </TableCell>
+                                <TableCell sx={{ fontSize: 12, color: "#475569", textTransform: "lowercase" }}>
+                                  {page.page_type}
+                                </TableCell>
+                                <TableCell>
+                                  <Chip
+                                    size="small"
+                                    label={String(sourceMetadata.crawl_status || "stored")}
+                                    sx={{ borderRadius: "8px", bgcolor: "#F8FAFC" }}
+                                  />
+                                </TableCell>
+                                <TableCell>
+                                  <Chip
+                                    size="small"
+                                    label={decision.decision || (visibility.eligible ? "candidate_visible" : "excluded")}
+                                    sx={{
+                                      borderRadius: "8px",
+                                      bgcolor: decision.decision === "new" ? "#ECFDF5" : decision.decision === "duplicate" ? "#FFF7ED" : "#FEF2F2",
+                                      color: decision.decision === "new" ? "#166534" : decision.decision === "duplicate" ? "#B45309" : "#991B1B",
+                                    }}
+                                  />
+                                </TableCell>
+                                <TableCell>
+                                  <Typography sx={{ fontSize: 12, color: "#475569" }}>
+                                    {(decision.reason_codes || visibility.reason_codes || []).slice(0, 2).map(formatDiagnosticCode).join(" · ") || "No reason codes"}
+                                  </Typography>
+                                </TableCell>
+                                <TableCell sx={{ fontSize: 12, color: "#475569", overflowWrap: "anywhere" }}>
+                                  {formatDate(page.last_seen_at)}
+                                </TableCell>
+                              </TableRow>
+                              );
+                            })
+                          ) : (
+                            <TableRow>
+                              <TableCell colSpan={7}>
+                                <Typography sx={{ color: "#64748B", fontSize: 13 }}>
+                                  No pages have been indexed yet.
+                                </Typography>
+                              </TableCell>
+                            </TableRow>
+                          )}
+                        </TableBody>
+                      </Table>
+                    </Box>
+                    ) : null}
+                  </Paper>
+                </Stack>
               ) : null}
 
               {selectedConnector.connector_type === "ted_procurement" ? (
@@ -2748,6 +3965,272 @@ export default function AugmisBusinessConnectorsPage() {
                     </TextField>
                     <TextField size="small" label="CPV Filtering" value="Auto / broad software-services scope" disabled />
                   </Box>
+                </Paper>
+              ) : null}
+
+              {selectedConnector.connector_type === "freelancer_marketplace" ? (
+                <Paper elevation={0} sx={{ p: 1.5, borderRadius: "8px", border: "1px solid #E2E8F0" }}>
+                  <Stack
+                    direction={{ xs: "column", sm: "row" }}
+                    spacing={1.2}
+                    sx={{ justifyContent: "space-between", alignItems: { sm: "center" } }}
+                  >
+                    <Box sx={{ minWidth: 0 }}>
+                      <Typography sx={{ fontWeight: 700, color: "#0F172A" }}>Freelancer Settings</Typography>
+                      <Typography sx={{ mt: 0.55, color: "#475569", fontSize: 13 }}>
+                        Bounded marketplace discovery using the shared AUGMIS search profile. Mock mode reuses realistic local Freelancer API fixtures and performs no external HTTP.
+                      </Typography>
+                    </Box>
+                    <Button
+                      variant="contained"
+                      size="small"
+                      onClick={() => void handleSaveRuntimeSettings()}
+                      disabled={!canAdmin || busy}
+                      sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700, bgcolor: "#2563EB" }}
+                    >
+                      Save Settings
+                    </Button>
+                  </Stack>
+                  <Box
+                    sx={{
+                      mt: 1.2,
+                      display: "grid",
+                      gap: 1,
+                      gridTemplateColumns: { xs: "1fr", md: "repeat(2, minmax(0, 1fr))" },
+                    }}
+                  >
+                    <TextField
+                      select
+                      size="small"
+                      label="Environment / Mode"
+                      value={String(selectedConnector.configuration_json.mode || "production")}
+                      onChange={(event) =>
+                        setSelectedConnector((current) =>
+                          current
+                            ? { ...current, configuration_json: { ...current.configuration_json, mode: event.target.value } }
+                            : current
+                        )
+                      }
+                    >
+                      <MenuItem value="production">Production</MenuItem>
+                      <MenuItem value="mock">Test / Mock</MenuItem>
+                    </TextField>
+                    <TextField
+                      size="small"
+                      label="Source"
+                      value={selectedConnector.configuration_json.mode === "mock" ? "Local realistic Freelancer fixtures" : "Official Freelancer API"}
+                      disabled
+                    />
+                    <TextField
+                      size="small"
+                      label="Authentication"
+                      value={selectedConnector.configuration_json.mode === "mock" ? "No Credential Required" : "OAuth Access Token"}
+                      disabled
+                    />
+                    <TextField
+                      select
+                      size="small"
+                      label="Lookback Period"
+                      value={String(connectorNumberConfig(selectedConnector, "lookback_hours", 24))}
+                      onChange={(event) =>
+                        setSelectedConnector((current) =>
+                          current
+                            ? { ...current, configuration_json: { ...current.configuration_json, lookback_hours: Number(event.target.value) } }
+                            : current
+                        )
+                      }
+                    >
+                      <MenuItem value="6">6 hours</MenuItem>
+                      <MenuItem value="12">12 hours</MenuItem>
+                      <MenuItem value="24">24 hours</MenuItem>
+                      <MenuItem value="72">3 days</MenuItem>
+                      <MenuItem value="168">7 days</MenuItem>
+                      <MenuItem value="336">14 days</MenuItem>
+                      <MenuItem value="720">30 days</MenuItem>
+                    </TextField>
+                    <TextField
+                      select
+                      size="small"
+                      label="Maximum Projects Per Scan"
+                      value={String(connectorNumberConfig(selectedConnector, "maximum_projects_per_scan", 50))}
+                      onChange={(event) =>
+                        setSelectedConnector((current) =>
+                          current
+                            ? { ...current, configuration_json: { ...current.configuration_json, maximum_projects_per_scan: Number(event.target.value) } }
+                            : current
+                        )
+                      }
+                    >
+                      <MenuItem value="10">10</MenuItem>
+                      <MenuItem value="25">25</MenuItem>
+                      <MenuItem value="50">50</MenuItem>
+                      <MenuItem value="100">100</MenuItem>
+                      <MenuItem value="200">200</MenuItem>
+                    </TextField>
+                    <TextField
+                      select
+                      size="small"
+                      label="Project Type"
+                      value={String(selectedConnector.configuration_json.project_type || "all")}
+                      onChange={(event) =>
+                        setSelectedConnector((current) =>
+                          current
+                            ? { ...current, configuration_json: { ...current.configuration_json, project_type: event.target.value } }
+                            : current
+                        )
+                      }
+                    >
+                      <MenuItem value="all">All</MenuItem>
+                      <MenuItem value="fixed">Fixed Price</MenuItem>
+                      <MenuItem value="hourly">Hourly</MenuItem>
+                    </TextField>
+                    <TextField size="small" label="Project Status" value="Active only" disabled />
+                    <AdminFormTextField
+                      label="Minimum Budget"
+                      value={String(selectedConnector.configuration_json.minimum_budget ?? "")}
+                      onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                        setSelectedConnector((current) =>
+                          current
+                            ? { ...current, configuration_json: { ...current.configuration_json, minimum_budget: normalizeOptionalNumber(event.target.value) } }
+                            : current
+                        )
+                      }
+                    />
+                    <AdminFormTextField
+                      label="Maximum Budget"
+                      value={String(selectedConnector.configuration_json.maximum_budget ?? "")}
+                      onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                        setSelectedConnector((current) =>
+                          current
+                            ? { ...current, configuration_json: { ...current.configuration_json, maximum_budget: normalizeOptionalNumber(event.target.value) } }
+                            : current
+                        )
+                      }
+                    />
+                    <AdminFormTextField
+                      label="Maximum Existing Bids"
+                      value={String(selectedConnector.configuration_json.maximum_existing_bids ?? "")}
+                      onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                        setSelectedConnector((current) =>
+                          current
+                            ? { ...current, configuration_json: { ...current.configuration_json, maximum_existing_bids: normalizeOptionalNumber(event.target.value) } }
+                            : current
+                        )
+                      }
+                    />
+                    <TextField size="small" label="Search Scope" value="Default AUGMIS Discovery Profile" disabled />
+                  </Box>
+                  {selectedConnector.configuration_json.mode === "mock" ? (
+                    <Alert severity="info" sx={{ mt: 1.15, borderRadius: "8px" }}>
+                      Test / Mock mode uses local realistic Freelancer API fixtures. No requests are sent to Freelancer.com.
+                    </Alert>
+                  ) : null}
+                </Paper>
+              ) : null}
+
+              {["remote_job_feed", "job_board_api", "remote_job_api", "job_search_api"].includes(selectedConnector.connector_type) ? (
+                <Paper elevation={0} sx={{ p: 1.5, borderRadius: "8px", border: "1px solid #E2E8F0" }}>
+                  <Stack
+                    direction={{ xs: "column", sm: "row" }}
+                    spacing={1.2}
+                    sx={{ justifyContent: "space-between", alignItems: { sm: "center" } }}
+                  >
+                    <Box sx={{ minWidth: 0 }}>
+                      <Typography sx={{ fontWeight: 700, color: "#0F172A" }}>Provider Settings</Typography>
+                      <Typography sx={{ mt: 0.55, color: "#475569", fontSize: 13 }}>
+                        Bounded external-work discovery using official provider APIs and the shared AUGMIS search profile.
+                      </Typography>
+                    </Box>
+                    <Button
+                      variant="contained"
+                      size="small"
+                      onClick={() => void handleSaveRuntimeSettings()}
+                      disabled={!canAdmin || busy}
+                      sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700, bgcolor: "#2563EB" }}
+                    >
+                      Save Settings
+                    </Button>
+                  </Stack>
+                  <Box sx={{ mt: 1.2, display: "grid", gap: 1, gridTemplateColumns: { xs: "1fr", md: "repeat(2, minmax(0, 1fr))" } }}>
+                    <TextField size="small" label="Provider" value={selectedConnector.name} disabled />
+                    <TextField size="small" label="Authentication" value={selectedConnector.connector_type === "job_search_api" ? "App ID + App Key" : "No API Key Required"} disabled />
+                    <TextField
+                      select
+                      size="small"
+                      label="Maximum Results"
+                      value={String(connectorNumberConfig(selectedConnector, "maximum_results", selectedConnector.connector_type === "job_search_api" ? 25 : 50))}
+                      onChange={(event) =>
+                        setSelectedConnector((current) =>
+                          current
+                            ? { ...current, configuration_json: { ...current.configuration_json, maximum_results: Number(event.target.value) } }
+                            : current
+                        )
+                      }
+                    >
+                      <MenuItem value="10">10</MenuItem>
+                      <MenuItem value="25">25</MenuItem>
+                      <MenuItem value="50">50</MenuItem>
+                      <MenuItem value="100">100</MenuItem>
+                    </TextField>
+                    {selectedConnector.connector_type === "job_board_api" ? (
+                      <TextField
+                        select
+                        size="small"
+                        label="Remote Only"
+                        value={selectedConnector.configuration_json.remote_only === false ? "no" : "yes"}
+                        onChange={(event) =>
+                          setSelectedConnector((current) =>
+                            current
+                              ? { ...current, configuration_json: { ...current.configuration_json, remote_only: event.target.value === "yes" } }
+                              : current
+                          )
+                        }
+                      >
+                        <MenuItem value="yes">Yes</MenuItem>
+                        <MenuItem value="no">No</MenuItem>
+                      </TextField>
+                    ) : (
+                      <AdminFormTextField
+                        label="Search Keyword"
+                        value={String(selectedConnector.configuration_json.search_keyword ?? "")}
+                        onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                          setSelectedConnector((current) =>
+                            current
+                              ? { ...current, configuration_json: { ...current.configuration_json, search_keyword: event.target.value } }
+                              : current
+                          )
+                        }
+                      />
+                    )}
+                    {selectedConnector.connector_type === "job_search_api" ? (
+                      <AdminFormTextField
+                        label="Target Markets"
+                        value={Array.isArray(selectedConnector.configuration_json.target_countries_json) ? selectedConnector.configuration_json.target_countries_json.join(", ") : "gb"}
+                        onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                          setSelectedConnector((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  configuration_json: {
+                                    ...current.configuration_json,
+                                    target_countries_json: event.target.value
+                                      .split(",")
+                                      .map((item) => item.trim().toLowerCase())
+                                      .filter(Boolean)
+                                      .slice(0, 5),
+                                  },
+                                }
+                              : current
+                          )
+                        }
+                      />
+                    ) : null}
+                  </Box>
+                  {selectedConnector.connector_type === "job_search_api" ? (
+                    <Alert severity="info" sx={{ mt: 1.15, borderRadius: "8px" }}>
+                      Adzuna API usage is subject to Adzuna&apos;s API terms and provider access limits.
+                    </Alert>
+                  ) : null}
                 </Paper>
               ) : null}
 
@@ -2981,24 +4464,137 @@ export default function AugmisBusinessConnectorsPage() {
                       gridTemplateColumns: { xs: "repeat(2, minmax(0, 1fr))", md: "repeat(3, minmax(0, 1fr))" },
                     }}
                   >
-                    <MetadataMetric label="Provider" value={selectedRunMetadata.provider || "Not available"} />
-                    <MetadataMetric label="API Calls" value={selectedRunMetadata.api_call_count ?? 0} />
-                    <MetadataMetric label="Queries" value={selectedRunMetadata.query_count ?? 0} />
-                    <MetadataMetric label="Raw Results" value={selectedRunMetadata.raw_results_fetched ?? selectedRunMetadata.api_result_count ?? 0} />
-                    <MetadataMetric label="Normalized" value={selectedRunMetadata.notices_normalized ?? selectedRunMetadata.accepted_candidates ?? 0} />
-                    <MetadataMetric label="Filtered" value={selectedConnectorRun?.items_filtered ?? selectedRunMetadata.filtered_candidates ?? 0} />
-                    <MetadataMetric label="Duplicates" value={selectedConnectorRun?.items_duplicate ?? 0} />
-                    <MetadataMetric label="New Discoveries" value={selectedConnectorRun?.items_new ?? 0} />
-                    <MetadataMetric label="Sources" value={selectedRunMetadata.same_scan_unique_sources ?? 0} />
-                    <MetadataMetric label="Attempted Fetches" value={selectedRunMetadata.source_pages_attempted ?? 0} />
-                    <MetadataMetric label="Fetched" value={selectedRunMetadata.source_pages_fetched ?? 0} />
-                    <MetadataMetric label="Skipped by Limit" value={selectedRunMetadata.source_pages_skipped_due_limit ?? 0} />
-                    <MetadataMetric label="Fetch Failures" value={selectedRunMetadata.fetch_failures ?? 0} />
+                    {selectedConnector?.connector_type === "independent_web_discovery" ? (
+                      <>
+                        <MetadataMetric label="Provider" value={selectedRunMetadata.provider || "AUGMIS Internal"} />
+                        <MetadataMetric label="Seeds" value={selectedRunMetadata.seeds_processed ?? 0} />
+                        <MetadataMetric label="Domains" value={selectedRunMetadata.domains_visited ?? 0} />
+                        <MetadataMetric label="Queued URLs" value={selectedRunMetadata.urls_queued ?? 0} />
+                        <MetadataMetric label="Pages Attempted" value={selectedRunMetadata.pages_attempted ?? 0} />
+                        <MetadataMetric label="Pages Fetched" value={selectedRunMetadata.pages_fetched ?? 0} />
+                        <MetadataMetric label="Pages Changed" value={selectedRunMetadata.pages_changed ?? 0} />
+                        <MetadataMetric label="Listings" value={selectedRunMetadata.listing_pages ?? 0} />
+                        <MetadataMetric label="Detail Pages" value={selectedRunMetadata.detail_pages ?? 0} />
+                        <MetadataMetric label="Robots Denied" value={selectedRunMetadata.robots_denied ?? 0} />
+                        <MetadataMetric label="Candidates" value={selectedRunMetadata.candidates_created ?? selectedRunMetadata.opportunity_candidates ?? 0} />
+                        <MetadataMetric label="Accepted" value={selectedRunMetadata.candidates_accepted ?? 0} />
+                        <MetadataMetric label="Filtered" value={selectedConnectorRun?.items_filtered ?? 0} />
+                        <MetadataMetric label="Duplicates" value={selectedConnectorRun?.items_duplicate ?? 0} />
+                        <MetadataMetric label="New Discoveries" value={selectedConnectorRun?.items_new ?? 0} />
+                        <MetadataMetric label="Stale / Error" value={selectedRunMetadata.stale_or_error_pages ?? 0} />
+                        <MetadataMetric label="Unknown Pages" value={selectedRunMetadata.unknown_pages ?? 0} />
+                        <MetadataMetric label="Contacts" value={selectedRunMetadata.contacts_found ?? 0} />
+                        <MetadataMetric label="Fetch Failures" value={selectedRunMetadata.errors ?? 0} />
+                      </>
+                    ) : (
+                      <>
+                        <MetadataMetric label="Provider" value={selectedRunMetadata.provider || "Not available"} />
+                        <MetadataMetric label="API Calls" value={selectedRunMetadata.api_call_count ?? 0} />
+                        <MetadataMetric label="Queries" value={selectedRunMetadata.query_count ?? 0} />
+                        <MetadataMetric label="Raw Results" value={selectedRunMetadata.raw_results_fetched ?? selectedRunMetadata.api_result_count ?? 0} />
+                        <MetadataMetric label="Normalized" value={selectedRunMetadata.notices_normalized ?? selectedRunMetadata.accepted_candidates ?? 0} />
+                        <MetadataMetric label="Filtered" value={selectedConnectorRun?.items_filtered ?? selectedRunMetadata.filtered_candidates ?? 0} />
+                        <MetadataMetric label="Duplicates" value={selectedConnectorRun?.items_duplicate ?? 0} />
+                        <MetadataMetric label="New Discoveries" value={selectedConnectorRun?.items_new ?? 0} />
+                        <MetadataMetric label="Sources" value={selectedRunMetadata.same_scan_unique_sources ?? 0} />
+                        <MetadataMetric label="Attempted Fetches" value={selectedRunMetadata.source_pages_attempted ?? 0} />
+                        <MetadataMetric label="Fetched" value={selectedRunMetadata.source_pages_fetched ?? 0} />
+                        <MetadataMetric label="Skipped by Limit" value={selectedRunMetadata.source_pages_skipped_due_limit ?? 0} />
+                        <MetadataMetric label="Fetch Failures" value={selectedRunMetadata.fetch_failures ?? 0} />
+                      </>
+                    )}
                   </Box>
                   <Typography sx={{ mt: 1.1, color: "#64748B", fontSize: 12 }}>
-                    Effective limits: {selectedRunMetadata.maximum_queries_per_scan ?? 0} queries, {selectedRunMetadata.results_per_query ?? 0} results/query, {selectedRunMetadata.max_source_fetches_per_scan ?? 0} source fetches, {formatBytes(selectedRunMetadata.max_fetch_bytes)}
+                    {selectedConnector?.connector_type === "independent_web_discovery"
+                      ? `Effective limits: ${connectorNumberConfig(selectedConnector, "maximum_domains_per_run", 5)} domains/run, ${connectorNumberConfig(selectedConnector, "maximum_pages_per_domain", 25)} pages/domain, ${connectorNumberConfig(selectedConnector, "maximum_total_pages_per_run", 100)} pages/run, depth ${connectorNumberConfig(selectedConnector, "maximum_depth", 2)}, delay ${connectorNumberConfig(selectedConnector, "per_domain_delay_seconds", 2)}s, timeout ${connectorNumberConfig(selectedConnector, "request_timeout_seconds", 15)}s`
+                      : `Effective limits: ${selectedRunMetadata.maximum_queries_per_scan ?? 0} queries, ${selectedRunMetadata.results_per_query ?? 0} results/query, ${selectedRunMetadata.max_source_fetches_per_scan ?? 0} source fetches, ${formatBytes(selectedRunMetadata.max_fetch_bytes)}`}
                   </Typography>
-                  {selectedConnector?.connector_type === "ted_procurement" && canAdmin && selectedRunMetadata.query_diagnostics?.length ? (
+                  {selectedConnector?.connector_type === "independent_web_discovery" && selectedRunMetadata.outcome_message ? (
+                    <Alert severity="info" sx={{ mt: 1.2, borderRadius: "8px" }}>
+                      {selectedRunMetadata.outcome_message}
+                    </Alert>
+                  ) : null}
+                  {selectedConnector?.connector_type === "independent_web_discovery" && canAdmin ? (
+                    <Box
+                      component="details"
+                      sx={{
+                        mt: 1.4,
+                        borderRadius: "8px",
+                        border: "1px solid #E2E8F0",
+                        bgcolor: "#F8FAFC",
+                        p: 1.2,
+                      }}
+                    >
+                      <Box component="summary" sx={{ cursor: "pointer", fontWeight: 700, color: "#0F172A" }}>
+                        Crawl Diagnostics
+                      </Box>
+                      <Stack spacing={1} sx={{ mt: 1 }}>
+                        <Box
+                          sx={{
+                            display: "grid",
+                            gap: 1,
+                            gridTemplateColumns: { xs: "repeat(2, minmax(0, 1fr))", md: "repeat(4, minmax(0, 1fr))" },
+                          }}
+                        >
+                          <MetadataMetric label="Fetched" value={selectedRunMetadata.pages_fetched ?? 0} />
+                          <MetadataMetric label="Opportunity-Like" value={selectedRunMetadata.opportunity_like_pages ?? 0} />
+                          <MetadataMetric label="Detail Pages" value={selectedRunMetadata.detail_pages ?? 0} />
+                          <MetadataMetric label="Candidates" value={selectedRunMetadata.candidates_created ?? 0} />
+                          <MetadataMetric label="Accepted" value={selectedRunMetadata.candidates_accepted ?? 0} />
+                          <MetadataMetric label="Filtered" value={selectedConnectorRun?.items_filtered ?? 0} />
+                          <MetadataMetric label="Duplicates" value={selectedConnectorRun?.items_duplicate ?? 0} />
+                          <MetadataMetric label="New Discoveries" value={selectedConnectorRun?.items_new ?? 0} />
+                        </Box>
+                        <Box>
+                          <Typography sx={{ fontWeight: 700, color: "#0F172A", fontSize: 12 }}>Listing-Link Follow</Typography>
+                          <Stack direction="row" spacing={0.75} sx={{ mt: 0.8, flexWrap: "wrap", rowGap: 0.75 }}>
+                            <Chip size="small" label={`Discovered ${selectedRunMetadata.detail_links_discovered ?? 0}`} sx={{ bgcolor: "#F8FAFC", borderRadius: "8px" }} />
+                            <Chip size="small" label={`Queued ${selectedRunMetadata.detail_links_queued ?? 0}`} sx={{ bgcolor: "#F8FAFC", borderRadius: "8px" }} />
+                            <Chip size="small" label={`Skipped Depth ${selectedRunMetadata.detail_links_skipped_depth ?? 0}`} sx={{ bgcolor: "#FFF7ED", color: "#B45309", borderRadius: "8px" }} />
+                            <Chip size="small" label={`Skipped Policy ${selectedRunMetadata.detail_links_skipped_domain_policy ?? 0}`} sx={{ bgcolor: "#FFF7ED", color: "#B45309", borderRadius: "8px" }} />
+                            <Chip size="small" label={`Fetch Failed ${selectedRunMetadata.detail_links_fetch_failed ?? 0}`} sx={{ bgcolor: "#FEF2F2", color: "#991B1B", borderRadius: "8px" }} />
+                            <Chip size="small" label={`Robots Denied ${selectedRunMetadata.detail_links_robots_denied ?? 0}`} sx={{ bgcolor: "#FEF2F2", color: "#991B1B", borderRadius: "8px" }} />
+                          </Stack>
+                        </Box>
+                        {recordEntriesDescending(selectedRunMetadata.filter_reason_counts).length ? (
+                          <Box>
+                            <Typography sx={{ fontWeight: 700, color: "#0F172A", fontSize: 12 }}>Filter Reasons</Typography>
+                            <Stack direction="row" spacing={0.75} sx={{ mt: 0.8, flexWrap: "wrap", rowGap: 0.75 }}>
+                              {recordEntriesDescending(selectedRunMetadata.filter_reason_counts).map(([code, count]) => (
+                                <Chip key={`filter-${code}`} size="small" label={`${formatDiagnosticCode(code)} · ${count}`} sx={{ bgcolor: "#FEF2F2", color: "#991B1B", borderRadius: "8px" }} />
+                              ))}
+                            </Stack>
+                          </Box>
+                        ) : null}
+                        {selectedRunMetadata.candidate_outcomes?.length ? (
+                          <Stack spacing={1}>
+                            {selectedRunMetadata.candidate_outcomes.slice(0, 5).map((outcome, index) => (
+                              <Paper key={`${selectedConnectorRun?.id}-independent-outcome-${index}`} elevation={0} sx={{ p: 1, borderRadius: "8px", border: "1px solid #E2E8F0" }}>
+                                <Typography sx={{ fontWeight: 700, color: "#0F172A", fontSize: 13 }}>
+                                  {outcome.title || "Untitled candidate"}
+                                </Typography>
+                                <Typography sx={{ mt: 0.35, color: "#475569", fontSize: 12 }}>
+                                  Status: {outcome.discovery_status || "unknown"} · Type: {outcome.page_type || "unknown"} · Score: {outcome.relevance_score ?? "n/a"}
+                                </Typography>
+                                {outcome.reason_codes?.length ? (
+                                  <Stack direction="row" spacing={0.6} sx={{ mt: 0.8, flexWrap: "wrap", rowGap: 0.6 }}>
+                                    {outcome.reason_codes.map((code) => (
+                                      <Chip key={`${outcome.title}-${code}`} label={formatDiagnosticCode(code)} size="small" sx={{ bgcolor: "#EFF6FF", color: "#1D4ED8", borderRadius: "8px" }} />
+                                    ))}
+                                  </Stack>
+                                ) : null}
+                              </Paper>
+                            ))}
+                          </Stack>
+                        ) : (
+                          <Typography sx={{ color: "#64748B", fontSize: 12 }}>
+                            No independent candidate outcomes were persisted for this run.
+                          </Typography>
+                        )}
+                      </Stack>
+                    </Box>
+                  ) : null}
+                  {canAdmin && selectedRunMetadata.query_diagnostics?.length ? (
                     <Box
                       component="details"
                       sx={{
@@ -3020,6 +4616,7 @@ export default function AugmisBusinessConnectorsPage() {
                             </Typography>
                             <Typography sx={{ mt: 0.4, color: "#475569", fontSize: 12 }}>
                               Primary term: {diagnostic.primary_term || "Not available"} · Raw Results: {diagnostic.raw_results ?? 0} · Normalized: {diagnostic.normalized ?? 0}
+                              {diagnostic.filtered_bids != null ? ` · Bid-filtered ${diagnostic.filtered_bids}` : ""}
                             </Typography>
                             {diagnostic.error ? (
                               <Alert severity="warning" sx={{ mt: 0.8, borderRadius: "8px" }}>
@@ -3029,6 +4626,11 @@ export default function AugmisBusinessConnectorsPage() {
                             {diagnostic.cpv_codes?.length ? (
                               <Typography sx={{ mt: 0.8, color: "#64748B", fontSize: 12 }}>
                                 CPV: {diagnostic.cpv_codes.join(", ")}
+                              </Typography>
+                            ) : null}
+                            {diagnostic.skills?.length ? (
+                              <Typography sx={{ mt: 0.8, color: "#64748B", fontSize: 12 }}>
+                                Skills: {diagnostic.skills.join(", ")}
                               </Typography>
                             ) : null}
                             <Typography sx={{ mt: 0.8, color: "#0F172A", fontSize: 12, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
@@ -3088,6 +4690,11 @@ export default function AugmisBusinessConnectorsPage() {
                               Provider {metadata.provider || "n/a"} · Queries {metadata.query_count ?? 0} · API results {metadata.api_result_count ?? 0} · Attempted {metadata.source_pages_attempted ?? 0} · Fetched {metadata.source_pages_fetched ?? 0} · Skipped {metadata.source_pages_skipped_due_limit ?? 0}
                             </Typography>
                           ) : null}
+                          {selectedConnector?.connector_type === "independent_web_discovery" && metadata.outcome_message ? (
+                            <Typography sx={{ mt: 0.6, color: "#475569", fontSize: 12 }}>
+                              {metadata.outcome_message}
+                            </Typography>
+                          ) : null}
                           {run.error_summary ? (
                             <Alert severity="warning" sx={{ mt: 0.9, borderRadius: "8px" }}>
                               {run.error_summary}
@@ -3120,6 +4727,27 @@ export default function AugmisBusinessConnectorsPage() {
                   <Typography sx={{ mt: 0.5, color: "#475569" }}>
                     {selectedDiscovery.organization_name || "Not available"}
                   </Typography>
+                  <Stack direction="row" spacing={0.75} sx={{ mt: 1, flexWrap: "wrap", rowGap: 0.75 }}>
+                    <Chip
+                      size="small"
+                      label={discoverySourceDisplay(selectedDiscovery)}
+                      sx={{ border: "1px solid", fontWeight: 700, ...discoverySourceChipStyle(selectedDiscovery) }}
+                    />
+                    <Chip
+                      size="small"
+                      label={(selectedDiscoveryIntelligence?.commercial_recommendation || "watch").toUpperCase()}
+                      sx={{ textTransform: "uppercase", border: "1px solid", ...discoveryRecommendationChip(selectedDiscoveryIntelligence?.commercial_recommendation) }}
+                    />
+                    <Chip
+                      size="small"
+                      label={
+                        selectedDiscoveryIntelligence?.commercial_priority_score == null
+                          ? "Priority not scored"
+                          : `Priority ${selectedDiscoveryIntelligence.commercial_priority_band || "?"} · ${Math.round(selectedDiscoveryIntelligence.commercial_priority_score)}`
+                      }
+                      sx={{ border: "1px solid", ...discoveryPriorityBandChip(selectedDiscoveryIntelligence?.commercial_priority_band) }}
+                    />
+                  </Stack>
                 </Box>
                 <Chip
                   label={selectedDiscovery.discovery_status}
@@ -3128,41 +4756,74 @@ export default function AugmisBusinessConnectorsPage() {
                 />
               </Stack>
 
+              <Paper
+                elevation={0}
+                sx={{
+                  p: 1.6,
+                  borderRadius: "10px",
+                  border: "1px solid #D9E2EC",
+                  background: "linear-gradient(135deg, #F8FBFF 0%, #FFFFFF 100%)",
+                }}
+              >
+                <Stack direction={{ xs: "column", md: "row" }} spacing={1.5} sx={{ justifyContent: "space-between" }}>
+                  <Box sx={{ minWidth: 0 }}>
+                    <Typography sx={{ fontWeight: 700, color: "#0F172A" }}>Why this matters</Typography>
+                    <Stack spacing={0.7} sx={{ mt: 0.9 }}>
+                      {(selectedDiscoveryIntelligence?.commercial_recommendation_reasons_json || []).length ? (
+                        selectedDiscoveryIntelligence?.commercial_recommendation_reasons_json.map((reason) => (
+                          <Typography key={`decision-${reason}`} sx={{ color: "#166534", fontSize: 13 }}>
+                            + {reason}
+                          </Typography>
+                        ))
+                      ) : (
+                        <Typography sx={{ color: "#475569", fontSize: 13 }}>
+                          No deterministic recommendation summary has been recorded yet.
+                        </Typography>
+                      )}
+                    </Stack>
+                  </Box>
+                  <Box sx={{ minWidth: 0, flex: { md: "0 0 44%" } }}>
+                    <Typography sx={{ fontWeight: 700, color: "#0F172A" }}>Risks</Typography>
+                    <Stack spacing={0.7} sx={{ mt: 0.9 }}>
+                      {(selectedDiscoveryIntelligence?.commercial_risks_json || []).length ? (
+                        selectedDiscoveryIntelligence?.commercial_risks_json.map((risk) => (
+                          <Typography key={`decision-risk-${risk}`} sx={{ color: "#B45309", fontSize: 13 }}>
+                            – {risk}
+                          </Typography>
+                        ))
+                      ) : (
+                        <Typography sx={{ color: "#475569", fontSize: 13 }}>
+                          No additional deterministic risks have been recorded.
+                        </Typography>
+                      )}
+                    </Stack>
+                  </Box>
+                </Stack>
+              </Paper>
+
               <Paper elevation={0} sx={{ p: 1.5, borderRadius: "8px", border: "1px solid #E2E8F0" }}>
-                <Typography sx={{ fontWeight: 700, color: "#0F172A" }}>Source</Typography>
-                <Typography sx={{ mt: 0.8, color: "#475569" }}>
-                  Connector: {connectorById.get(selectedDiscovery.connector_id)?.name || selectedDiscovery.connector_id}
-                </Typography>
-                <Typography sx={{ color: "#475569" }}>
-                  Source: {selectedDiscovery.source_type === "public_procurement"
-                    ? "TED — Tenders Electronic Daily"
-                    : selectedDiscovery.source_name}
-                </Typography>
-                <Typography sx={{ color: "#475569" }}>
-                  Provider: {selectedDiscoverySourceMetadata?.provider?.toUpperCase() || "Not available"}
-                </Typography>
-                <Typography sx={{ color: "#475569" }}>
-                  Retrieved: {formatDate(selectedDiscovery.retrieval_timestamp)}
-                </Typography>
-                <Typography sx={{ color: "#475569" }}>
-                  Source trust: {selectedDiscoverySourceMetadata?.source_trust || "Not available"}
-                </Typography>
-                <Typography sx={{ color: "#475569" }}>
-                  Original language: {selectedDiscovery.source_language_label || "Unknown"}
-                </Typography>
-                {selectedDiscovery.source_type === "public_procurement" ? (
-                  <>
-                    <Typography sx={{ color: "#475569" }}>
-                      Publication Number: {selectedDiscoverySourceMetadata?.publication_number || "Not available"}
+                <Stack direction="row" spacing={1} sx={{ justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", rowGap: 1 }}>
+                  <Box>
+                    <Typography sx={{ fontWeight: 700, color: "#0F172A" }}>Source / Provider</Typography>
+                    <Typography sx={{ mt: 0.5, color: "#475569", fontSize: 13 }}>
+                      Discovery origin, language, trust, and audit metadata.
                     </Typography>
-                    <Typography sx={{ color: "#475569" }}>
-                      Notice Identifier: {selectedDiscoverySourceMetadata?.notice_identifier || "Not available"}
-                    </Typography>
-                    <Typography sx={{ color: "#475569" }}>
-                      Notice Version: {selectedDiscoverySourceMetadata?.notice_version || "Not available"}
-                    </Typography>
-                  </>
-                ) : null}
+                  </Box>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    onClick={() => setShowSourceDetails((current) => !current)}
+                    sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700 }}
+                  >
+                    {showSourceDetails ? "Hide Source Details" : "Show Source Details"}
+                  </Button>
+                </Stack>
+                <Box sx={{ mt: 1.1, display: "grid", gap: 1, gridTemplateColumns: { xs: "1fr", md: "repeat(2, minmax(0, 1fr))" } }}>
+                  <MetadataMetric label="Connector" value={connectorById.get(selectedDiscovery.connector_id)?.name || selectedDiscovery.connector_id} />
+                  <MetadataMetric label="Provider" value={selectedDiscoverySourceMetadata?.provider?.toUpperCase() || "Not available"} />
+                  <MetadataMetric label="Retrieved" value={formatDate(selectedDiscovery.retrieval_timestamp)} />
+                  <MetadataMetric label="Original Language" value={selectedDiscovery.source_language_label || "Unknown"} />
+                </Box>
                 {selectedDiscovery.source_url ? (
                   <Stack direction="row" spacing={1} sx={{ mt: 1.2, flexWrap: "wrap" }}>
                     <Button
@@ -3175,7 +4836,7 @@ export default function AugmisBusinessConnectorsPage() {
                       rel="noopener noreferrer"
                       sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700 }}
                     >
-                      Open Source
+                      {selectedDiscovery.source_type === "employment_contract" && selectedDiscoverySourceMetadata?.provider === "remotive" ? "Open on Remotive" : "Open Source"}
                     </Button>
                     <Typography sx={{ color: "#2563EB", fontSize: 13, wordBreak: "break-word", alignSelf: "center" }}>
                       <LinkOutlinedIcon sx={{ fontSize: 16, mr: 0.5, verticalAlign: "text-bottom" }} />
@@ -3183,73 +4844,44 @@ export default function AugmisBusinessConnectorsPage() {
                     </Typography>
                   </Stack>
                 ) : null}
-              </Paper>
-
-              <Paper elevation={0} sx={{ p: 1.5, borderRadius: "8px", border: "1px solid #E2E8F0" }}>
-                <Stack direction="row" spacing={1} sx={{ justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", rowGap: 1 }}>
-                  <Box>
-                    <Typography sx={{ fontWeight: 700, color: "#0F172A" }}>Translation</Typography>
-                    <Typography sx={{ mt: 0.5, color: "#475569", fontSize: 13 }}>
-                      AI Translation — Review Against Original
-                    </Typography>
-                  </Box>
-                  {!selectedDiscovery.source_language_is_english ? (
-                    <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap", rowGap: 1 }}>
-                      {selectedDiscovery.active_translation ? (
-                        <>
-                          <Button
-                            size="small"
-                            variant={discoveryTranslationView === "english" ? "contained" : "outlined"}
-                            onClick={() => setDiscoveryTranslationView("english")}
-                            sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700 }}
-                          >
-                            English
-                          </Button>
-                          <Button
-                            size="small"
-                            variant={discoveryTranslationView === "original" ? "contained" : "outlined"}
-                            onClick={() => setDiscoveryTranslationView("original")}
-                            sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700 }}
-                          >
-                            Original
-                          </Button>
-                          <Button
-                            size="small"
-                            variant="outlined"
-                            startIcon={<TranslateOutlinedIcon />}
-                            disabled={!canUpdate || translatingDiscoveryId === selectedDiscovery.id}
-                            onClick={() => void handleTranslateDiscovery(selectedDiscovery, true)}
-                            sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700 }}
-                          >
-                            Regenerate Translation
-                          </Button>
-                        </>
-                      ) : (
-                        <Button
-                          size="small"
-                          variant="contained"
-                          startIcon={<TranslateOutlinedIcon />}
-                          disabled={!canUpdate || translatingDiscoveryId === selectedDiscovery.id}
-                          onClick={() => void handleTranslateDiscovery(selectedDiscovery)}
-                          sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700, bgcolor: "#2563EB" }}
-                        >
-                          {translatingDiscoveryId === selectedDiscovery.id ? "Translating..." : "Translate to English"}
-                        </Button>
-                      )}
-                    </Stack>
-                  ) : null}
-                </Stack>
-                {selectedDiscovery.source_language_is_english ? (
-                  <Alert severity="info" sx={{ mt: 1.2, borderRadius: "8px" }}>
-                    Original language: English. No translation required.
-                  </Alert>
-                ) : null}
-                {translatingDiscoveryId === selectedDiscovery.id ? (
-                  <Stack direction="row" spacing={1} sx={{ mt: 1.2, alignItems: "center" }}>
-                    <CircularProgress size={18} />
+                {showSourceDetails ? (
+                  <Stack spacing={0.6} sx={{ mt: 1.2 }}>
                     <Typography sx={{ color: "#475569", fontSize: 13 }}>
-                      Generating English translation...
+                      Source trust: {selectedDiscoverySourceMetadata?.source_trust || "Not available"}
                     </Typography>
+                    {selectedDiscovery.source_type === "public_procurement" ? (
+                      <>
+                        <Typography sx={{ color: "#475569", fontSize: 13 }}>
+                          Publication Number: {selectedDiscoverySourceMetadata?.publication_number || "Not available"}
+                        </Typography>
+                        <Typography sx={{ color: "#475569", fontSize: 13 }}>
+                          Notice Identifier: {selectedDiscoverySourceMetadata?.notice_identifier || "Not available"}
+                        </Typography>
+                        <Typography sx={{ color: "#475569", fontSize: 13 }}>
+                          Notice Version: {selectedDiscoverySourceMetadata?.notice_version || "Not available"}
+                        </Typography>
+                      </>
+                    ) : null}
+                    {selectedDiscovery.source_type === "marketplace_project" ? (
+                      <>
+                        <Typography sx={{ color: "#475569", fontSize: 13 }}>
+                          Project ID: {selectedDiscoverySourceMetadata?.provider_project_id || selectedDiscovery.external_id || "Not available"}
+                        </Typography>
+                        <Typography sx={{ color: "#475569", fontSize: 13 }}>
+                          Project Type: {selectedDiscoverySourceMetadata?.project_type || "Not available"}
+                        </Typography>
+                      </>
+                    ) : null}
+                    {selectedDiscovery.source_type === "employment_contract" ? (
+                      <>
+                        <Typography sx={{ color: "#475569", fontSize: 13 }}>
+                          Provider Job ID: {selectedDiscovery.external_id || "Not available"}
+                        </Typography>
+                        <Typography sx={{ color: "#475569", fontSize: 13 }}>
+                          Engagement Type: {selectedDiscoverySourceMetadata?.engagement_type || "Not available"}
+                        </Typography>
+                      </>
+                    ) : null}
                   </Stack>
                 ) : null}
               </Paper>
@@ -3305,8 +4937,183 @@ export default function AugmisBusinessConnectorsPage() {
               </Paper>
 
               <Paper elevation={0} sx={{ p: 1.5, borderRadius: "8px", border: "1px solid #E2E8F0" }}>
+                <Stack direction="row" spacing={1} sx={{ justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", rowGap: 1 }}>
+                  <Box>
+                    <Typography sx={{ fontWeight: 700, color: "#0F172A" }}>Opportunity Intelligence</Typography>
+                    <Typography sx={{ mt: 0.5, color: "#475569", fontSize: 13 }}>
+                      Stage 2 commercial ranking plus optional Stage 3 deep assessment.
+                    </Typography>
+                  </Box>
+                  <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap", rowGap: 1 }}>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      disabled={!canAdmin || busy}
+                      onClick={async () => {
+                        try {
+                          setBusy(true);
+                          setActiveActionLabel("Recalculating priorities");
+                          await recalculateAugmisBusinessDiscoveryPriorities(100);
+                          await refreshWorkspace();
+                          if (selectedDiscovery) {
+                            await openDiscoveryDrawer(selectedDiscovery);
+                          }
+                          showToast("Commercial priorities recalculated.", "success");
+                        } catch (error) {
+                          showToast(getBackendErrorMessage(error, "Unable to recalculate priorities."), "error");
+                        } finally {
+                          setBusy(false);
+                          setActiveActionLabel(null);
+                        }
+                      }}
+                      sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700 }}
+                    >
+                      Recalculate Priorities
+                    </Button>
+                    <Button
+                      size="small"
+                      variant="contained"
+                      startIcon={<AutorenewRoundedIcon />}
+                      disabled={!canQualify || busy}
+                      onClick={() => void handleDeepAssessDiscovery(selectedDiscovery)}
+                      sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700, bgcolor: "#2563EB" }}
+                    >
+                      {selectedDiscoveryDeepAssessment ? "Re-run Deep Assess" : "Deep Assess"}
+                    </Button>
+                  </Stack>
+                </Stack>
+                <Stack direction="row" spacing={0.75} sx={{ mt: 1.2, flexWrap: "wrap", rowGap: 0.75 }}>
+                  <Chip
+                    label={
+                      selectedDiscoveryIntelligence?.commercial_priority_score == null
+                        ? "Priority not scored"
+                        : `Priority ${selectedDiscoveryIntelligence.commercial_priority_band || "?"} • ${Math.round(selectedDiscoveryIntelligence.commercial_priority_score)}`
+                    }
+                    size="small"
+                    sx={{ textTransform: "uppercase", border: "1px solid", ...discoveryPriorityBandChip(selectedDiscoveryIntelligence?.commercial_priority_band) }}
+                  />
+                  <Chip
+                    label={(selectedDiscoveryIntelligence?.commercial_recommendation || "watch").toUpperCase()}
+                    size="small"
+                    sx={{ textTransform: "uppercase", border: "1px solid", ...discoveryRecommendationChip(selectedDiscoveryIntelligence?.commercial_recommendation) }}
+                  />
+                  <Chip
+                    label={`Feasibility ${selectedDiscoveryIntelligence?.delivery_complexity || "unknown"}`}
+                    size="small"
+                    sx={{ textTransform: "capitalize", border: "1px solid", bgcolor: "#F8FAFC", color: "#334155", borderColor: "#E2E8F0" }}
+                  />
+                </Stack>
+                <Box sx={{ mt: 1.2, display: "grid", gap: 1, gridTemplateColumns: { xs: "1fr", md: "repeat(2, minmax(0, 1fr))" } }}>
+                  <MetadataMetric label="Commercial Priority" value={selectedDiscoveryIntelligence?.commercial_priority_score == null ? "Not available" : Math.round(selectedDiscoveryIntelligence.commercial_priority_score)} />
+                  <MetadataMetric label="Delivery Model" value={selectedDiscoveryIntelligence?.delivery_model || "Not available"} />
+                  <MetadataMetric label="Data Quality" value={selectedDiscoveryIntelligence?.data_quality_status || "Not available"} />
+                  <MetadataMetric label="Urgency" value={selectedDiscoveryIntelligence?.urgency_status || "Not available"} />
+                </Box>
+                <Box sx={{ mt: 1.25 }}>
+                  <Typography sx={{ fontWeight: 700, color: "#0F172A", fontSize: 13 }}>Why this is ranked here</Typography>
+                  <Stack spacing={0.75} sx={{ mt: 0.8 }}>
+                    {(selectedDiscoveryIntelligence?.commercial_recommendation_reasons_json || []).length ? (
+                      selectedDiscoveryIntelligence?.commercial_recommendation_reasons_json.map((reason) => (
+                        <Typography key={`rank-reason-${reason}`} sx={{ color: "#166534", fontSize: 13 }}>
+                          + {reason}
+                        </Typography>
+                      ))
+                    ) : (
+                      <Typography sx={{ color: "#475569", fontSize: 13 }}>No deterministic priority reasons recorded yet.</Typography>
+                    )}
+                  </Stack>
+                </Box>
+                <Box sx={{ mt: 1.25 }}>
+                  <Typography sx={{ fontWeight: 700, color: "#0F172A", fontSize: 13 }}>Risks</Typography>
+                  <Stack spacing={0.75} sx={{ mt: 0.8 }}>
+                    {(selectedDiscoveryIntelligence?.commercial_risks_json || []).length ? (
+                      selectedDiscoveryIntelligence?.commercial_risks_json.map((reason) => (
+                        <Typography key={`rank-risk-${reason}`} sx={{ color: "#B45309", fontSize: 13 }}>
+                          - {reason}
+                        </Typography>
+                      ))
+                    ) : (
+                      <Typography sx={{ color: "#475569", fontSize: 13 }}>No additional deterministic risks recorded.</Typography>
+                    )}
+                  </Stack>
+                </Box>
+                <Box sx={{ mt: 1.25 }}>
+                  <Typography sx={{ fontWeight: 700, color: "#0F172A", fontSize: 13 }}>Relevant experience</Typography>
+                  <Stack spacing={0.8} sx={{ mt: 0.8 }}>
+                    {(selectedDiscoveryIntelligence?.matched_experience_summary_json || []).length ? (
+                      selectedDiscoveryIntelligence?.matched_experience_summary_json.map((match) => (
+                        <Paper key={match.experience_item_id} elevation={0} sx={{ p: 1, borderRadius: "8px", border: "1px solid #E2E8F0", bgcolor: "#F8FAFC" }}>
+                          <Stack direction="row" spacing={1} sx={{ justifyContent: "space-between", alignItems: "center" }}>
+                            <Typography sx={{ fontWeight: 700, color: "#0F172A", fontSize: 13 }}>{match.name}</Typography>
+                            <Chip
+                              size="small"
+                              label={`${match.relevance_label} • ${Math.round(match.match_score)}`}
+                              sx={{ textTransform: "capitalize", border: "1px solid", ...discoveryPriorityBandChip(match.relevance_label === "strong" ? "A" : match.relevance_label === "moderate" ? "B" : "C") }}
+                            />
+                          </Stack>
+                          {(match.reasons || []).length ? (
+                            <Typography sx={{ mt: 0.55, color: "#475569", fontSize: 12.5 }}>
+                              {match.reasons[0]}
+                            </Typography>
+                          ) : null}
+                        </Paper>
+                      ))
+                    ) : (
+                      <Typography sx={{ color: "#475569", fontSize: 13 }}>No relevant experience items matched yet.</Typography>
+                    )}
+                  </Stack>
+                </Box>
+                <Divider sx={{ my: 1.5 }} />
+                <Typography sx={{ fontWeight: 700, color: "#0F172A" }}>AI Deep Assessment</Typography>
+                {selectedDiscoveryDeepAssessment ? (
+                  <Stack spacing={1} sx={{ mt: 1 }}>
+                    <Typography sx={{ color: "#334155" }}>{selectedDiscoveryDeepAssessment.executive_summary || selectedDiscoveryDeepAssessment.analysis_json.executive_summary}</Typography>
+                    <Stack direction="row" spacing={0.75} sx={{ flexWrap: "wrap", rowGap: 0.75 }}>
+                      <Chip label={(selectedDiscoveryDeepAssessment.recommendation || "watch").toUpperCase()} size="small" sx={{ textTransform: "uppercase", border: "1px solid", ...discoveryRecommendationChip(selectedDiscoveryDeepAssessment.recommendation) }} />
+                      <Chip label={`Confidence ${selectedDiscoveryDeepAssessment.recommendation_confidence ?? "?"}`} size="small" sx={{ border: "1px solid", bgcolor: "#EFF6FF", color: "#1D4ED8", borderColor: "#BFDBFE" }} />
+                      <Chip label={`Effort ${selectedDiscoveryDeepAssessment.analysis_json.estimated_effort.level.replaceAll("_", " ")}`} size="small" sx={{ textTransform: "capitalize", border: "1px solid", bgcolor: "#F8FAFC", color: "#334155", borderColor: "#E2E8F0" }} />
+                    </Stack>
+                    <Box sx={{ display: "grid", gap: 1, gridTemplateColumns: { xs: "1fr", md: "repeat(3, minmax(0, 1fr))" } }}>
+                      <MetadataMetric label="Solution Fit" value={selectedDiscoveryDeepAssessment.analysis_json.solution_fit.score} />
+                      <MetadataMetric label="Commercial" value={selectedDiscoveryDeepAssessment.analysis_json.commercial_attractiveness.score} />
+                      <MetadataMetric label="Feasibility" value={selectedDiscoveryDeepAssessment.analysis_json.delivery_feasibility.score} />
+                    </Box>
+                    {(selectedDiscoveryDeepAssessment.analysis_json.risks || []).length ? (
+                      <Typography sx={{ color: "#475569", fontSize: 13 }}>
+                        Risks: {selectedDiscoveryDeepAssessment.analysis_json.risks.join(" | ")}
+                      </Typography>
+                    ) : null}
+                    {(selectedDiscoveryDeepAssessment.analysis_json.unknowns || []).length ? (
+                      <Typography sx={{ color: "#475569", fontSize: 13 }}>
+                        Unknowns: {selectedDiscoveryDeepAssessment.analysis_json.unknowns.join(" | ")}
+                      </Typography>
+                    ) : null}
+                    <Typography sx={{ color: "#0F172A", fontSize: 13, fontWeight: 700 }}>
+                      Suggested next action: {selectedDiscoveryDeepAssessment.analysis_json.suggested_next_action}
+                    </Typography>
+                    <Typography sx={{ color: "#64748B", fontSize: 12 }}>
+                      Version {selectedDiscoveryDeepAssessment.analysis_version} • {selectedDiscoveryDeepAssessment.model} • {formatDate(selectedDiscoveryDeepAssessment.created_at)}
+                    </Typography>
+                    <Typography sx={{ color: "#64748B", fontSize: 12 }}>
+                      Saved analyses: {selectedDiscoveryDeepAssessmentHistory.length}
+                    </Typography>
+                  </Stack>
+                ) : (
+                  <Alert severity="info" sx={{ mt: 1.1, borderRadius: "8px" }}>
+                    No AI deep assessment saved yet. Use Deep Assess for an operator-initiated structured review.
+                  </Alert>
+                )}
+              </Paper>
+
+              <Paper elevation={0} sx={{ p: 1.5, borderRadius: "8px", border: "1px solid #E2E8F0" }}>
                 <Typography sx={{ fontWeight: 700, color: "#0F172A" }}>
-                  {selectedDiscovery.source_type === "public_procurement" ? "Procurement Details" : "Search Evidence"}
+                  {selectedDiscovery.source_type === "public_procurement"
+                    ? "Procurement Details"
+                    : selectedDiscovery.source_type === "marketplace_project"
+                      ? "Marketplace Summary"
+                      : selectedDiscovery.source_type === "employment_contract"
+                        ? "Employment / Contract Summary"
+                        : "Search Evidence"}
                 </Typography>
                 {selectedDiscoverySourceMetadata?.queries_matched?.length ? (
                   <>
@@ -3319,14 +5126,16 @@ export default function AugmisBusinessConnectorsPage() {
                   </>
                 ) : null}
                 <Typography sx={{ mt: 1.1, color: "#475569" }}>
-                  {selectedDiscovery.source_type === "public_procurement" ? "Structured Summary" : "Search Snippet"}
+                  {selectedDiscovery.source_type === "public_procurement" ? "Structured Summary" : selectedDiscovery.source_type === "employment_contract" ? "Provider Summary" : "Search Snippet"}
                 </Typography>
                 <Typography sx={{ mt: 0.5, color: "#334155", whiteSpace: "pre-wrap" }}>
                   {discoveryTranslationView === "english" && selectedDiscovery.active_translation
                     ? translatedDiscoverySummary(selectedDiscovery) || "Not available"
                     : selectedDiscovery.source_type === "public_procurement"
-                      ? selectedDiscoverySourceMetadata?.ted_summary || selectedDiscovery.raw_summary || "Not available"
-                      : selectedDiscoveryRawContent?.search_result_snippet || selectedDiscovery.raw_summary || "Not available"}
+                      ? selectedDiscoverySourceMetadata?.ted_summary || selectedDiscoveryNormalizedContent.summary.plain_text || selectedDiscovery.raw_summary || "Not available"
+                      : selectedDiscovery.source_type === "marketplace_project"
+                        ? selectedDiscoveryNormalizedContent.summary.plain_text || selectedDiscovery.raw_summary || "Not available"
+                        : selectedDiscoveryNormalizedContent.summary.plain_text || selectedDiscoveryRawContent?.search_result_snippet || selectedDiscovery.raw_summary || "Not available"}
                 </Typography>
                 {selectedDiscovery.source_type === "public_procurement" ? (
                   <Box
@@ -3354,6 +5163,84 @@ export default function AugmisBusinessConnectorsPage() {
                     <MetadataMetric label="CPV Codes" value={selectedDiscoverySourceMetadata?.cpv_codes?.join(", ") || "Not available"} />
                   </Box>
                 ) : null}
+                {selectedDiscovery.source_type === "marketplace_project" ? (
+                  <>
+                    <Box
+                      sx={{
+                        mt: 1.2,
+                        display: "grid",
+                        gap: 1,
+                        gridTemplateColumns: { xs: "1fr", md: "repeat(2, minmax(0, 1fr))" },
+                      }}
+                    >
+                      <MetadataMetric
+                        label="Budget"
+                        value={
+                          selectedDiscovery.budget_min == null && selectedDiscovery.budget_max == null
+                            ? "Not available"
+                            : `${selectedDiscovery.budget_min ?? "?"}${selectedDiscovery.budget_max != null ? ` - ${selectedDiscovery.budget_max}` : ""}${selectedDiscovery.currency ? ` ${selectedDiscovery.currency}` : ""}`
+                        }
+                      />
+                      <MetadataMetric label="Bid Count" value={selectedDiscoverySourceMetadata?.bid_count != null ? String(selectedDiscoverySourceMetadata.bid_count) : "Not available"} />
+                      <MetadataMetric label="Project Status" value={selectedDiscoverySourceMetadata?.project_status || "Not available"} />
+                      <MetadataMetric label="Client Country" value={selectedDiscoverySourceMetadata?.client_country || "Not available"} />
+                      <MetadataMetric label="Client Location" value={selectedDiscoverySourceMetadata?.client_location || "Not available"} />
+                      <MetadataMetric label="Client Rating" value={selectedDiscoverySourceMetadata?.client_rating != null ? String(selectedDiscoverySourceMetadata.client_rating) : "Not available"} />
+                      <MetadataMetric label="Client Reviews" value={selectedDiscoverySourceMetadata?.client_review_count != null ? String(selectedDiscoverySourceMetadata.client_review_count) : "Not available"} />
+                      <MetadataMetric label="Payment Verified" value={selectedDiscoverySourceMetadata?.client_payment_verified == null ? "Not available" : selectedDiscoverySourceMetadata.client_payment_verified ? "Yes" : "No"} />
+                      <MetadataMetric label="Projects Posted" value={selectedDiscoverySourceMetadata?.client_projects_posted != null ? String(selectedDiscoverySourceMetadata.client_projects_posted) : "Not available"} />
+                      <MetadataMetric label="Projects Completed" value={selectedDiscoverySourceMetadata?.client_projects_completed != null ? String(selectedDiscoverySourceMetadata.client_projects_completed) : "Not available"} />
+                    </Box>
+                    {selectedDiscoverySourceMetadata?.skills?.length ? (
+                      <>
+                        <Typography sx={{ mt: 1.1, color: "#475569" }}>Skills</Typography>
+                        <Stack direction="row" spacing={0.75} sx={{ mt: 0.8, flexWrap: "wrap", rowGap: 0.75 }}>
+                          {selectedDiscoverySourceMetadata.skills.map((skill) => (
+                            <Chip key={`${selectedDiscovery.id}-${skill}`} label={skill} size="small" sx={{ borderRadius: "8px", bgcolor: "#F8FAFC" }} />
+                          ))}
+                        </Stack>
+                      </>
+                    ) : null}
+                  </>
+                ) : null}
+                {selectedDiscovery.source_type === "employment_contract" ? (
+                  <>
+                    <Box
+                      sx={{
+                        mt: 1.2,
+                        display: "grid",
+                        gap: 1,
+                        gridTemplateColumns: { xs: "1fr", md: "repeat(2, minmax(0, 1fr))" },
+                      }}
+                    >
+                      <MetadataMetric label="Employer" value={selectedDiscovery.organization_name || selectedDiscoverySourceMetadata?.company_name || "Not available"} />
+                      <MetadataMetric label="Location" value={selectedDiscoverySourceMetadata?.location || selectedDiscovery.region || "Not available"} />
+                      <MetadataMetric label="Remote" value={selectedDiscoverySourceMetadata?.remote == null ? "Not available" : selectedDiscoverySourceMetadata.remote ? "Yes" : "No"} />
+                      <MetadataMetric label="Employment Type" value={selectedDiscoverySourceMetadata?.employment_type || "Not available"} />
+                      <MetadataMetric label="Engagement Type" value={selectedDiscoverySourceMetadata?.engagement_type || "Not available"} />
+                      <MetadataMetric
+                        label="Compensation"
+                        value={
+                          selectedDiscovery.budget_min == null && selectedDiscovery.budget_max == null
+                            ? "Not available"
+                            : `${selectedDiscovery.budget_min ?? "?"}${selectedDiscovery.budget_max != null ? ` - ${selectedDiscovery.budget_max}` : ""}${selectedDiscovery.currency ? ` ${selectedDiscovery.currency}` : ""}${selectedDiscoverySourceMetadata?.salary_period ? ` / ${selectedDiscoverySourceMetadata.salary_period}` : ""}`
+                        }
+                      />
+                      <MetadataMetric label="Category" value={selectedDiscoverySourceMetadata?.category || "Not available"} />
+                      <MetadataMetric label="Posted" value={formatDate(selectedDiscovery.published_date)} />
+                    </Box>
+                    {(selectedDiscoverySourceMetadata?.skills?.length || selectedDiscoverySourceMetadata?.tags?.length) ? (
+                      <>
+                        <Typography sx={{ mt: 1.1, color: "#475569" }}>Skills / Tags</Typography>
+                        <Stack direction="row" spacing={0.75} sx={{ mt: 0.8, flexWrap: "wrap", rowGap: 0.75 }}>
+                          {[...(selectedDiscoverySourceMetadata?.skills || []), ...(selectedDiscoverySourceMetadata?.tags || [])].map((item) => (
+                            <Chip key={`${selectedDiscovery.id}-${item}`} label={item} size="small" sx={{ borderRadius: "8px", bgcolor: "#F8FAFC" }} />
+                          ))}
+                        </Stack>
+                      </>
+                    ) : null}
+                  </>
+                ) : null}
                 {selectedDiscovery.evidence_json.length ? (
                   <>
                     <Divider sx={{ my: 1.2 }} />
@@ -3377,28 +5264,150 @@ export default function AugmisBusinessConnectorsPage() {
               </Paper>
 
               <Paper elevation={0} sx={{ p: 1.5, borderRadius: "8px", border: "1px solid #E2E8F0" }}>
-                <Typography sx={{ fontWeight: 700, color: "#0F172A" }}>
-                  {discoveryTranslationView === "english" && selectedDiscovery.active_translation
-                    ? "English Description"
-                    : "Requirement"}
-                </Typography>
-                <Typography sx={{ mt: 0.8, color: "#475569" }}>
-                  {discoveryTranslationView === "english" && selectedDiscovery.active_translation
-                    ? translatedDiscoveryDescription(selectedDiscovery) || "Not available"
-                    : selectedDiscovery.requirement_summary || "Not available"}
-                </Typography>
+                <Stack direction="row" spacing={1} sx={{ justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", rowGap: 1 }}>
+                  <Box>
+                    <Typography sx={{ fontWeight: 700, color: "#0F172A" }}>
+                      {selectedRequirementContent.title}
+                    </Typography>
+                    <Typography sx={{ mt: 0.5, color: "#475569", fontSize: 13 }}>
+                      {selectedRequirementContent.subtitle}
+                    </Typography>
+                  </Box>
+                  <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap", rowGap: 1 }}>
+                    {!selectedDiscovery.source_language_is_english ? (
+                      <>
+                        {selectedDiscovery.active_translation ? (
+                          <>
+                            <Button
+                              size="small"
+                              variant={discoveryTranslationView === "english" ? "contained" : "outlined"}
+                              onClick={() => setDiscoveryTranslationView("english")}
+                              sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700 }}
+                            >
+                              English
+                            </Button>
+                            <Button
+                              size="small"
+                              variant={discoveryTranslationView === "original" ? "contained" : "outlined"}
+                              onClick={() => setDiscoveryTranslationView("original")}
+                              sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700 }}
+                            >
+                              Original
+                            </Button>
+                            <Button
+                              size="small"
+                              variant="outlined"
+                              startIcon={<TranslateOutlinedIcon />}
+                              disabled={!canUpdate || translatingDiscoveryId === selectedDiscovery.id}
+                              onClick={() => void handleTranslateDiscovery(selectedDiscovery, true)}
+                              sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700 }}
+                            >
+                              Regenerate
+                            </Button>
+                          </>
+                        ) : (
+                          <Button
+                            size="small"
+                            variant="contained"
+                            startIcon={<TranslateOutlinedIcon />}
+                            disabled={!canUpdate || translatingDiscoveryId === selectedDiscovery.id}
+                            onClick={() => void handleTranslateDiscovery(selectedDiscovery)}
+                            sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700, bgcolor: "#2563EB" }}
+                          >
+                            {translatingDiscoveryId === selectedDiscovery.id ? "Translating..." : "English"}
+                          </Button>
+                        )}
+                      </>
+                    ) : null}
+                    {selectedDiscovery.source_url ? (
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        startIcon={<OpenInNewRoundedIcon />}
+                        component="a"
+                        href={selectedDiscovery.source_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700 }}
+                      >
+                        Open Source
+                      </Button>
+                    ) : null}
+                  </Stack>
+                </Stack>
+                {selectedDiscovery.source_language_is_english ? (
+                  <Alert severity="info" sx={{ mt: 1.1, borderRadius: "8px" }}>
+                    Original language: English. No translation required.
+                  </Alert>
+                ) : null}
+                {translatingDiscoveryId === selectedDiscovery.id ? (
+                  <Stack direction="row" spacing={1} sx={{ mt: 1.1, alignItems: "center" }}>
+                    <CircularProgress size={18} />
+                    <Typography sx={{ color: "#475569", fontSize: 13 }}>
+                      Generating English translation...
+                    </Typography>
+                  </Stack>
+                ) : null}
+                <Paper
+                  elevation={0}
+                  sx={{
+                    mt: 1.2,
+                    p: 1.5,
+                    borderRadius: "10px",
+                    border: "1px solid #E2E8F0",
+                    bgcolor: "#FCFDFE",
+                  }}
+                >
+                  <Box
+                    sx={{
+                      maxHeight: showFullRequirement ? "none" : 360,
+                      overflow: "hidden",
+                      "& p, & ul, & ol": { my: 0.9, color: "#334155", lineHeight: 1.75 },
+                      "& li": { mb: 0.55, color: "#334155" },
+                      "& h1, & h2, & h3, & h4": { mt: 1.3, mb: 0.8, color: "#0F172A" },
+                      "& a": { color: "#2563EB", textDecoration: "none" },
+                      "& blockquote": {
+                        m: 0,
+                        px: 1.2,
+                        py: 0.8,
+                        borderLeft: "3px solid #BFDBFE",
+                        bgcolor: "#F8FBFF",
+                        color: "#334155",
+                      },
+                    }}
+                  >
+                    {selectedRequirementContent.mode === "original" && selectedRequirementContent.safeHtml ? (
+                      <Box dangerouslySetInnerHTML={{ __html: selectedRequirementContent.safeHtml }} />
+                    ) : (
+                      <Typography sx={{ color: "#334155", whiteSpace: "pre-wrap", lineHeight: 1.8 }}>
+                        {selectedRequirementContent.text}
+                      </Typography>
+                    )}
+                  </Box>
+                  {(selectedRequirementContent.text || "").length > 900 ? (
+                    <Button
+                      size="small"
+                      onClick={() => setShowFullRequirement((current) => !current)}
+                      sx={{ mt: 1, px: 0, textTransform: "none", fontWeight: 700 }}
+                    >
+                      {showFullRequirement ? "Show less" : "Show more"}
+                    </Button>
+                  ) : null}
+                </Paper>
               </Paper>
 
-              {selectedDiscovery.source_type !== "public_procurement" ? (
+              {selectedDiscovery.source_type !== "public_procurement" && selectedDiscovery.source_type !== "marketplace_project" && selectedDiscovery.source_type !== "employment_contract" ? (
                 <Paper elevation={0} sx={{ p: 1.5, borderRadius: "8px", border: "1px solid #E2E8F0" }}>
-                  <Typography sx={{ fontWeight: 700, color: "#0F172A" }}>Fetched Source Content</Typography>
+                  <Typography sx={{ fontWeight: 700, color: "#0F172A" }}>Source Content Excerpt</Typography>
                   {selectedDiscoverySourceMetadata?.partial_source_retrieval ? (
                     <Alert severity="info" sx={{ mt: 1.1, borderRadius: "8px" }}>
                       Partial Source Retrieval
                     </Alert>
                   ) : null}
                   <Typography sx={{ mt: 0.5, color: "#334155", whiteSpace: "pre-wrap" }}>
-                    {selectedDiscoveryRawContent?.fetched_source_text || "Not available"}
+                    {selectedDiscoveryNormalizedContent.full_text.plain_text ||
+                      selectedDiscoveryRawContent?.fetched_source_text ||
+                      "Not available"}
                   </Typography>
                   {selectedDiscoverySourceMetadata?.fetch_error ? (
                     <Alert severity="warning" sx={{ mt: 1.2, borderRadius: "8px" }}>
@@ -3825,22 +5834,179 @@ export default function AugmisBusinessConnectorsPage() {
       </AdminFormDialog>
 
       <AdminFormDialog
+        open={seedDialogOpen}
+        onClose={() => {
+          setSeedDialogOpen(false);
+          setEditingSeed(null);
+          setSeedForm(buildWebSeedForm());
+        }}
+        title={editingSeed ? "Edit Seed" : "Add Seed"}
+        actions={
+          <>
+            <Button
+              onClick={() => {
+                setSeedDialogOpen(false);
+                setEditingSeed(null);
+                setSeedForm(buildWebSeedForm());
+              }}
+              sx={{ textTransform: "none" }}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => void handleSaveWebSeed()}
+              variant="contained"
+              disabled={busy || !seedForm.name.trim() || !seedForm.seed_url.trim()}
+              sx={{ textTransform: "none", bgcolor: "#2563EB" }}
+            >
+              {editingSeed ? "Save Seed" : "Add Seed"}
+            </Button>
+          </>
+        }
+        maxWidth={680}
+        stackSx={{ maxWidth: "100%" }}
+      >
+        <Box
+          sx={{
+            display: "grid",
+            gap: 1.2,
+            gridTemplateColumns: { xs: "1fr", md: "repeat(2, minmax(0, 1fr))" },
+          }}
+        >
+          <AdminFormTextField
+            label="Name"
+            value={seedForm.name}
+            onChange={(event: ChangeEvent<HTMLInputElement>) =>
+              setSeedForm((current) => ({ ...current, name: event.target.value }))
+            }
+          />
+          <TextField
+            select
+            size="small"
+            label="Seed Type"
+            value={seedForm.seed_type}
+            onChange={(event) => setSeedForm((current) => ({ ...current, seed_type: event.target.value }))}
+          >
+            <MenuItem value="url">URL</MenuItem>
+            <MenuItem value="domain">Domain</MenuItem>
+            <MenuItem value="sitemap">Sitemap</MenuItem>
+            <MenuItem value="procurement_portal">Procurement Portal</MenuItem>
+            <MenuItem value="career_portal">Career Portal</MenuItem>
+            <MenuItem value="government_portal">Government Portal</MenuItem>
+            <MenuItem value="public_organization">Public Organization</MenuItem>
+            <MenuItem value="target_account">Target Account</MenuItem>
+          </TextField>
+          <AdminFormTextField
+            label="Seed URL"
+            value={seedForm.seed_url}
+            onChange={(event: ChangeEvent<HTMLInputElement>) =>
+              setSeedForm((current) => ({ ...current, seed_url: event.target.value }))
+            }
+            sx={{ gridColumn: { xs: "1 / -1", md: "1 / -1" } }}
+          />
+          <TextField
+            select
+            size="small"
+            label="Crawl Scope"
+            value={seedForm.crawl_scope}
+            onChange={(event) => setSeedForm((current) => ({ ...current, crawl_scope: event.target.value }))}
+          >
+            <MenuItem value="same_domain">Same Domain</MenuItem>
+            <MenuItem value="approved_domains">Approved Domains</MenuItem>
+            <MenuItem value="cross_domain_trusted">Trusted Cross-Domain</MenuItem>
+          </TextField>
+          <TextField
+            select
+            size="small"
+            label="Frequency"
+            value={seedForm.crawl_frequency}
+            onChange={(event) => setSeedForm((current) => ({ ...current, crawl_frequency: event.target.value }))}
+          >
+            <MenuItem value="daily">Daily</MenuItem>
+            <MenuItem value="weekly">Weekly</MenuItem>
+            <MenuItem value="monthly">Monthly</MenuItem>
+            <MenuItem value="manual">Manual</MenuItem>
+          </TextField>
+          <AdminFormTextField
+            label="Maximum Depth"
+            value={seedForm.max_depth}
+            onChange={(event: ChangeEvent<HTMLInputElement>) =>
+              setSeedForm((current) => ({ ...current, max_depth: event.target.value }))
+            }
+          />
+          <AdminFormTextField
+            label="Maximum Pages"
+            value={seedForm.max_pages}
+            onChange={(event: ChangeEvent<HTMLInputElement>) =>
+              setSeedForm((current) => ({ ...current, max_pages: event.target.value }))
+            }
+          />
+          <AdminFormTextField
+            label="Priority"
+            value={seedForm.priority}
+            onChange={(event: ChangeEvent<HTMLInputElement>) =>
+              setSeedForm((current) => ({ ...current, priority: event.target.value }))
+            }
+          />
+          <TextField
+            select
+            size="small"
+            label="Enabled"
+            value={seedForm.enabled ? "yes" : "no"}
+            onChange={(event) => setSeedForm((current) => ({ ...current, enabled: event.target.value === "yes" }))}
+          >
+            <MenuItem value="yes">Yes</MenuItem>
+            <MenuItem value="no">No</MenuItem>
+          </TextField>
+          <AdminFormTextField
+            label="Country"
+            value={seedForm.country}
+            onChange={(event: ChangeEvent<HTMLInputElement>) =>
+              setSeedForm((current) => ({ ...current, country: event.target.value }))
+            }
+          />
+          <AdminFormTextField
+            label="Industry"
+            value={seedForm.industry}
+            onChange={(event: ChangeEvent<HTMLInputElement>) =>
+              setSeedForm((current) => ({ ...current, industry: event.target.value }))
+            }
+          />
+          <AdminFormTextField
+            label="Organisation"
+            value={seedForm.organization_name}
+            onChange={(event: ChangeEvent<HTMLInputElement>) =>
+              setSeedForm((current) => ({ ...current, organization_name: event.target.value }))
+            }
+          />
+          <AdminFormTextField
+            label="Notes"
+            value={seedForm.notes}
+            onChange={(event: ChangeEvent<HTMLInputElement>) =>
+              setSeedForm((current) => ({ ...current, notes: event.target.value }))
+            }
+            sx={{ gridColumn: { xs: "1 / -1", md: "1 / -1" } }}
+          />
+        </Box>
+      </AdminFormDialog>
+
+      <AdminFormDialog
         open={credentialDialogOpen}
         onClose={() => {
           setCredentialDialogOpen(false);
-          setCredentialFormValue("");
-          setCredentialShowValue(false);
-          setCredentialTestMessage(null);
+          resetCredentialForm();
         }}
-        title={credentialDialogMode === "replace" ? "Replace Provider Credential" : "Configure Provider Credential"}
+        title={
+          credentialDialogMode === "replace"
+            ? `Replace ${providerSecretLabel(selectedProvider)}`
+            : `Configure ${providerSecretLabel(selectedProvider)}`
+        }
         actions={
           <>
             <Button
               onClick={() => {
                 setCredentialDialogOpen(false);
-                setCredentialFormValue("");
-                setCredentialShowValue(false);
-                setCredentialTestMessage(null);
+                resetCredentialForm();
               }}
               sx={{ textTransform: "none" }}
             >
@@ -3849,7 +6015,7 @@ export default function AugmisBusinessConnectorsPage() {
             <Button
               onClick={() => void handleSaveCredential()}
               variant="contained"
-              disabled={busy || !credentialFormValue.trim()}
+              disabled={busy || (selectedProvider === "adzuna" ? !(credentialForm.appId.trim() && credentialForm.appKey.trim()) : !credentialForm.apiKey.trim())}
               sx={{ textTransform: "none", bgcolor: "#2563EB" }}
             >
               Save Credential
@@ -3866,33 +6032,70 @@ export default function AugmisBusinessConnectorsPage() {
             value={selectedProvider.toUpperCase()}
             slotProps={{ input: { readOnly: true } }}
           />
-          <TextField
-            size="small"
-            label="API Key"
-            type={credentialShowValue ? "text" : "password"}
-            value={credentialFormValue}
-            onChange={(event) => setCredentialFormValue(event.target.value)}
-            autoComplete="off"
-            slotProps={{
-              input: {
-                endAdornment: (
-                  <InputAdornment position="end">
-                    <IconButton
-                      edge="end"
-                      onClick={() => setCredentialShowValue((current) => !current)}
-                    >
-                      {credentialShowValue ? <VisibilityOffOutlinedIcon /> : <VisibilityOutlinedIcon />}
-                    </IconButton>
-                  </InputAdornment>
-                ),
-              },
-            }}
-          />
+          {selectedProvider === "adzuna" ? (
+            <>
+              <TextField
+                size="small"
+                label="App ID"
+                value={credentialForm.appId}
+                onChange={(event) => setCredentialForm((current) => ({ ...current, appId: event.target.value }))}
+                autoComplete="off"
+              />
+              <TextField
+                size="small"
+                label="App Key"
+                type={credentialShowValue ? "text" : "password"}
+                value={credentialForm.appKey}
+                onChange={(event) => setCredentialForm((current) => ({ ...current, appKey: event.target.value }))}
+                autoComplete="off"
+                slotProps={{
+                  input: {
+                    endAdornment: (
+                      <InputAdornment position="end">
+                        <IconButton edge="end" onClick={() => setCredentialShowValue((current) => !current)}>
+                          {credentialShowValue ? <VisibilityOffOutlinedIcon /> : <VisibilityOutlinedIcon />}
+                        </IconButton>
+                      </InputAdornment>
+                    ),
+                  },
+                }}
+              />
+            </>
+          ) : (
+            <TextField
+              size="small"
+              label={providerSecretLabel(selectedProvider)}
+              type={credentialShowValue ? "text" : "password"}
+              value={credentialForm.apiKey}
+              onChange={(event) => setCredentialForm((current) => ({ ...current, apiKey: event.target.value }))}
+              autoComplete="off"
+              slotProps={{
+                input: {
+                  endAdornment: (
+                    <InputAdornment position="end">
+                      <IconButton
+                        edge="end"
+                        onClick={() => setCredentialShowValue((current) => !current)}
+                      >
+                        {credentialShowValue ? <VisibilityOffOutlinedIcon /> : <VisibilityOutlinedIcon />}
+                      </IconButton>
+                    </InputAdornment>
+                  ),
+                },
+              }}
+            />
+          )}
           <Stack direction="row" spacing={1}>
             <Button
               variant="outlined"
-              onClick={() => void handleTestCredential(selectedProvider, credentialFormValue)}
-              disabled={busy || !credentialFormValue.trim()}
+              onClick={() =>
+                void handleTestCredential(selectedProvider, {
+                  apiKey: credentialForm.apiKey,
+                  appId: credentialForm.appId,
+                  appKey: credentialForm.appKey,
+                })
+              }
+              disabled={busy || (selectedProvider === "adzuna" ? !(credentialForm.appId.trim() && credentialForm.appKey.trim()) : !credentialForm.apiKey.trim())}
               sx={{ textTransform: "none", fontWeight: 700 }}
             >
               Test

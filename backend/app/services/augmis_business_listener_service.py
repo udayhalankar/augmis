@@ -23,6 +23,7 @@ from app.db_models import (
     BusinessDevelopmentExperienceItem,
     BusinessDevelopmentOpportunity,
     BusinessDevelopmentSearchProfile,
+    BusinessDevelopmentWebPage,
 )
 from app.models.augmis_business_models import (
     AugmisBusinessConnectorCreateRequest,
@@ -41,12 +42,34 @@ from app.services.augmis_business_connector_credential_service import (
     resolve_provider_credential,
     test_connector_credential,
 )
+from app.services.augmis_business_external_work_client import (
+    ExternalWorkOpportunity,
+    ExternalWorkProviderError,
+    get_external_work_provider,
+)
 from app.services.augmis_business_search_provider_service import (
     ensure_builtin_search_providers,
     resolve_search_provider_by_code,
 )
 from app.services.augmis_business_discovery_translation_service import (
     get_latest_translation_row,
+)
+from app.services.augmis_business_commercial_intelligence_service import (
+    refresh_discovery_commercial_intelligence,
+    serialize_discovery_commercial_intelligence,
+)
+from app.services.augmis_business_freelancer_client import (
+    FREELANCER_API_VERSION,
+    FreelancerApiError,
+    FreelancerClient,
+)
+from app.services.augmis_business_freelancer_mock_data import (
+    FREELANCER_MOCK_FIXTURE_VERSION,
+    freelancer_mock_projects,
+)
+from app.services.augmis_business_freelancer_query_builder import (
+    FreelancerQuerySpec,
+    build_freelancer_search_specs,
 )
 from app.services.augmis_business_service import create_opportunity, serialize_opportunity
 from app.services.augmis_business_ted_client import (
@@ -75,6 +98,15 @@ from app.services.augmis_business_translation_utils import (
     is_english_language,
     language_label,
 )
+from app.services.augmis_business_source_content_service import (
+    build_normalized_discovery_content,
+)
+from app.services.augmis_business_independent_discovery_service import (
+    INDEPENDENT_WEB_CONNECTOR_NAME,
+    INDEPENDENT_WEB_CONNECTOR_TYPE,
+    INDEPENDENT_WEB_SOURCE_NAME,
+    IndependentWebDiscoveryEngine,
+)
 
 
 DEFAULT_PROFILE_NAME = "Default AUGMIS Discovery Profile"
@@ -84,8 +116,20 @@ WEB_SEARCH_CONNECTOR_TYPE = "generic_web_search"
 WEB_SEARCH_CONNECTOR_NAME = "Web Opportunity Search"
 TED_CONNECTOR_TYPE = "ted_procurement"
 TED_CONNECTOR_NAME = "TED European Procurement"
+FREELANCER_CONNECTOR_TYPE = "freelancer_marketplace"
+FREELANCER_CONNECTOR_NAME = "Freelancer Marketplace"
+REMOTEOK_CONNECTOR_TYPE = "remote_job_feed"
+REMOTEOK_CONNECTOR_NAME = "Remote OK"
+ARBEITNOW_CONNECTOR_TYPE = "job_board_api"
+ARBEITNOW_CONNECTOR_NAME = "Arbeitnow"
+REMOTIVE_CONNECTOR_TYPE = "remote_job_api"
+REMOTIVE_CONNECTOR_NAME = "Remotive"
+ADZUNA_CONNECTOR_TYPE = "job_search_api"
+ADZUNA_CONNECTOR_NAME = "Adzuna"
 CONNECTOR_TEST_LABEL = "TEST / FIXTURE"
 CONNECTOR_PRODUCTION_LABEL = "PRODUCTION"
+CONNECTOR_TEST_MODE_LABEL = "TEST / MOCK"
+EMPLOYMENT_CONTRACT_SOURCE_TYPE = "employment_contract"
 
 WEB_SEARCH_FETCH_MAX_BYTES_MIN = 25_000
 WEB_SEARCH_FETCH_MAX_BYTES_MAX = 1_000_000
@@ -112,6 +156,8 @@ TED_RELEVANCE_BANDS = (
 DEFAULT_IRRELEVANT_THRESHOLD = 25.0
 TED_CLOSING_SOON_DAYS = 14
 TED_IRRELEVANT_THRESHOLD = 35.0
+FREELANCER_IRRELEVANT_THRESHOLD = 35.0
+EXTERNAL_WORK_IRRELEVANT_THRESHOLD = 35.0
 TED_HIGH_RELEVANCE_CPV: dict[str, str] = {
     "48170000": "Compliance software package",
     "48211000": "Platform interconnectivity software package",
@@ -225,6 +271,13 @@ TED_BUYER_QUALITY_TERMS = (
     "health",
     "regulator",
 )
+FREELANCER_NEGATIVE_SIGNAL_RULES: tuple[dict[str, Any], ...] = (
+    {"name": "Design-only work", "terms": ("logo design", "graphic design", "brochure", "banner design", "photoshop"), "penalty": 30.0},
+    {"name": "Data entry or scraping", "terms": ("data entry", "copy paste", "lead scraping", "web scraping list", "captcha"), "penalty": 26.0},
+    {"name": "SEO or social posting", "terms": ("seo", "social media posting", "instagram", "facebook ads", "backlinks"), "penalty": 24.0},
+    {"name": "Content-only work", "terms": ("article writing", "blog writing", "translation job", "video editing"), "penalty": 24.0},
+    {"name": "Academic or spam work", "terms": ("assignment", "homework", "exam", "bulk account creation", "crypto trading"), "penalty": 28.0},
+)
 SCHEDULE_RETRY_DELAYS_MINUTES = (5, 15)
 SCHEDULE_STALE_RUN_THRESHOLD_MINUTES = 120
 SCHEDULE_LABELS = {
@@ -268,6 +321,28 @@ def _clean_text(value: str | None) -> str | None:
         return None
     cleaned = WHITESPACE_PATTERN.sub(" ", value).strip()
     return cleaned or None
+
+
+def _normalized_content_payload(
+    requirement_summary: str | None,
+    raw_summary: str | None,
+    raw_text: str | None,
+) -> tuple[str | None, str | None, str | None, dict[str, Any]]:
+    normalized = build_normalized_discovery_content(
+        requirement_value=requirement_summary,
+        summary_value=raw_summary,
+        full_text_value=raw_text,
+    )
+    normalized_requirement = _clean_text(
+        str((normalized.get("requirement") or {}).get("plain_text") or "")
+    )
+    normalized_summary = _clean_text(
+        str((normalized.get("summary") or {}).get("plain_text") or "")
+    )
+    normalized_full_text = _clean_text(
+        str((normalized.get("full_text") or {}).get("plain_text") or "")
+    )
+    return normalized_requirement, normalized_summary, normalized_full_text, normalized
 
 
 def _serialize_datetime(value: datetime | None) -> str | None:
@@ -491,8 +566,11 @@ def _ted_closing_status(closing_date: datetime | None, now: datetime | None = No
 
 
 def _preliminary_irrelevant_threshold(source_type: str | None) -> float:
-    if (source_type or "").strip().lower() == "public_procurement":
+    normalized = (source_type or "").strip().lower()
+    if normalized == "public_procurement":
         return TED_IRRELEVANT_THRESHOLD
+    if normalized == "marketplace_project":
+        return FREELANCER_IRRELEVANT_THRESHOLD
     return DEFAULT_IRRELEVANT_THRESHOLD
 
 
@@ -634,6 +712,119 @@ def _connector_metadata_for_type(connector_type: str) -> AugmisBusinessConnector
             status="ready",
             is_test_connector=False,
         )
+    if connector_type == FREELANCER_CONNECTOR_TYPE:
+        return AugmisBusinessConnectorMetadata(
+            connector_type=FREELANCER_CONNECTOR_TYPE,
+            name=FREELANCER_CONNECTOR_NAME,
+            source_category="marketplace",
+            description="Official Freelancer.com marketplace projects discovered through the authenticated Freelancer API.",
+            capabilities=["discover", "test_connection", "validate_config", "health_check"],
+            configuration_schema={
+                "properties": {
+                    "provider": {"type": "string", "default": "freelancer"},
+                    "mode": {"type": "string", "default": "production"},
+                    "lookback_hours": {"type": "integer", "default": 24},
+                    "maximum_projects_per_scan": {"type": "integer", "default": 50},
+                    "maximum_query_groups": {"type": "integer", "default": 5},
+                    "project_type": {"type": "string", "default": "all"},
+                    "project_status": {"type": "string", "default": "active"},
+                    "minimum_budget": {"type": "number", "default": None},
+                    "maximum_budget": {"type": "number", "default": None},
+                    "maximum_existing_bids": {"type": "integer", "default": None},
+                }
+            },
+            supports_scheduled_scan=True,
+            supports_manual_scan=True,
+            supports_incremental_scan=False,
+            status="ready",
+            is_test_connector=False,
+        )
+    if connector_type == REMOTEOK_CONNECTOR_TYPE:
+        return AugmisBusinessConnectorMetadata(
+            connector_type=REMOTEOK_CONNECTOR_TYPE,
+            name=REMOTEOK_CONNECTOR_NAME,
+            source_category="api",
+            description="Official Remote OK public JSON feed for remote technical roles.",
+            capabilities=["discover", "test_connection", "validate_config", "health_check"],
+            configuration_schema={"properties": {"maximum_results": {"type": "integer", "default": 50}}},
+            supports_scheduled_scan=True,
+            supports_manual_scan=True,
+            supports_incremental_scan=False,
+            status="ready",
+            is_test_connector=False,
+        )
+    if connector_type == ARBEITNOW_CONNECTOR_TYPE:
+        return AugmisBusinessConnectorMetadata(
+            connector_type=ARBEITNOW_CONNECTOR_TYPE,
+            name=ARBEITNOW_CONNECTOR_NAME,
+            source_category="api",
+            description="Official Arbeitnow public job board API for European opportunities.",
+            capabilities=["discover", "test_connection", "validate_config", "health_check"],
+            configuration_schema={"properties": {"remote_only": {"type": "boolean", "default": True}, "maximum_results": {"type": "integer", "default": 50}}},
+            supports_scheduled_scan=True,
+            supports_manual_scan=True,
+            supports_incremental_scan=False,
+            status="ready",
+            is_test_connector=False,
+        )
+    if connector_type == REMOTIVE_CONNECTOR_TYPE:
+        return AugmisBusinessConnectorMetadata(
+            connector_type=REMOTIVE_CONNECTOR_TYPE,
+            name=REMOTIVE_CONNECTOR_NAME,
+            source_category="api",
+            description="Official Remotive public jobs API with provider attribution preserved.",
+            capabilities=["discover", "test_connection", "validate_config", "health_check"],
+            configuration_schema={"properties": {"maximum_results": {"type": "integer", "default": 50}, "search_keyword": {"type": "string", "default": ""}, "category": {"type": "string", "default": ""}}},
+            supports_scheduled_scan=True,
+            supports_manual_scan=True,
+            supports_incremental_scan=False,
+            status="ready",
+            is_test_connector=False,
+        )
+    if connector_type == ADZUNA_CONNECTOR_TYPE:
+        return AugmisBusinessConnectorMetadata(
+            connector_type=ADZUNA_CONNECTOR_TYPE,
+            name=ADZUNA_CONNECTOR_NAME,
+            source_category="api",
+            description="Official Adzuna jobs API using tenant-scoped encrypted app credentials.",
+            capabilities=["discover", "test_connection", "validate_config", "health_check"],
+            configuration_schema={"properties": {"maximum_results": {"type": "integer", "default": 25}, "search_keyword": {"type": "string", "default": "software developer"}, "target_countries_json": {"type": "array", "default": ["gb"]}}},
+            supports_scheduled_scan=True,
+            supports_manual_scan=True,
+            supports_incremental_scan=False,
+            status="ready",
+            is_test_connector=False,
+        )
+    if connector_type == INDEPENDENT_WEB_CONNECTOR_TYPE:
+        return AugmisBusinessConnectorMetadata(
+            connector_type=INDEPENDENT_WEB_CONNECTOR_TYPE,
+            name=INDEPENDENT_WEB_CONNECTOR_NAME,
+            source_category="company_source",
+            description="First-party AUGMIS crawler and vertical discovery index for public commercial opportunity pages. No third-party search API is required.",
+            capabilities=["discover", "validate_config", "health_check", "seed_registry", "domain_registry"],
+            configuration_schema={
+                "properties": {
+                    "maximum_seeds_per_run": {"type": "integer", "default": 5},
+                    "maximum_domains_per_run": {"type": "integer", "default": 5},
+                    "maximum_pages_per_domain": {"type": "integer", "default": 25},
+                    "maximum_total_pages_per_run": {"type": "integer", "default": 100},
+                    "maximum_depth": {"type": "integer", "default": 2},
+                    "request_timeout_seconds": {"type": "integer", "default": 15},
+                    "per_domain_delay_seconds": {"type": "integer", "default": 2},
+                    "recrawl_interval_hours": {"type": "integer", "default": 168},
+                    "allowed_domain_mode": {"type": "string", "default": "approved_only"},
+                    "max_fetch_bytes": {"type": "integer", "default": 300000},
+                    "max_extracted_text_chars": {"type": "integer", "default": 40000},
+                    "maximum_links_per_page": {"type": "integer", "default": 40},
+                    "maximum_run_duration_seconds": {"type": "integer", "default": 180},
+                }
+            },
+            supports_scheduled_scan=True,
+            supports_manual_scan=True,
+            supports_incremental_scan=True,
+            status="ready",
+            is_test_connector=False,
+        )
     raise HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,
         detail=f"Unsupported connector type: {connector_type}",
@@ -765,6 +956,92 @@ class FixtureOpportunityConnector(BaseOpportunityConnector):
                 )
             )
         return records
+
+
+def _freelancer_mock_fixture_candidates() -> list[AugmisBusinessDiscoveredOpportunityCandidate]:
+    now = _now()
+    client = FreelancerClient(access_token="mock-token")
+    candidates: list[AugmisBusinessDiscoveredOpportunityCandidate] = []
+    for payload in freelancer_mock_projects():
+        project = client._normalize_project(payload)
+        project_url = _freelancer_project_url(project.raw_project, project.project_id, project.seo_url)
+        requirement_summary = (project.description or project.title)[:4000]
+        candidates.append(
+            AugmisBusinessDiscoveredOpportunityCandidate(
+                external_id=project.project_id,
+                source_type="marketplace_project",
+                source_name="Freelancer - Mock",
+                source_url=project_url,
+                source_country=project.client_country,
+                title=project.title,
+                organization_name=project.client_username or "Marketplace Client",
+                published_date=project.posted_at,
+                closing_date=project.bid_end_at,
+                country=project.client_country,
+                region=project.client_location,
+                industry="Freelance Marketplace",
+                requirement_summary=requirement_summary,
+                raw_summary=(project.description or project.title)[:1000],
+                raw_text=" ".join(
+                    part
+                    for part in [project.title, project.description or "", " ".join(project.skills), " ".join(project.categories)]
+                    if part
+                )[:20000],
+                budget_min=project.budget_min,
+                budget_max=project.budget_max,
+                currency=project.currency_code,
+                evidence=[
+                    {"type": "fixture", "provider": "freelancer", "fixture_version": FREELANCER_MOCK_FIXTURE_VERSION},
+                    {"type": "project_id", "project_id": project.project_id},
+                ],
+                source_metadata={
+                    "provider": "freelancer",
+                    "provider_project_id": project.project_id,
+                    "opportunity_class": "freelance_marketplace",
+                    "project_type": project.project_type,
+                    "project_status": project.status,
+                    "skills": project.skills,
+                    "categories": project.categories,
+                    "bid_count": project.bid_count,
+                    "client_country": project.client_country,
+                    "client_location": project.client_location,
+                    "client_rating": project.client_rating,
+                    "client_review_count": project.client_review_count,
+                    "client_payment_verified": project.client_payment_verified,
+                    "client_projects_posted": project.client_projects_posted,
+                    "client_projects_completed": project.client_projects_completed,
+                    "source_trust": "mock_fixture",
+                    "fixture_mode": True,
+                    "fixture_version": FREELANCER_MOCK_FIXTURE_VERSION,
+                },
+                raw_content_json={
+                    "provider": "freelancer",
+                    "provider_project_id": project.project_id,
+                    "provider_version": FREELANCER_API_VERSION,
+                    "fixture_mode": True,
+                    "fixture_version": FREELANCER_MOCK_FIXTURE_VERSION,
+                    "project_url": project_url,
+                    "project_type": project.project_type,
+                    "project_status": project.status,
+                    "skills": project.skills,
+                    "categories": project.categories,
+                    "bid_count": project.bid_count,
+                    "bid_avg": project.bid_avg,
+                    "client_country": project.client_country,
+                    "client_location": project.client_location,
+                    "client_rating": project.client_rating,
+                    "client_review_count": project.client_review_count,
+                    "client_payment_verified": project.client_payment_verified,
+                    "client_projects_posted": project.client_projects_posted,
+                    "client_projects_completed": project.client_projects_completed,
+                    "client_username": project.client_username,
+                    "source_trust": "mock_fixture",
+                    "provider_result": project.raw_project,
+                },
+                retrieval_timestamp=now,
+            )
+        )
+    return candidates
 
 
 def _classify_source_trust(domain: str | None) -> str:
@@ -1422,6 +1699,521 @@ class TedProcurementConnector(BaseOpportunityConnector):
         return candidates
 
 
+FREELANCER_LOOKBACK_OPTIONS = {6, 12, 24, 72, 168, 336, 720}
+FREELANCER_MAX_PROJECT_OPTIONS = {10, 25, 50, 100, 200}
+FREELANCER_PROJECT_TYPE_OPTIONS = {"all", "fixed", "hourly"}
+FREELANCER_PROJECT_STATUS_OPTIONS = {"active"}
+
+
+def _freelancer_project_url(project: dict[str, Any], project_id: str, seo_url: str | None) -> str:
+    if seo_url:
+        if URL_SCHEME_PATTERN.match(seo_url):
+            return seo_url
+        return f"https://www.freelancer.com{seo_url if seo_url.startswith('/') else f'/{seo_url}'}"
+    return f"https://www.freelancer.com/projects/{project_id}"
+
+
+def _freelancer_budget_label(candidate: AugmisBusinessDiscoveredOpportunityCandidate) -> str | None:
+    if candidate.budget_min is None and candidate.budget_max is None:
+        return None
+    currency = candidate.currency or ""
+    if candidate.budget_min is not None and candidate.budget_max is not None:
+        return f"{candidate.budget_min:.0f} - {candidate.budget_max:.0f} {currency}".strip()
+    value = candidate.budget_max if candidate.budget_max is not None else candidate.budget_min
+    return f"{value:.0f} {currency}".strip() if value is not None else None
+
+
+def _freelancer_client_quality_points(raw: dict[str, Any], reasons: list[str]) -> float:
+    score = 5.0
+    if raw.get("client_payment_verified") is True:
+        score += 2.0
+        reasons.append("Matched signal: Client payment is verified.")
+    rating = raw.get("client_rating")
+    if isinstance(rating, (int, float)) and rating >= 4.0:
+        score += 2.0
+        reasons.append("Matched signal: Client hiring reputation appears healthy.")
+    reviews = raw.get("client_review_count")
+    if isinstance(reviews, (int, float)) and reviews >= 10:
+        score += 1.0
+        reasons.append("Matched signal: Client has prior marketplace review history.")
+    return min(10.0, score)
+
+
+def _freelancer_freshness_points(candidate: AugmisBusinessDiscoveredOpportunityCandidate, reasons: list[str]) -> float:
+    if not candidate.published_date:
+        return 5.0
+    age = _now() - candidate.published_date
+    hours = age.total_seconds() / 3600
+    if hours <= 6:
+        reasons.append("Matched signal: Project was posted within the last 6 hours.")
+        return 10.0
+    if hours <= 24:
+        reasons.append("Matched signal: Project was posted within the last 24 hours.")
+        return 8.0
+    if hours <= 72:
+        reasons.append("Matched signal: Project is still fresh within the last 3 days.")
+        return 6.0
+    return 3.0
+
+
+def _calculate_freelancer_preliminary_relevance(
+    candidate: AugmisBusinessDiscoveredOpportunityCandidate,
+    profile: BusinessDevelopmentSearchProfile | None,
+) -> tuple[float, list[str], list[str]]:
+    searchable = _searchable_text(candidate)
+    raw = candidate.raw_content_json or candidate.source_metadata or {}
+    skills = [str(item).strip() for item in raw.get("skills", []) if str(item).strip()] if isinstance(raw.get("skills"), list) else []
+    categories = [str(item).strip() for item in raw.get("categories", []) if str(item).strip()] if isinstance(raw.get("categories"), list) else []
+    include_terms: set[str] = set()
+    exclude_terms: set[str] = set()
+    if profile:
+        include_terms.update(_normalize_text(item) for item in (profile.include_keywords_json or []) if _normalize_text(item))
+        include_terms.update(_normalize_text(item) for item in (profile.include_technologies_json or []) if _normalize_text(item))
+        include_terms.update(_normalize_text(item) for item in (profile.include_capabilities_json or []) if _normalize_text(item))
+        exclude_terms.update(_normalize_text(item) for item in (profile.exclude_keywords_json or []) if _normalize_text(item))
+    skill_matches = sorted({skill for skill in skills if (_normalize_text(skill) or "") in include_terms})
+    term_matches = sorted({term for term in include_terms if term and term in searchable})
+    matched_terms = list(dict.fromkeys(skill_matches + term_matches))
+    reasons: list[str] = []
+    score = 0.0
+    software_skill_terms = {
+        "python",
+        "react.js",
+        "next.js",
+        "fastapi",
+        "postgresql",
+        "api",
+        "automation",
+        "artificial intelligence",
+        "machine learning",
+        "web development",
+    }
+    generic_skill_matches = sorted(
+        {
+            skill
+            for skill in skills
+            if (_normalize_text(skill) or "") in software_skill_terms
+        }
+    )
+
+    tech_points = min(30.0, len(matched_terms) * 6.0)
+    if tech_points:
+        score += tech_points
+        reasons.append(f"Matched signal: {len(matched_terms)} technology or capability terms align with the search profile.")
+    elif generic_skill_matches:
+        fallback_skill_points = min(24.0, len(generic_skill_matches) * 6.0)
+        score += fallback_skill_points
+        reasons.append("Matched signal: Project skills align with AUGMIS software-delivery capabilities.")
+
+    domain_terms = (
+        "document management",
+        "records management",
+        "workflow",
+        "dashboard",
+        "analytics",
+        "ai",
+        "automation",
+        "integration",
+        "compliance",
+        "inspection",
+        "portal",
+        "case management",
+        "custom software",
+        "digital transformation",
+    )
+    domain_hits = [term for term in domain_terms if _contains_any_phrase(searchable, (term,))]
+    if domain_hits:
+        score += min(25.0, len(domain_hits) * 5.0)
+        reasons.append("Matched signal: Requirement language fits AUGMIS software-delivery focus areas.")
+    elif generic_skill_matches:
+        score += 8.0
+        reasons.append("Matched signal: Technical skills suggest a custom software or integration delivery project.")
+    if len(generic_skill_matches) >= 3 and len(domain_hits) >= 2:
+        score += 10.0
+        reasons.append("Matched signal: Strong alignment across software stack and AUGMIS delivery domains.")
+
+    if profile and profile.minimum_budget is not None:
+        if candidate.budget_max is not None and candidate.budget_max >= profile.minimum_budget:
+            score += 15.0
+            reasons.append("Matched signal: Published budget meets the active minimum threshold.")
+        elif candidate.budget_max is None and profile.allow_budget_unknown:
+            score += 8.0
+            reasons.append("Matched signal: Budget is unknown but the profile allows unknown budgets.")
+        else:
+            score += 2.0
+            reasons.append("Negative signal: Published budget appears below the active threshold.")
+    else:
+        score += 10.0 if candidate.budget_max is not None else 7.0
+        if candidate.budget_max is not None:
+            reasons.append("Matched signal: Budget information is available for operator review.")
+
+    score += _freelancer_freshness_points(candidate, reasons)
+
+    bid_count = raw.get("bid_count")
+    if isinstance(bid_count, (int, float)):
+        if bid_count <= 5:
+            score += 10.0
+            reasons.append("Matched signal: Existing competition is still low.")
+        elif bid_count <= 15:
+            score += 7.0
+            reasons.append("Matched signal: Existing competition is manageable.")
+        elif bid_count <= 30:
+            score += 4.0
+        else:
+            score += 1.0
+            reasons.append("Negative signal: Existing competition is already high.")
+    else:
+        score += 5.0
+
+    score += _freelancer_client_quality_points(raw, reasons)
+
+    excluded_hits = sorted(term for term in exclude_terms if term and term in searchable)
+    if excluded_hits:
+        score -= min(24.0, len(excluded_hits) * 8.0)
+        reasons.append("Negative signal: Search-profile excluded terms were detected.")
+    for rule in FREELANCER_NEGATIVE_SIGNAL_RULES:
+        if _contains_any_phrase(searchable, tuple(_normalize_text(term) or term for term in rule["terms"])):
+            score -= rule["penalty"]
+            reasons.append(f"Negative signal: {rule['name']} reduces software-opportunity relevance.")
+
+    final_score = round(max(0.0, min(100.0, score)), 1)
+    if not reasons:
+        reasons.append("Negative signal: No strong marketplace relevance signals were detected.")
+    return final_score, reasons, matched_terms or generic_skill_matches or skills[:5] or categories[:5]
+
+
+class FreelancerMarketplaceConnector(BaseOpportunityConnector):
+    metadata = _connector_metadata_for_type(FREELANCER_CONNECTOR_TYPE)
+
+    def validate_config(self, config: dict[str, Any]) -> None:
+        lookback_hours = int(config.get("lookback_hours", 24) or 24)
+        maximum_projects = int(config.get("maximum_projects_per_scan", 50) or 50)
+        maximum_query_groups = int(config.get("maximum_query_groups", 5) or 5)
+        project_type = str(config.get("project_type", "all") or "all").strip().lower()
+        project_status = str(config.get("project_status", "active") or "active").strip().lower()
+        mode = str(config.get("mode", "production") or "production").strip().lower()
+        if lookback_hours not in FREELANCER_LOOKBACK_OPTIONS:
+            raise HTTPException(status_code=400, detail="lookback_hours must be one of 6, 12, 24, 72, 168, 336, or 720")
+        if maximum_projects not in FREELANCER_MAX_PROJECT_OPTIONS:
+            raise HTTPException(status_code=400, detail="maximum_projects_per_scan must be one of 10, 25, 50, 100, or 200")
+        if maximum_query_groups < 1 or maximum_query_groups > 8:
+            raise HTTPException(status_code=400, detail="maximum_query_groups must be between 1 and 8")
+        if project_type not in FREELANCER_PROJECT_TYPE_OPTIONS:
+            raise HTTPException(status_code=400, detail="project_type is invalid")
+        if project_status not in FREELANCER_PROJECT_STATUS_OPTIONS:
+            raise HTTPException(status_code=400, detail="project_status is invalid")
+        if mode not in {"production", "mock"}:
+            raise HTTPException(status_code=400, detail="mode must be either production or mock")
+
+    def test_connection(self, config: dict[str, Any]) -> dict[str, Any]:
+        self.validate_config(config)
+        if str(config.get("mode", "production") or "production").strip().lower() == "mock":
+            return {
+                "success": True,
+                "provider": "freelancer",
+                "message": f"Mock provider available. Fixture version {FREELANCER_MOCK_FIXTURE_VERSION}. No external request performed.",
+            }
+        return {"success": False, "message": "Freelancer access token is required to test this connector."}
+
+    def discover(
+        self,
+        *,
+        connector: BusinessDevelopmentConnector,
+        search_profile: BusinessDevelopmentSearchProfile | None,
+        credential: ResolvedProviderCredential | None = None,
+    ) -> list[AugmisBusinessDiscoveredOpportunityCandidate]:
+        configuration = connector.configuration_json or {}
+        self.validate_config(configuration)
+        mode = str(configuration.get("mode", "production") or "production").strip().lower()
+        if mode == "mock":
+            candidates = _freelancer_mock_fixture_candidates()
+            score_samples = []
+            for candidate in candidates:
+                score, _, _ = _calculate_freelancer_preliminary_relevance(candidate, search_profile)
+                score_samples.append(_ted_relevance_band(score))
+            self.last_run_metadata = {
+                "provider": "Freelancer",
+                "mode": CONNECTOR_TEST_MODE_LABEL,
+                "fixture_mode": True,
+                "fixture_version": FREELANCER_MOCK_FIXTURE_VERSION,
+                "api_call_count": 0,
+                "query_count": 1,
+                "raw_results_fetched": len(candidates),
+                "accepted_candidates": len(candidates),
+                "filtered_candidates": 0,
+                "same_scan_unique_sources": len(candidates),
+                "score_bands": score_samples,
+            }
+            return candidates
+        if not credential or not credential.api_key:
+            raise HTTPException(status_code=400, detail="Freelancer access token is not configured.")
+        client = FreelancerClient(access_token=credential.api_key)
+        profile_payload = _serialize_search_profile(search_profile) if search_profile else {}
+        maximum_projects = int(configuration.get("maximum_projects_per_scan", 50) or 50)
+        maximum_groups = int(configuration.get("maximum_query_groups", 5) or 5)
+        lookback_hours = int(configuration.get("lookback_hours", 24) or 24)
+        min_budget = configuration.get("minimum_budget")
+        max_budget = configuration.get("maximum_budget")
+        max_bids = configuration.get("maximum_existing_bids")
+        project_type = str(configuration.get("project_type", "all") or "all").strip().lower()
+        specs = build_freelancer_search_specs(profile=profile_payload, maximum_groups=maximum_groups)
+        per_query_limit = max(1, min(50, ceil(maximum_projects / max(1, len(specs)))))
+        grouped_candidates: list[AugmisBusinessDiscoveredOpportunityCandidate] = []
+        api_calls = 0
+        raw_results = 0
+        filtered_bid_count = 0
+        query_diagnostics: list[dict[str, Any]] = []
+        job_id_cache: dict[str, int] = {}
+
+        for spec in specs:
+            resolved_job_ids: list[int] = []
+            missing_skill_names = [name for name in spec.skill_names if name.lower() not in job_id_cache]
+            if missing_skill_names:
+                job_id_cache.update(client.resolve_job_ids(list(missing_skill_names)))
+                api_calls += 1
+            resolved_job_ids = [job_id_cache[name.lower()] for name in spec.skill_names if name.lower() in job_id_cache]
+            result = client.search_projects(
+                query=spec.query,
+                limit=per_query_limit,
+                project_type=None if project_type == "all" else project_type,
+                job_ids=resolved_job_ids,
+                min_budget=float(min_budget) if isinstance(min_budget, (int, float)) else None,
+                max_budget=float(max_budget) if isinstance(max_budget, (int, float)) else None,
+                max_bid_count=int(max_bids) if isinstance(max_bids, (int, float)) else None,
+            )
+            api_calls += int(result["api_call_count"] or 0)
+            raw_results += int(result["raw_count"] or 0)
+            filtered_bid_count += int(result["filtered_bid_count"] or 0)
+            query_projects = 0
+            for project in result["projects"]:
+                if project.status and project.status != "active":
+                    continue
+                if project.posted_at and project.posted_at < (_now() - timedelta(hours=lookback_hours)):
+                    continue
+                project_url = _freelancer_project_url(project.raw_project, project.project_id, project.seo_url)
+                requirement_summary = (project.description or project.title)[:4000]
+                summary_text = (project.description or "")[:1000] or project.title
+                evidence = [
+                    {"type": "marketplace_provider", "provider": "Freelancer"},
+                    {"type": "project_id", "project_id": project.project_id},
+                    {"type": "project_type", "project_type": project.project_type},
+                    {"type": "budget", "value": _freelancer_budget_label(AugmisBusinessDiscoveredOpportunityCandidate(
+                        external_id=project.project_id,
+                        source_type="marketplace_project",
+                        source_name="Freelancer",
+                        source_url=project_url,
+                        title=project.title,
+                        organization_name=project.client_username or "Marketplace Client",
+                        requirement_summary=requirement_summary,
+                        budget_min=project.budget_min,
+                        budget_max=project.budget_max,
+                        currency=project.currency_code,
+                    ))},
+                    {"type": "skills", "skills": project.skills},
+                    {"type": "bid_count", "bid_count": project.bid_count},
+                ]
+                grouped_candidates.append(
+                    AugmisBusinessDiscoveredOpportunityCandidate(
+                        external_id=project.project_id,
+                        source_type="marketplace_project",
+                        source_name="Freelancer",
+                        source_url=project_url,
+                        source_country=project.client_country,
+                        title=project.title,
+                        organization_name=project.client_username or "Marketplace Client",
+                        published_date=project.posted_at,
+                        closing_date=project.bid_end_at,
+                        country=project.client_country,
+                        region=project.client_location,
+                        industry="Freelance Marketplace",
+                        requirement_summary=requirement_summary,
+                        raw_summary=summary_text,
+                        raw_text=" ".join(part for part in [project.title, project.description or "", " ".join(project.skills), " ".join(project.categories)] if part)[:20000],
+                        budget_min=project.budget_min,
+                        budget_max=project.budget_max,
+                        currency=project.currency_code,
+                        evidence=evidence,
+                        source_metadata={
+                            "provider": "freelancer",
+                            "provider_project_id": project.project_id,
+                            "project_type": project.project_type,
+                            "project_status": project.status,
+                            "skills": project.skills,
+                            "categories": project.categories,
+                            "bid_count": project.bid_count,
+                            "client_country": project.client_country,
+                            "client_location": project.client_location,
+                            "client_rating": project.client_rating,
+                            "client_review_count": project.client_review_count,
+                            "client_payment_verified": project.client_payment_verified,
+                            "client_projects_posted": project.client_projects_posted,
+                            "client_projects_completed": project.client_projects_completed,
+                            "queries_matched": [spec.label],
+                            "source_trust": "official_marketplace_api",
+                        },
+                        raw_content_json={
+                            "provider": "freelancer",
+                            "provider_project_id": project.project_id,
+                            "project_url": project_url,
+                            "project_type": project.project_type,
+                            "project_status": project.status,
+                            "skills": project.skills,
+                            "categories": project.categories,
+                            "bid_count": project.bid_count,
+                            "bid_avg": project.bid_avg,
+                            "client_country": project.client_country,
+                            "client_location": project.client_location,
+                            "client_rating": project.client_rating,
+                            "client_review_count": project.client_review_count,
+                            "client_payment_verified": project.client_payment_verified,
+                            "client_projects_posted": project.client_projects_posted,
+                            "client_projects_completed": project.client_projects_completed,
+                            "client_username": project.client_username,
+                            "source_trust": "official_marketplace_api",
+                            "queries_matched": [spec.label],
+                            "provider_version": FREELANCER_API_VERSION,
+                            "provider_result": project.raw_project,
+                        },
+                        retrieval_timestamp=_now(),
+                    )
+                )
+                query_projects += 1
+            query_diagnostics.append(
+                {
+                    "key": spec.key,
+                    "label": spec.label,
+                    "query": spec.query,
+                    "skills": list(spec.skill_names),
+                    "raw_results": result["raw_count"],
+                    "normalized": query_projects,
+                    "filtered_bids": result["filtered_bid_count"],
+                }
+            )
+
+        deduped: list[AugmisBusinessDiscoveredOpportunityCandidate] = []
+        seen_ids: set[str] = set()
+        for candidate in grouped_candidates:
+            if candidate.external_id in seen_ids:
+                continue
+            seen_ids.add(candidate.external_id)
+            deduped.append(candidate)
+            if len(deduped) >= maximum_projects:
+                break
+
+        self.last_run_metadata = {
+            "provider": "Freelancer",
+            "mode": CONNECTOR_PRODUCTION_LABEL,
+            "query_count": len(specs),
+            "queries_executed": [spec.query for spec in specs],
+            "api_call_count": api_calls,
+            "api_result_count": raw_results,
+            "raw_results_fetched": raw_results,
+            "accepted_candidates": len(deduped),
+            "filtered_candidates": 0,
+            "filtered_bid_count": filtered_bid_count,
+            "same_scan_unique_sources": len(deduped),
+            "maximum_projects_per_scan": maximum_projects,
+            "lookback_hours": lookback_hours,
+            "project_type": project_type,
+            "query_diagnostics": query_diagnostics,
+        }
+        return deduped
+
+
+class ExternalWorkConnector(BaseOpportunityConnector):
+    def __init__(self, connector_type: str, provider_code: str, provider_name: str) -> None:
+        super().__init__()
+        self.metadata = _connector_metadata_for_type(connector_type)
+        self.connector_type = connector_type
+        self.provider_code = provider_code
+        self.provider_name = provider_name
+
+    def validate_config(self, config: dict[str, Any]) -> None:
+        maximum_results = int(config.get("maximum_results", 50) or 50)
+        if maximum_results < 1 or maximum_results > 100:
+            raise HTTPException(status_code=400, detail="maximum_results must be between 1 and 100")
+        if self.provider_code == "adzuna":
+            countries = [str(code).strip().lower() for code in (config.get("target_countries_json") or []) if str(code).strip()]
+            if len(countries) > 5:
+                raise HTTPException(status_code=400, detail="target_countries_json cannot contain more than 5 countries")
+
+    def test_connection(self, config: dict[str, Any]) -> dict[str, Any]:
+        self.validate_config(config)
+        provider = get_external_work_provider(self.provider_code)
+        return provider.test_connection(config)
+
+    def discover(
+        self,
+        *,
+        connector: BusinessDevelopmentConnector,
+        search_profile: BusinessDevelopmentSearchProfile | None,
+        credential: ResolvedProviderCredential | None = None,
+    ) -> list[AugmisBusinessDiscoveredOpportunityCandidate]:
+        configuration = connector.configuration_json or {}
+        self.validate_config(configuration)
+        provider = get_external_work_provider(self.provider_code)
+        if self.provider_code == "adzuna" and (not credential or not credential.credential_payload):
+            raise HTTPException(status_code=400, detail="Adzuna credentials are not configured.")
+        opportunities = provider.search_opportunities(
+            configuration,
+            credential_payload=credential.credential_payload if credential else None,
+            max_results=int(configuration.get("maximum_results", 50) or 50),
+        )
+        candidates = [_external_work_candidate(item) for item in opportunities]
+        self.last_run_metadata = {
+            "provider": self.provider_name,
+            "mode": CONNECTOR_PRODUCTION_LABEL,
+            "query_count": 1,
+            "api_call_count": len(configuration.get("target_countries_json") or []) or 1 if self.provider_code == "adzuna" else 1,
+            "raw_results_fetched": len(opportunities),
+            "accepted_candidates": len(candidates),
+            "filtered_candidates": 0,
+            "same_scan_unique_sources": len(candidates),
+            "countries_searched": configuration.get("target_countries_json") or [],
+        }
+        return candidates
+
+
+class IndependentWebDiscoveryConnector(BaseOpportunityConnector):
+    metadata = _connector_metadata_for_type(INDEPENDENT_WEB_CONNECTOR_TYPE)
+
+    def validate_config(self, config: dict[str, Any]) -> None:
+        maximum_domains_per_run = int(config.get("maximum_domains_per_run", 5) or 5)
+        maximum_pages_per_domain = int(config.get("maximum_pages_per_domain", 25) or 25)
+        maximum_total_pages_per_run = int(config.get("maximum_total_pages_per_run", 100) or 100)
+        maximum_depth = int(config.get("maximum_depth", 2) or 2)
+        request_timeout_seconds = int(config.get("request_timeout_seconds", 15) or 15)
+        per_domain_delay_seconds = int(config.get("per_domain_delay_seconds", 2) or 2)
+        if maximum_domains_per_run < 1 or maximum_domains_per_run > settings.AUGMIS_WEB_DISCOVERY_MAX_DOMAINS_PER_RUN:
+            raise HTTPException(status_code=400, detail="maximum_domains_per_run is out of bounds.")
+        if maximum_pages_per_domain < 1 or maximum_pages_per_domain > settings.AUGMIS_WEB_DISCOVERY_MAX_PAGES_PER_DOMAIN:
+            raise HTTPException(status_code=400, detail="maximum_pages_per_domain is out of bounds.")
+        if maximum_total_pages_per_run < 1 or maximum_total_pages_per_run > settings.AUGMIS_WEB_DISCOVERY_MAX_TOTAL_PAGES_PER_RUN:
+            raise HTTPException(status_code=400, detail="maximum_total_pages_per_run is out of bounds.")
+        if maximum_depth < 0 or maximum_depth > settings.AUGMIS_WEB_DISCOVERY_MAX_DEPTH:
+            raise HTTPException(status_code=400, detail="maximum_depth is out of bounds.")
+        if request_timeout_seconds < 3 or request_timeout_seconds > 30:
+            raise HTTPException(status_code=400, detail="request_timeout_seconds is out of bounds.")
+        if per_domain_delay_seconds < settings.AUGMIS_WEB_DISCOVERY_MIN_DOMAIN_DELAY_SECONDS or per_domain_delay_seconds > settings.AUGMIS_WEB_DISCOVERY_MAX_DOMAIN_DELAY_SECONDS:
+            raise HTTPException(status_code=400, detail="per_domain_delay_seconds is out of bounds.")
+
+    def discover(
+        self,
+        *,
+        connector: BusinessDevelopmentConnector,
+        search_profile: BusinessDevelopmentSearchProfile | None,
+        credential: ResolvedProviderCredential | None = None,
+    ) -> list[AugmisBusinessDiscoveredOpportunityCandidate]:
+        del credential
+        session = object_session(connector)
+        if session is None:
+            raise HTTPException(status_code=500, detail="Connector session is unavailable.")
+        engine = IndependentWebDiscoveryEngine(session, connector, search_profile)
+        candidates, metadata = engine.run()
+        self.last_run_metadata = metadata
+        return candidates
+
+
 def _get_connector_implementation(connector_type: str) -> BaseOpportunityConnector:
     if connector_type == FIXTURE_CONNECTOR_TYPE:
         return FixtureOpportunityConnector()
@@ -1429,6 +2221,18 @@ def _get_connector_implementation(connector_type: str) -> BaseOpportunityConnect
         return WebOpportunitySearchConnector()
     if connector_type == TED_CONNECTOR_TYPE:
         return TedProcurementConnector()
+    if connector_type == FREELANCER_CONNECTOR_TYPE:
+        return FreelancerMarketplaceConnector()
+    if connector_type == REMOTEOK_CONNECTOR_TYPE:
+        return ExternalWorkConnector(REMOTEOK_CONNECTOR_TYPE, "remoteok", "Remote OK")
+    if connector_type == ARBEITNOW_CONNECTOR_TYPE:
+        return ExternalWorkConnector(ARBEITNOW_CONNECTOR_TYPE, "arbeitnow", "Arbeitnow")
+    if connector_type == REMOTIVE_CONNECTOR_TYPE:
+        return ExternalWorkConnector(REMOTIVE_CONNECTOR_TYPE, "remotive", "Remotive")
+    if connector_type == ADZUNA_CONNECTOR_TYPE:
+        return ExternalWorkConnector(ADZUNA_CONNECTOR_TYPE, "adzuna", "Adzuna")
+    if connector_type == INDEPENDENT_WEB_CONNECTOR_TYPE:
+        return IndependentWebDiscoveryConnector()
     raise HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,
         detail=f"Unsupported connector type: {connector_type}",
@@ -1460,6 +2264,56 @@ def _serialize_connector_run(row: BusinessDevelopmentConnectorRun) -> dict[str, 
     }
 
 
+def _discovery_source_identity(row: BusinessDevelopmentDiscoveredOpportunity) -> dict[str, Any]:
+    raw = row.raw_content_json or {}
+    session = object_session(row)
+    connector = (
+        session.query(BusinessDevelopmentConnector)
+        .filter(
+            BusinessDevelopmentConnector.tenant_id == row.tenant_id,
+            BusinessDevelopmentConnector.id == row.connector_id,
+        )
+        .first()
+        if session is not None
+        else None
+    )
+    connector_type = connector.connector_type if connector else None
+    provider_key = str(raw.get("provider") or "").strip().lower() or None
+    display_source = row.source_name or row.source_type
+    if connector_type == INDEPENDENT_WEB_CONNECTOR_TYPE or provider_key == "augmis_internal":
+        provider_key = "augmis_internal"
+        display_source = INDEPENDENT_WEB_SOURCE_NAME
+    elif connector_type == TED_CONNECTOR_TYPE or provider_key == "ted" or (row.source_name or "").strip().upper() == "TED":
+        provider_key = "ted"
+        display_source = "TED"
+    elif connector_type == WEB_SEARCH_CONNECTOR_TYPE:
+        provider_key = provider_key or "web_search"
+        display_source = row.source_name or WEB_SEARCH_CONNECTOR_NAME
+    elif connector_type == FREELANCER_CONNECTOR_TYPE:
+        provider_key = provider_key or "freelancer"
+        display_source = row.source_name or "Freelancer"
+    elif connector_type == REMOTEOK_CONNECTOR_TYPE:
+        provider_key = provider_key or "remoteok"
+        display_source = row.source_name or REMOTEOK_CONNECTOR_NAME
+    elif connector_type == ARBEITNOW_CONNECTOR_TYPE:
+        provider_key = provider_key or "arbeitnow"
+        display_source = row.source_name or ARBEITNOW_CONNECTOR_NAME
+    elif connector_type == REMOTIVE_CONNECTOR_TYPE:
+        provider_key = provider_key or "remotive"
+        display_source = row.source_name or REMOTIVE_CONNECTOR_NAME
+    elif connector_type == ADZUNA_CONNECTOR_TYPE:
+        provider_key = provider_key or "adzuna"
+        display_source = row.source_name or ADZUNA_CONNECTOR_NAME
+    elif row.source_name:
+        provider_key = provider_key or _normalize_text(row.source_name)
+    return {
+        "source_provider_key": provider_key,
+        "source_provider_name": row.source_name,
+        "source_connector_type": connector_type,
+        "display_source": display_source,
+    }
+
+
 def _serialize_discovery(row: BusinessDevelopmentDiscoveredOpportunity) -> dict[str, Any]:
     relevance_band = _ted_relevance_band(row.preliminary_relevance_score)
     closing_status = _ted_closing_status(row.closing_date)
@@ -1471,6 +2325,7 @@ def _serialize_discovery(row: BusinessDevelopmentDiscoveredOpportunity) -> dict[
         if session is not None
         else None
     )
+    source_identity = _discovery_source_identity(row)
     return {
         "id": row.id,
         "tenant_id": row.tenant_id,
@@ -1479,6 +2334,7 @@ def _serialize_discovery(row: BusinessDevelopmentDiscoveredOpportunity) -> dict[
         "external_id": row.external_id,
         "source_type": row.source_type,
         "source_name": row.source_name,
+        **source_identity,
         "source_url": row.source_url,
         "canonical_source_url": row.canonical_source_url,
         "source_domain": row.source_domain,
@@ -1491,6 +2347,7 @@ def _serialize_discovery(row: BusinessDevelopmentDiscoveredOpportunity) -> dict[
         "closing_date": _serialize_datetime(row.closing_date),
         "raw_summary": row.raw_summary,
         "requirement_summary": row.requirement_summary,
+        "normalized_content_json": row.normalized_content_json or {},
         "raw_content_json": row.raw_content_json or {},
         "raw_text": row.raw_text,
         "country": row.country,
@@ -1506,6 +2363,7 @@ def _serialize_discovery(row: BusinessDevelopmentDiscoveredOpportunity) -> dict[
         "possible_duplicate_of_discovery_id": row.possible_duplicate_of_discovery_id,
         "imported_opportunity_id": row.imported_opportunity_id,
         "preliminary_relevance_score": row.preliminary_relevance_score,
+        **serialize_discovery_commercial_intelligence(row),
         "source_language_code": source_language_code,
         "source_language_label": language_label(source_language_code),
         "source_language_is_english": is_english_language(source_language_code),
@@ -1552,6 +2410,25 @@ def _serialize_connector(row: BusinessDevelopmentConnector) -> dict[str, Any]:
     metadata = _connector_metadata_for_type(row.connector_type)
     metadata_payload = metadata.model_dump(mode="json")
     schedule_timezone = _schedule_timezone_name(row.schedule_timezone)
+    session = object_session(row)
+    provider_code = str((row.configuration_json or {}).get("provider", "tavily") or "tavily")
+    effective_status = row.status
+    capability_flags = dict(row.capability_flags_json or {})
+    if row.connector_type == FREELANCER_CONNECTOR_TYPE:
+        mode = str((row.configuration_json or {}).get("mode", "production") or "production").strip().lower()
+        capability_flags["mode"] = CONNECTOR_TEST_MODE_LABEL if mode == "mock" else CONNECTOR_PRODUCTION_LABEL
+        if mode == "mock":
+            effective_status = "ready" if row.enabled and row.active_run_id is None else row.status
+        elif session is not None:
+            credential = resolve_provider_credential(session, row.tenant_id, "freelancer")
+            if not credential.api_key:
+                effective_status = "attention"
+                capability_flags["authorization_state"] = "required"
+    elif row.connector_type == ADZUNA_CONNECTOR_TYPE and session is not None:
+        credential = resolve_provider_credential(session, row.tenant_id, "adzuna")
+        if not credential.credential_payload:
+            effective_status = "attention"
+            capability_flags["authorization_state"] = "required"
     return {
         "id": row.id,
         "tenant_id": row.tenant_id,
@@ -1559,7 +2436,7 @@ def _serialize_connector(row: BusinessDevelopmentConnector) -> dict[str, Any]:
         "connector_type": row.connector_type,
         "name": row.name,
         "source_category": row.source_category,
-        "status": row.status,
+        "status": effective_status,
         "enabled": row.enabled,
         "schedule_enabled": row.schedule_enabled,
         "schedule_expression": row.schedule_expression
@@ -1583,7 +2460,7 @@ def _serialize_connector(row: BusinessDevelopmentConnector) -> dict[str, Any]:
         "schedule_updated_at": _serialize_datetime(row.schedule_updated_at),
         "configuration_json": row.configuration_json or {},
         "search_criteria_json": row.search_criteria_json or {},
-        "capability_flags_json": row.capability_flags_json or {},
+        "capability_flags_json": capability_flags,
         "last_scan_at": _serialize_datetime(row.last_scan_at),
         "last_success_at": _serialize_datetime(row.last_success_at),
         "last_error_at": _serialize_datetime(row.last_error_at),
@@ -1925,6 +2802,216 @@ def ensure_ted_connector(
     return row
 
 
+def ensure_freelancer_connector(
+    db: Session,
+    tenant_id: str,
+    current_user: dict | None = None,
+) -> BusinessDevelopmentConnector:
+    row = (
+        db.query(BusinessDevelopmentConnector)
+        .filter(
+            BusinessDevelopmentConnector.tenant_id == tenant_id,
+            BusinessDevelopmentConnector.connector_type == FREELANCER_CONNECTOR_TYPE,
+        )
+        .first()
+    )
+    if row:
+        return row
+    profile = ensure_default_search_profile(db, tenant_id, current_user)
+    row = BusinessDevelopmentConnector(
+        id=f"BD-CNX-{str(uuid4())[:12].upper()}",
+        tenant_id=tenant_id,
+        search_profile_id=profile.id,
+        connector_type=FREELANCER_CONNECTOR_TYPE,
+        name=FREELANCER_CONNECTOR_NAME,
+        source_category="marketplace",
+        status="ready",
+        enabled=True,
+        schedule_enabled=False,
+        schedule_expression=None,
+        schedule_type="manual",
+        schedule_timezone=_schedule_timezone_name(None),
+        configuration_json={
+            "provider": "freelancer",
+            "mode": "production",
+            "lookback_hours": 24,
+            "maximum_projects_per_scan": 50,
+            "maximum_query_groups": 5,
+            "project_type": "all",
+            "project_status": "active",
+            "minimum_budget": None,
+            "maximum_budget": None,
+            "maximum_existing_bids": None,
+        },
+        search_criteria_json={},
+        capability_flags_json={"mode": CONNECTOR_PRODUCTION_LABEL, "provider_label": "Freelancer", "mock_available": True},
+        created_by=(current_user or {}).get("user_id"),
+        updated_at=_now(),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def _ensure_external_work_connector(
+    db: Session,
+    tenant_id: str,
+    current_user: dict | None,
+    *,
+    connector_type: str,
+    name: str,
+    provider: str,
+    category_label: str,
+    configuration_json: dict[str, Any],
+) -> BusinessDevelopmentConnector:
+    row = (
+        db.query(BusinessDevelopmentConnector)
+        .filter(
+            BusinessDevelopmentConnector.tenant_id == tenant_id,
+            BusinessDevelopmentConnector.connector_type == connector_type,
+        )
+        .first()
+    )
+    if row:
+        return row
+    profile = ensure_default_search_profile(db, tenant_id, current_user)
+    row = BusinessDevelopmentConnector(
+        id=f"BD-CNX-{str(uuid4())[:12].upper()}",
+        tenant_id=tenant_id,
+        search_profile_id=profile.id,
+        connector_type=connector_type,
+        name=name,
+        source_category="api",
+        status="ready",
+        enabled=True,
+        schedule_enabled=False,
+        schedule_expression=None,
+        schedule_type="manual",
+        schedule_timezone=_schedule_timezone_name(None),
+        configuration_json=configuration_json,
+        search_criteria_json={},
+        capability_flags_json={"mode": CONNECTOR_PRODUCTION_LABEL, "provider_label": category_label},
+        created_by=(current_user or {}).get("user_id"),
+        updated_at=_now(),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def ensure_remoteok_connector(db: Session, tenant_id: str, current_user: dict | None = None) -> BusinessDevelopmentConnector:
+    return _ensure_external_work_connector(
+        db,
+        tenant_id,
+        current_user,
+        connector_type=REMOTEOK_CONNECTOR_TYPE,
+        name=REMOTEOK_CONNECTOR_NAME,
+        provider="remoteok",
+        category_label="Remote OK",
+        configuration_json={"provider": "remoteok", "maximum_results": 50},
+    )
+
+
+def ensure_arbeitnow_connector(db: Session, tenant_id: str, current_user: dict | None = None) -> BusinessDevelopmentConnector:
+    return _ensure_external_work_connector(
+        db,
+        tenant_id,
+        current_user,
+        connector_type=ARBEITNOW_CONNECTOR_TYPE,
+        name=ARBEITNOW_CONNECTOR_NAME,
+        provider="arbeitnow",
+        category_label="Arbeitnow",
+        configuration_json={"provider": "arbeitnow", "remote_only": True, "maximum_results": 50},
+    )
+
+
+def ensure_remotive_connector(db: Session, tenant_id: str, current_user: dict | None = None) -> BusinessDevelopmentConnector:
+    return _ensure_external_work_connector(
+        db,
+        tenant_id,
+        current_user,
+        connector_type=REMOTIVE_CONNECTOR_TYPE,
+        name=REMOTIVE_CONNECTOR_NAME,
+        provider="remotive",
+        category_label="Remotive",
+        configuration_json={"provider": "remotive", "maximum_results": 50, "search_keyword": "", "category": ""},
+    )
+
+
+def ensure_adzuna_connector(db: Session, tenant_id: str, current_user: dict | None = None) -> BusinessDevelopmentConnector:
+    return _ensure_external_work_connector(
+        db,
+        tenant_id,
+        current_user,
+        connector_type=ADZUNA_CONNECTOR_TYPE,
+        name=ADZUNA_CONNECTOR_NAME,
+        provider="adzuna",
+        category_label="Adzuna",
+        configuration_json={"provider": "adzuna", "maximum_results": 25, "search_keyword": "software developer", "target_countries_json": ["gb"]},
+    )
+
+
+def ensure_independent_web_connector(
+    db: Session,
+    tenant_id: str,
+    current_user: dict | None = None,
+) -> BusinessDevelopmentConnector:
+    row = (
+        db.query(BusinessDevelopmentConnector)
+        .filter(
+            BusinessDevelopmentConnector.tenant_id == tenant_id,
+            BusinessDevelopmentConnector.connector_type == INDEPENDENT_WEB_CONNECTOR_TYPE,
+        )
+        .first()
+    )
+    if row:
+        return row
+    profile = ensure_default_search_profile(db, tenant_id, current_user)
+    row = BusinessDevelopmentConnector(
+        id=f"BD-CNX-{str(uuid4())[:12].upper()}",
+        tenant_id=tenant_id,
+        search_profile_id=profile.id,
+        connector_type=INDEPENDENT_WEB_CONNECTOR_TYPE,
+        name=INDEPENDENT_WEB_CONNECTOR_NAME,
+        source_category="company_source",
+        status="ready",
+        enabled=True,
+        schedule_enabled=False,
+        schedule_expression=None,
+        schedule_type="manual",
+        schedule_timezone=_schedule_timezone_name(None),
+        configuration_json={
+            "maximum_seeds_per_run": 5,
+            "maximum_domains_per_run": 5,
+            "maximum_pages_per_domain": 25,
+            "maximum_total_pages_per_run": 100,
+            "maximum_depth": 2,
+            "request_timeout_seconds": 15,
+            "per_domain_delay_seconds": 2,
+            "recrawl_interval_hours": 168,
+            "allowed_domain_mode": "approved_only",
+            "max_fetch_bytes": settings.AUGMIS_WEB_FETCH_MAX_BYTES,
+            "max_extracted_text_chars": 40000,
+            "maximum_links_per_page": 40,
+            "maximum_run_duration_seconds": 180,
+        },
+        search_criteria_json={},
+        capability_flags_json={
+            "mode": CONNECTOR_PRODUCTION_LABEL,
+            "provider_label": "AUGMIS Internal",
+            "credential_state": "none_required",
+        },
+        created_by=(current_user or {}).get("user_id"),
+        updated_at=_now(),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
 def list_search_profiles(db: Session, tenant_id: str, current_user: dict | None = None) -> dict[str, Any]:
     ensure_default_search_profile(db, tenant_id, current_user)
     rows = (
@@ -2011,6 +3098,12 @@ def list_connectors(
     ensure_fixture_connector(db, tenant_id, current_user)
     ensure_web_search_connector(db, tenant_id, current_user)
     ensure_ted_connector(db, tenant_id, current_user)
+    ensure_freelancer_connector(db, tenant_id, current_user)
+    ensure_remoteok_connector(db, tenant_id, current_user)
+    ensure_arbeitnow_connector(db, tenant_id, current_user)
+    ensure_remotive_connector(db, tenant_id, current_user)
+    ensure_adzuna_connector(db, tenant_id, current_user)
+    ensure_independent_web_connector(db, tenant_id, current_user)
     rows = (
         db.query(BusinessDevelopmentConnector)
         .filter(BusinessDevelopmentConnector.tenant_id == tenant_id)
@@ -2053,14 +3146,15 @@ def list_connectors(
         .order_by(BusinessDevelopmentConnectorRun.started_at.desc())
         .first()
     )
+    serialized_rows = [_serialize_connector(row) for row in rows]
     summary = {
-        "active_connectors": sum(1 for row in rows if row.enabled),
+        "active_connectors": sum(1 for row in serialized_rows if row["enabled"] and row["status"] in {"ready", "running", "configured"}),
         "last_scan": _serialize_datetime(latest_run.started_at) if latest_run else None,
         "discoveries_today": today_discoveries,
         "new_discoveries": new_discoveries,
         "failed_runs": failed_runs,
     }
-    return {"success": True, "data": [_serialize_connector(row) for row in rows], "summary": summary}
+    return {"success": True, "data": serialized_rows, "summary": summary}
 
 
 def create_connector(
@@ -2266,7 +3360,7 @@ def test_connector(
     provider_name = str((row.configuration_json or {}).get("provider", "tavily") or "tavily")
     result = (
         test_connector_credential(db, tenant_id, provider_name, current_user)["data"]["result"]
-        if row.connector_type == WEB_SEARCH_CONNECTOR_TYPE
+        if row.connector_type in {WEB_SEARCH_CONNECTOR_TYPE, FREELANCER_CONNECTOR_TYPE, ADZUNA_CONNECTOR_TYPE}
         else _get_connector_implementation(row.connector_type).test_connection(row.configuration_json or {})
     )
     create_audit_log(
@@ -2367,12 +3461,95 @@ def _find_duplicate(
     return None, None
 
 
+def _external_work_candidate(opportunity: ExternalWorkOpportunity) -> AugmisBusinessDiscoveredOpportunityCandidate:
+    description = (opportunity.description or "")[:4000]
+    tags = [tag for tag in opportunity.tags if tag]
+    skills = [skill for skill in opportunity.skills if skill]
+    remote_label = "Remote" if opportunity.remote else "On-site / hybrid"
+    return AugmisBusinessDiscoveredOpportunityCandidate(
+        external_id=opportunity.external_id,
+        source_type=EMPLOYMENT_CONTRACT_SOURCE_TYPE,
+        source_name=opportunity.source_name,
+        source_url=opportunity.source_url,
+        source_country=opportunity.country,
+        title=opportunity.title,
+        organization_name=opportunity.company_name or "Employer",
+        published_date=opportunity.posted_at,
+        closing_date=opportunity.expires_at,
+        country=opportunity.country,
+        region=opportunity.location or opportunity.region,
+        industry=opportunity.category,
+        requirement_summary=description or opportunity.title,
+        raw_summary=description[:1000] or opportunity.title,
+        raw_text=" ".join(
+            part
+            for part in [
+                opportunity.title,
+                opportunity.description or "",
+                " ".join(tags),
+                " ".join(skills),
+                opportunity.category or "",
+                opportunity.employment_type or "",
+                opportunity.engagement_type or "",
+            ]
+            if part
+        )[:20000],
+        budget_min=opportunity.salary_min,
+        budget_max=opportunity.salary_max,
+        currency=opportunity.salary_currency,
+        evidence=[
+            {"type": "provider", "value": opportunity.source_name},
+            {"type": "external_id", "value": opportunity.external_id},
+            {"type": "remote", "value": remote_label},
+        ],
+        source_metadata={
+            "provider": opportunity.provider,
+            "opportunity_class": "employment_contract",
+            "engagement_type": opportunity.engagement_type,
+            "employment_type": opportunity.employment_type,
+            "remote": opportunity.remote,
+            "location": opportunity.location,
+            "company_name": opportunity.company_name,
+            "company_url": opportunity.company_url,
+            "salary_period": opportunity.salary_period,
+            "category": opportunity.category,
+            "tags": tags,
+            "skills": skills,
+            "source_trust": "official_public_api",
+        },
+        raw_content_json={
+            "provider": opportunity.provider,
+            "external_id": opportunity.external_id,
+            "provider_url": opportunity.source_url,
+            "company_name": opportunity.company_name,
+            "company_url": opportunity.company_url,
+            "location": opportunity.location,
+            "remote": opportunity.remote,
+            "engagement_type": opportunity.engagement_type,
+            "employment_type": opportunity.employment_type,
+            "salary_period": opportunity.salary_period,
+            "category": opportunity.category,
+            "tags": tags,
+            "skills": skills,
+            "provider_result": opportunity.raw_payload,
+        },
+        retrieval_timestamp=_now(),
+    )
+
+
 def _calculate_preliminary_relevance(
     candidate: AugmisBusinessDiscoveredOpportunityCandidate,
     profile: BusinessDevelopmentSearchProfile | None,
 ) -> tuple[float, list[str], list[str]]:
     if candidate.source_type == "public_procurement":
+        raw = candidate.raw_content_json or candidate.source_metadata or {}
+        if candidate.source_name == INDEPENDENT_WEB_CONNECTOR_NAME or raw.get("provider") == "augmis_internal":
+            return _calculate_independent_procurement_preliminary_relevance(candidate)
         return _calculate_ted_preliminary_relevance(candidate)
+    if candidate.source_type == "marketplace_project":
+        return _calculate_freelancer_preliminary_relevance(candidate, profile)
+    if candidate.source_type == EMPLOYMENT_CONTRACT_SOURCE_TYPE:
+        return _calculate_external_work_preliminary_relevance(candidate, profile)
 
     searchable = _searchable_text(candidate)
     if not searchable:
@@ -2412,6 +3589,113 @@ def _calculate_preliminary_relevance(
         score = max(0.0, score - min(45.0, len(excluded_hits) * 15.0))
         reasons.append("Excluded terms were detected in the source content.")
     return round(max(0.0, min(100.0, score)), 1), reasons, matched_terms
+
+
+def _calculate_independent_procurement_preliminary_relevance(
+    candidate: AugmisBusinessDiscoveredOpportunityCandidate,
+) -> tuple[float, list[str], list[str]]:
+    score, reasons, matched = _calculate_ted_preliminary_relevance(candidate)
+    raw = candidate.raw_content_json or candidate.source_metadata or {}
+    crawler = raw.get("crawler_diagnostics") if isinstance(raw.get("crawler_diagnostics"), dict) else {}
+    page_type = str(raw.get("page_type") or candidate.source_metadata.get("opportunity_class") or "").lower()
+    detail_signal_count = int(crawler.get("detail_signal_count", 0) or 0)
+    contact_routes = raw.get("contact_routes") if isinstance(raw.get("contact_routes"), list) else []
+    if page_type in {"procurement_detail", "rfp", "rfq", "eoi"}:
+        score += 12.0 + min(8.0, detail_signal_count * 2.0)
+        reasons.append("Matched signal: Independent crawl captured a procurement-detail page with explicit notice structure.")
+    elif page_type == "tender":
+        score += 6.0 + min(6.0, detail_signal_count * 2.0)
+        reasons.append("Matched signal: Independent crawl captured a tender page with usable notice structure.")
+    if raw.get("reference_number"):
+        score += 4.0
+        reasons.append("Matched signal: Reference number was extracted from the source page.")
+    if raw.get("application_url"):
+        score += 4.0
+        reasons.append("Matched signal: Application or submission route was detected.")
+    if candidate.closing_date:
+        score += 4.0
+        reasons.append("Matched signal: Closing date was extracted from the page.")
+    if contact_routes:
+        score += min(3.0, float(len(contact_routes)))
+        reasons.append("Matched signal: Official contact routes were extracted from the source page.")
+    return round(max(0.0, min(100.0, score)), 1), reasons, list(dict.fromkeys(matched))
+
+
+EXTERNAL_WORK_TECH_TERMS = ("python", "fastapi", "node", "react", "next.js", "postgresql", ".net", "api", "ai", "openai", "automation")
+EXTERNAL_WORK_DOMAIN_TERMS = ("workflow", "document management", "records management", "inspection", "dashboard", "analytics", "enterprise", "integration", "portal", "case management", "digital transformation")
+EXTERNAL_WORK_CONTRACT_TERMS = ("contract", "freelance", "consulting", "part-time", "project", "remote")
+EXTERNAL_WORK_NEGATIVE_TERMS = ("sales", "telemarketing", "customer service", "recruiting", "hr", "manual data entry", "content writing", "social media marketing", "seo", "graphic design", "warehouse", "driving", "logistics")
+
+
+def _calculate_external_work_preliminary_relevance(
+    candidate: AugmisBusinessDiscoveredOpportunityCandidate,
+    profile: BusinessDevelopmentSearchProfile | None,
+) -> tuple[float, list[str], list[str]]:
+    searchable = _searchable_text(candidate)
+    metadata = candidate.source_metadata or {}
+    score = 10.0
+    reasons: list[str] = []
+    matched: list[str] = []
+
+    tech_hits = [term for term in EXTERNAL_WORK_TECH_TERMS if term in searchable]
+    if tech_hits:
+        score += min(35.0, 10.0 + (len(tech_hits) * 5.0))
+        reasons.append("Matched signal: technical stack evidence detected.")
+        matched.extend(tech_hits[:5])
+
+    domain_hits = [term for term in EXTERNAL_WORK_DOMAIN_TERMS if term in searchable]
+    if domain_hits:
+        score += min(25.0, 10.0 + (len(domain_hits) * 4.0))
+        reasons.append("Matched signal: AUGMIS business domain evidence detected.")
+        matched.extend(domain_hits[:4])
+
+    engagement_text = " ".join(
+        part for part in [str(metadata.get("engagement_type") or ""), str(metadata.get("employment_type") or ""), searchable] if part
+    )
+    engagement_hits = [term for term in EXTERNAL_WORK_CONTRACT_TERMS if term in engagement_text]
+    if engagement_hits:
+        score += min(15.0, 8.0 + (len(engagement_hits) * 2.5))
+        reasons.append("Matched signal: contract / remote engagement is commercially suitable.")
+    elif "full_time" in engagement_text or "full-time" in engagement_text:
+        score += 4.0
+        reasons.append("Full-time technical role retained as a possible business-development target.")
+
+    if candidate.budget_min is not None or candidate.budget_max is not None:
+        score += 7.0
+        reasons.append("Compensation details were available.")
+
+    if metadata.get("remote"):
+        score += 5.0
+        reasons.append("Remote delivery suitability detected.")
+
+    if candidate.published_date:
+        age_days = (_now() - candidate.published_date).total_seconds() / 86400
+        if age_days <= 3:
+            score += 10.0
+            reasons.append("Fresh posting detected.")
+        elif age_days <= 10:
+            score += 6.0
+            reasons.append("Recently posted opportunity detected.")
+
+    if profile:
+        include_terms = [
+            _normalize_text(item)
+            for item in (profile.include_keywords_json or []) + (profile.include_technologies_json or []) + (profile.include_capabilities_json or [])
+            if _normalize_text(item)
+        ]
+        profile_hits = [term for term in include_terms if term in searchable]
+        if profile_hits:
+            score += min(12.0, len(profile_hits) * 3.0)
+            reasons.append("Matched signal: tenant search-profile terms detected.")
+            matched.extend(profile_hits[:4])
+
+    negative_hits = [term for term in EXTERNAL_WORK_NEGATIVE_TERMS if term in searchable]
+    if negative_hits:
+        score -= min(40.0, 10.0 + (len(negative_hits) * 6.0))
+        reasons.append("Negative signal: non-target employment pattern detected.")
+
+    score = round(max(0.0, min(100.0, score)), 1)
+    return score, reasons, sorted(set(matched))
 
 
 def _calculate_ted_preliminary_relevance(
@@ -2530,6 +3814,11 @@ def _refresh_existing_discovery_from_candidate(
     relevance_reasons: list[str],
     matched_keywords: list[str],
 ) -> None:
+    normalized_requirement, normalized_summary, normalized_full_text, normalized_content = _normalized_content_payload(
+        candidate.requirement_summary,
+        candidate.raw_summary,
+        candidate.raw_text,
+    )
     row.source_url = _clean_text(candidate.source_url)
     row.canonical_source_url = canonical_url
     row.source_domain = source_domain
@@ -2540,10 +3829,11 @@ def _refresh_existing_discovery_from_candidate(
     row.normalized_organization_name = _normalize_text(candidate.organization_name)
     row.published_date = candidate.published_date
     row.closing_date = candidate.closing_date
-    row.raw_summary = _clean_text(candidate.raw_summary)
-    row.requirement_summary = _clean_text(candidate.requirement_summary)
+    row.raw_summary = normalized_summary
+    row.requirement_summary = normalized_requirement
+    row.normalized_content_json = normalized_content
     row.raw_content_json = candidate.raw_content_json or candidate.source_metadata or {}
-    row.raw_text = _clean_text(candidate.raw_text)
+    row.raw_text = normalized_full_text
     row.country = _normalize_country_or_region(candidate.country)
     row.region = _normalize_country_or_region(candidate.region)
     row.industry = _clean_text(candidate.industry)
@@ -2563,6 +3853,7 @@ def _refresh_existing_discovery_from_candidate(
         candidate.closing_date.date().isoformat() if candidate.closing_date else None,
         source_domain,
     )
+    refresh_discovery_commercial_intelligence(object_session(row), row)  # type: ignore[arg-type]
     row.updated_at = _now()
     if row.discovery_status in {"imported", "shortlisted", "rejected"}:
         return
@@ -2573,6 +3864,41 @@ def _refresh_existing_discovery_from_candidate(
     )
 
 
+def _update_independent_page_candidate_decision(
+    db: Session,
+    *,
+    tenant_id: str,
+    connector_id: str,
+    canonical_url: str | None,
+    page_type: str | None,
+    decision: str,
+    reason_codes: list[str],
+) -> None:
+    if not canonical_url:
+        return
+    page = (
+        db.query(BusinessDevelopmentWebPage)
+        .filter(
+            BusinessDevelopmentWebPage.tenant_id == tenant_id,
+            BusinessDevelopmentWebPage.connector_id == connector_id,
+            BusinessDevelopmentWebPage.canonical_url == canonical_url,
+        )
+        .first()
+    )
+    if page is None:
+        return
+    source_metadata = dict(page.source_metadata_json or {})
+    source_metadata["candidate_decision"] = {
+        "decision": decision,
+        "page_type": page_type,
+        "reason_codes": list(dict.fromkeys(reason_codes))[:8],
+    }
+    page.source_metadata_json = source_metadata
+    candidate_payload = dict(page.opportunity_candidate_json or {})
+    candidate_payload["candidate_decision"] = source_metadata["candidate_decision"]
+    page.opportunity_candidate_json = candidate_payload
+
+
 def ingest_discovered_opportunity(
     db: Session,
     tenant_id: str,
@@ -2581,6 +3907,18 @@ def ingest_discovered_opportunity(
     candidate: AugmisBusinessDiscoveredOpportunityCandidate,
     search_profile: BusinessDevelopmentSearchProfile | None,
 ) -> IngestionOutcome:
+    normalized_requirement, normalized_summary, normalized_full_text, normalized_content = _normalized_content_payload(
+        candidate.requirement_summary,
+        candidate.raw_summary,
+        candidate.raw_text,
+    )
+    candidate = candidate.model_copy(
+        update={
+            "requirement_summary": normalized_requirement,
+            "raw_summary": normalized_summary,
+            "raw_text": normalized_full_text,
+        }
+    )
     canonical_url, source_domain = _normalize_url(candidate.source_url)
     normalized_title = _normalize_title(candidate.title)
     normalized_organization_name = _normalize_text(candidate.organization_name)
@@ -2596,11 +3934,15 @@ def ingest_discovered_opportunity(
         candidate,
         search_profile,
     )
+    candidate_raw_content = dict(candidate.raw_content_json or candidate.source_metadata or {})
+    candidate_diagnostics = candidate_raw_content.get("crawler_diagnostics") if isinstance(candidate_raw_content.get("crawler_diagnostics"), dict) else {}
     discovery_status = "new"
     duplicate_of_id = None
+    outcome_reason_codes: list[str] = []
     if duplicate_of:
         discovery_status = "duplicate"
         duplicate_of_id = duplicate_of.id
+        outcome_reason_codes.append(f"duplicate:{duplicate_reason or 'matched'}")
         duplicate_reasons = [f"Duplicate detected by {duplicate_reason}.", *relevance_reasons]
         # A repeated scan of the same connector/external_id should be counted as a duplicate,
         # not inserted again, because this pair is intentionally unique per tenant.
@@ -2627,6 +3969,16 @@ def ingest_discovered_opportunity(
                 )
             connector_run.items_duplicate += 1
             connector_run.items_found += 1
+            if connector.connector_type == INDEPENDENT_WEB_CONNECTOR_TYPE:
+                _update_independent_page_candidate_decision(
+                    db,
+                    tenant_id=tenant_id,
+                    connector_id=connector.id,
+                    canonical_url=canonical_url,
+                    page_type=str(candidate_raw_content.get("page_type") or ""),
+                    decision="duplicate",
+                    reason_codes=["duplicate:external_id", *(candidate_diagnostics.get("reason_codes") or [])],
+                )
             return IngestionOutcome(
                 row=duplicate_of,
                 outcome="duplicate",
@@ -2635,7 +3987,20 @@ def ingest_discovered_opportunity(
         relevance_reasons = duplicate_reasons
     elif relevance_score < _preliminary_irrelevant_threshold(candidate.source_type):
         discovery_status = "irrelevant"
+        outcome_reason_codes.append("low_preliminary_relevance")
         relevance_reasons = ["Low preliminary match based on deterministic filtering.", *relevance_reasons]
+    else:
+        outcome_reason_codes.append("accepted_preliminary_relevance")
+    if candidate_diagnostics.get("reason_codes"):
+        outcome_reason_codes.extend(
+            str(code) for code in candidate_diagnostics.get("reason_codes") if _clean_text(str(code))
+        )
+    candidate_raw_content["crawler_diagnostics"] = {
+        **candidate_diagnostics,
+        "discovery_status": discovery_status,
+        "reason_codes": list(dict.fromkeys(outcome_reason_codes))[:8],
+        "relevance_score": relevance_score,
+    }
     row = BusinessDevelopmentDiscoveredOpportunity(
         id=f"BD-DSC-{str(uuid4())[:12].upper()}",
         tenant_id=tenant_id,
@@ -2654,10 +4019,11 @@ def ingest_discovered_opportunity(
         normalized_organization_name=normalized_organization_name,
         published_date=candidate.published_date,
         closing_date=candidate.closing_date,
-        raw_summary=_clean_text(candidate.raw_summary),
-        requirement_summary=_clean_text(candidate.requirement_summary),
-        raw_content_json=candidate.raw_content_json or candidate.source_metadata or {},
-        raw_text=_clean_text(candidate.raw_text),
+        raw_summary=normalized_summary,
+        requirement_summary=normalized_requirement,
+        normalized_content_json=normalized_content,
+        raw_content_json=candidate_raw_content,
+        raw_text=normalized_full_text,
         country=_normalize_country_or_region(candidate.country),
         region=_normalize_country_or_region(candidate.region),
         industry=_clean_text(candidate.industry),
@@ -2684,6 +4050,7 @@ def ingest_discovered_opportunity(
     )
     db.add(row)
     db.flush()
+    refresh_discovery_commercial_intelligence(db, row)
     if discovery_status == "duplicate":
         connector_run.items_duplicate += 1
         outcome = "duplicate"
@@ -2694,6 +4061,35 @@ def ingest_discovered_opportunity(
         connector_run.items_new += 1
         outcome = "new"
     connector_run.items_found += 1
+    if connector.connector_type == INDEPENDENT_WEB_CONNECTOR_TYPE:
+        _update_independent_page_candidate_decision(
+            db,
+            tenant_id=tenant_id,
+            connector_id=connector.id,
+            canonical_url=canonical_url,
+            page_type=str(candidate_raw_content.get("page_type") or ""),
+            decision=discovery_status,
+            reason_codes=outcome_reason_codes,
+        )
+        run_metadata = dict(connector_run.run_metadata_json or {})
+        filter_reason_counts = dict(run_metadata.get("filter_reason_counts") or {})
+        candidate_outcomes = list(run_metadata.get("candidate_outcomes") or [])
+        if discovery_status == "irrelevant":
+            for code in list(dict.fromkeys(outcome_reason_codes))[:8]:
+                filter_reason_counts[code] = int(filter_reason_counts.get(code, 0) or 0) + 1
+        candidate_outcomes.append(
+            {
+                "title": row.title,
+                "source_url": row.source_url,
+                "page_type": str(candidate_raw_content.get("page_type") or ""),
+                "discovery_status": discovery_status,
+                "relevance_score": relevance_score,
+                "reason_codes": list(dict.fromkeys(outcome_reason_codes))[:8],
+            }
+        )
+        run_metadata["filter_reason_counts"] = filter_reason_counts
+        run_metadata["candidate_outcomes"] = candidate_outcomes[-20:]
+        connector_run.run_metadata_json = run_metadata
     return IngestionOutcome(row=row, outcome=outcome, duplicate_of_id=duplicate_of_id)
 
 
@@ -2777,7 +4173,7 @@ def run_connector_scan(
                 tenant_id,
                 str((connector.configuration_json or {}).get("provider", "tavily") or "tavily"),
             )
-            if connector.connector_type == WEB_SEARCH_CONNECTOR_TYPE
+            if connector.connector_type in {WEB_SEARCH_CONNECTOR_TYPE, FREELANCER_CONNECTOR_TYPE, ADZUNA_CONNECTOR_TYPE}
             else None
         )
         candidates = implementation.discover(
@@ -2808,6 +4204,33 @@ def run_connector_scan(
                 messages = list((run.run_metadata_json or {}).get("item_errors", []))
                 messages.append(str(exc))
                 run.run_metadata_json = {**(run.run_metadata_json or {}), "item_errors": messages[-10:]}
+        if connector.connector_type == INDEPENDENT_WEB_CONNECTOR_TYPE:
+            run_metadata = dict(run.run_metadata_json or {})
+            candidates_created = int(run_metadata.get("opportunity_candidates", 0) or 0)
+            candidates_accepted = max(0, int(run.items_found or 0) - int(run.items_filtered or 0))
+            run_metadata["candidates_created"] = candidates_created
+            run_metadata["candidates_accepted"] = candidates_accepted
+            run_metadata["new_discoveries"] = int(run.items_new or 0)
+            run_metadata["duplicates"] = int(run.items_duplicate or 0)
+            if candidates_created == 0 and int(run_metadata.get("detail_pages", 0) or 0) == 0:
+                run_metadata["outcome_message"] = (
+                    f"Completed — {int(run_metadata.get('pages_fetched', 0) or 0)} pages fetched, "
+                    f"no detail opportunity pages found."
+                )
+            elif int(run.items_new or 0) == 0 and int(run.items_duplicate or 0) > 0:
+                run_metadata["outcome_message"] = (
+                    f"Completed — {int(run_metadata.get('pages_fetched', 0) or 0)} pages fetched, "
+                    f"{candidates_created} candidates, {int(run.items_duplicate or 0)} duplicates, "
+                    f"{int(run.items_new or 0)} new discoveries."
+                )
+            else:
+                run_metadata["outcome_message"] = (
+                    f"Completed — {int(run_metadata.get('pages_fetched', 0) or 0)} pages fetched, "
+                    f"{int(run_metadata.get('detail_pages', 0) or 0)} detail pages, "
+                    f"{candidates_created} candidates, {int(run.items_filtered or 0)} filtered, "
+                    f"{int(run.items_new or 0)} new discoveries."
+                )
+            run.run_metadata_json = run_metadata
         run.completed_at = _now()
         run.status = "partial" if run.items_failed else "completed"
         connector.active_run_id = None
@@ -2935,7 +4358,11 @@ def list_discoveries(
         query = query.join(
             BusinessDevelopmentConnector,
             BusinessDevelopmentConnector.id == BusinessDevelopmentDiscoveredOpportunity.connector_id,
-        ).filter(BusinessDevelopmentConnector.source_category == source_category)
+        )
+        if source_category in {"remoteok", "arbeitnow", "remotive", "adzuna"}:
+            query = query.filter(BusinessDevelopmentDiscoveredOpportunity.source_name.ilike(f"%{source_category}%"))
+        else:
+            query = query.filter(BusinessDevelopmentConnector.source_category == source_category)
     if country:
         query = query.filter(BusinessDevelopmentDiscoveredOpportunity.country == country)
     if minimum_preliminary_score is not None:
@@ -3055,10 +4482,87 @@ def update_discovery(
     changes = payload.model_dump(exclude_unset=True)
     for key, value in changes.items():
         setattr(row, key, value)
+    if {
+        "requirement_summary",
+        "budget_min",
+        "budget_max",
+        "currency",
+        "country",
+        "region",
+        "industry",
+    } & set(changes.keys()):
+        normalized_requirement, normalized_summary, normalized_full_text, normalized_content = _normalized_content_payload(
+            row.requirement_summary,
+            row.raw_summary,
+            row.raw_text,
+        )
+        row.requirement_summary = normalized_requirement
+        row.raw_summary = normalized_summary
+        row.raw_text = normalized_full_text
+        row.normalized_content_json = normalized_content
+    if {
+        "requirement_summary",
+        "country",
+        "region",
+        "industry",
+        "budget_min",
+        "budget_max",
+        "currency",
+    } & set(changes.keys()):
+        refresh_discovery_commercial_intelligence(db, row)
     row.updated_at = _now()
     db.commit()
     db.refresh(row)
     return {"success": True, "data": _serialize_discovery(row)}
+
+
+def reprocess_discovery_content(
+    db: Session,
+    tenant_id: str,
+    current_user: dict,
+    *,
+    limit: int = 100,
+) -> dict[str, Any]:
+    bounded_limit = max(1, min(int(limit or 100), 250))
+    rows = (
+        db.query(BusinessDevelopmentDiscoveredOpportunity)
+        .filter(BusinessDevelopmentDiscoveredOpportunity.tenant_id == tenant_id)
+        .order_by(BusinessDevelopmentDiscoveredOpportunity.discovered_at.desc())
+        .limit(bounded_limit)
+        .all()
+    )
+    processed: list[dict[str, Any]] = []
+    for row in rows:
+        normalized_requirement, normalized_summary, normalized_full_text, normalized_content = _normalized_content_payload(
+            row.requirement_summary,
+            row.raw_summary,
+            row.raw_text,
+        )
+        row.requirement_summary = normalized_requirement
+        row.raw_summary = normalized_summary
+        row.raw_text = normalized_full_text
+        row.normalized_content_json = normalized_content
+        row.updated_at = _now()
+        processed.append(
+            {
+                "id": row.id,
+                "title": row.title,
+                "detected_format": str((normalized_content.get("requirement") or {}).get("detected_format") or "text"),
+            }
+        )
+    db.commit()
+    create_audit_log(
+        db=db,
+        tenant_id=tenant_id,
+        user_id=current_user["user_id"],
+        event_type="UPDATE",
+        event_category="AUGMIS_BUSINESS",
+        description="Reprocessed discovery content normalization",
+        resource_type="bd_discovery",
+        resource_id=None,
+        metadata={"count": len(processed), "limit": bounded_limit},
+    )
+    return {"success": True, "data": {"count": len(processed), "limit": bounded_limit, "items": processed}}
 
 
 def shortlist_discovery(

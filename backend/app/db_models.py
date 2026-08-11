@@ -578,6 +578,7 @@ class BusinessDevelopmentDiscoveredOpportunity(Base):
     closing_date = Column(DateTime(timezone=True), nullable=True, index=True)
     raw_summary = Column(Text, nullable=True)
     requirement_summary = Column(Text, nullable=True)
+    normalized_content_json = Column(JSON, nullable=False, default=dict)
     raw_content_json = Column(JSON, nullable=False, default=dict)
     raw_text = Column(Text, nullable=True)
     country = Column(String, nullable=True, index=True)
@@ -613,6 +614,22 @@ class BusinessDevelopmentDiscoveredOpportunity(Base):
         index=True,
     )
     preliminary_relevance_score = Column(Float, nullable=True, index=True)
+    commercial_priority_score = Column(Float, nullable=True, index=True)
+    commercial_priority_band = Column(String, nullable=True, index=True)
+    commercial_recommendation = Column(String, nullable=True, index=True)
+    commercial_component_scores_json = Column(JSON, nullable=False, default=dict)
+    commercial_recommendation_reasons_json = Column(JSON, nullable=False, default=list)
+    commercial_risks_json = Column(JSON, nullable=False, default=list)
+    experience_match_score = Column(Float, nullable=True)
+    matched_experience_ids_json = Column(JSON, nullable=False, default=list)
+    matched_experience_reasons_json = Column(JSON, nullable=False, default=list)
+    matched_experience_summary_json = Column(JSON, nullable=False, default=list)
+    delivery_feasibility_score = Column(Float, nullable=True)
+    delivery_complexity = Column(String, nullable=True, index=True)
+    delivery_model = Column(String, nullable=True)
+    urgency_status = Column(String, nullable=True, index=True)
+    data_quality_status = Column(String, nullable=True)
+    intelligence_updated_at = Column(DateTime(timezone=True), nullable=True)
     relevance_reasons_json = Column(JSON, nullable=False, default=list)
     matched_keywords_json = Column(JSON, nullable=False, default=list)
     evidence_json = Column(JSON, nullable=False, default=list)
@@ -639,6 +656,169 @@ class BusinessDevelopmentDiscoveredOpportunity(Base):
         Index("ix_bd_discoveries_tenant_discovered", "tenant_id", "discovered_at"),
         Index("ix_bd_discoveries_tenant_closing", "tenant_id", "closing_date"),
         Index("ix_bd_discoveries_tenant_imported", "tenant_id", "imported_opportunity_id"),
+        Index(
+            "ix_bd_discoveries_tenant_priority",
+            "tenant_id",
+            "commercial_priority_score",
+            "commercial_recommendation",
+        ),
+    )
+
+
+class BusinessDevelopmentWebSeed(Base):
+    __tablename__ = "bd_web_seeds"
+
+    id = Column(String, primary_key=True)
+    tenant_id = Column(String, ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    connector_id = Column(String, ForeignKey("bd_connectors.id"), nullable=False, index=True)
+    name = Column(String, nullable=False)
+    seed_url = Column(String, nullable=False)
+    seed_type = Column(String, nullable=False, index=True)
+    enabled = Column(Boolean, nullable=False, default=True, index=True)
+    crawl_scope = Column(String, nullable=False, default="same_domain")
+    max_depth = Column(Integer, nullable=False, default=2)
+    max_pages = Column(Integer, nullable=False, default=25)
+    crawl_frequency = Column(String, nullable=False, default="weekly", index=True)
+    priority = Column(Integer, nullable=False, default=50, index=True)
+    country = Column(String, nullable=True, index=True)
+    industry = Column(String, nullable=True, index=True)
+    organization_name = Column(String, nullable=True, index=True)
+    notes = Column(Text, nullable=True)
+    last_crawled_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    next_crawl_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "connector_id", "seed_url", name="uq_bd_web_seed_tenant_connector_url"),
+        Index("ix_bd_web_seeds_tenant_connector_priority", "tenant_id", "connector_id", "priority"),
+    )
+
+
+class BusinessDevelopmentWebDomain(Base):
+    __tablename__ = "bd_web_domains"
+
+    id = Column(String, primary_key=True)
+    tenant_id = Column(String, ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    connector_id = Column(String, ForeignKey("bd_connectors.id"), nullable=False, index=True)
+    seed_id = Column(String, ForeignKey("bd_web_seeds.id"), nullable=True, index=True)
+    domain = Column(String, nullable=False, index=True)
+    source = Column(String, nullable=True)
+    proposed_type = Column(String, nullable=True, index=True)
+    trust_source_type = Column(String, nullable=True, index=True)
+    enabled = Column(Boolean, nullable=False, default=True, index=True)
+    approval_status = Column(String, nullable=False, default="approved", index=True)
+    robots_status = Column(String, nullable=False, default="unknown", index=True)
+    robots_crawl_delay_seconds = Column(Integer, nullable=True)
+    robots_fetched_at = Column(DateTime(timezone=True), nullable=True)
+    robots_url = Column(String, nullable=True)
+    found_from_url = Column(String, nullable=True)
+    found_context = Column(Text, nullable=True)
+    pages_indexed = Column(Integer, nullable=False, default=0)
+    opportunities_found = Column(Integer, nullable=False, default=0)
+    error_count = Column(Integer, nullable=False, default=0)
+    last_crawl_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    next_crawl_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    status = Column(String, nullable=False, default="ready", index=True)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "connector_id", "domain", name="uq_bd_web_domain_tenant_connector_domain"),
+        Index("ix_bd_web_domains_tenant_connector_status", "tenant_id", "connector_id", "status"),
+    )
+
+
+class BusinessDevelopmentWebFrontier(Base):
+    __tablename__ = "bd_web_frontier"
+
+    id = Column(String, primary_key=True)
+    tenant_id = Column(String, ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    connector_id = Column(String, ForeignKey("bd_connectors.id"), nullable=False, index=True)
+    seed_id = Column(String, ForeignKey("bd_web_seeds.id"), nullable=True, index=True)
+    domain_id = Column(String, ForeignKey("bd_web_domains.id"), nullable=True, index=True)
+    url = Column(String, nullable=False)
+    canonical_url = Column(String, nullable=False)
+    domain = Column(String, nullable=False, index=True)
+    parent_url = Column(String, nullable=True)
+    anchor_text = Column(String, nullable=True)
+    link_context = Column(Text, nullable=True)
+    depth = Column(Integer, nullable=False, default=0, index=True)
+    priority = Column(Float, nullable=False, default=0, index=True)
+    status = Column(String, nullable=False, default="queued", index=True)
+    discovered_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+    last_attempted_at = Column(DateTime(timezone=True), nullable=True)
+    last_fetched_at = Column(DateTime(timezone=True), nullable=True)
+    next_fetch_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    http_status = Column(Integer, nullable=True)
+    retry_count = Column(Integer, nullable=False, default=0)
+    content_hash = Column(String, nullable=True, index=True)
+    error_code = Column(String, nullable=True, index=True)
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "connector_id", "canonical_url", name="uq_bd_web_frontier_tenant_connector_canonical"),
+        Index("ix_bd_web_frontier_tenant_connector_status_priority", "tenant_id", "connector_id", "status", "priority"),
+    )
+
+
+class BusinessDevelopmentWebPage(Base):
+    __tablename__ = "bd_web_pages"
+
+    id = Column(String, primary_key=True)
+    tenant_id = Column(String, ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    connector_id = Column(String, ForeignKey("bd_connectors.id"), nullable=False, index=True)
+    seed_id = Column(String, ForeignKey("bd_web_seeds.id"), nullable=True, index=True)
+    domain_id = Column(String, ForeignKey("bd_web_domains.id"), nullable=True, index=True)
+    url = Column(String, nullable=False)
+    canonical_url = Column(String, nullable=False)
+    domain = Column(String, nullable=False, index=True)
+    title = Column(String, nullable=True)
+    plain_text = Column(Text, nullable=True)
+    safe_html = Column(Text, nullable=True)
+    language = Column(String, nullable=True, index=True)
+    page_type = Column(String, nullable=False, default="unknown", index=True)
+    published_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    last_modified_at = Column(DateTime(timezone=True), nullable=True)
+    content_hash = Column(String, nullable=True, index=True)
+    first_seen_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    last_seen_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+    last_changed_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    http_status = Column(Integer, nullable=True)
+    source_metadata_json = Column(JSON, nullable=False, default=dict)
+    contact_routes_json = Column(JSON, nullable=False, default=list)
+    opportunity_candidate_json = Column(JSON, nullable=False, default=dict)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "connector_id", "canonical_url", name="uq_bd_web_page_tenant_connector_canonical"),
+        Index("ix_bd_web_pages_tenant_connector_type", "tenant_id", "connector_id", "page_type"),
+        Index("ix_bd_web_pages_tenant_domain_changed", "tenant_id", "domain", "last_changed_at"),
     )
 
 
@@ -694,6 +874,54 @@ class BusinessDevelopmentDiscoveryTranslation(Base):
             "discovery_id",
             "target_language",
             "source_content_hash",
+        ),
+    )
+
+
+class BusinessDevelopmentDiscoveryAIAssessment(Base):
+    __tablename__ = "bd_discovery_ai_assessments"
+
+    id = Column(String, primary_key=True)
+    tenant_id = Column(String, ForeignKey("tenants.tenant_id"), nullable=False, index=True)
+    discovery_id = Column(
+        String,
+        ForeignKey("bd_discovered_opportunities.id"),
+        nullable=False,
+        index=True,
+    )
+    analysis_version = Column(Integer, nullable=False)
+    provider = Column(String, nullable=False)
+    model = Column(String, nullable=False)
+    prompt_bundle_version = Column(String, nullable=False, default="phase5f_v1")
+    prompt_version = Column(String, nullable=False, default="discovery_deep_assess_v1")
+    recommendation = Column(String, nullable=True, index=True)
+    recommendation_confidence = Column(Float, nullable=True)
+    commercial_score = Column(Float, nullable=True)
+    delivery_feasibility_score = Column(Float, nullable=True)
+    executive_summary = Column(Text, nullable=True)
+    analysis_json = Column(JSON, nullable=False, default=dict)
+    usage_json = Column(JSON, nullable=False, default=dict)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "discovery_id",
+            "analysis_version",
+            name="uq_bd_discovery_ai_assessment_version",
+        ),
+        Index(
+            "ix_bd_discovery_ai_assessments_tenant_discovery_created",
+            "tenant_id",
+            "discovery_id",
+            "created_at",
         ),
     )
 

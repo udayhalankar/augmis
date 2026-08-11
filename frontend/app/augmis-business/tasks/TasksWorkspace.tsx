@@ -5,7 +5,6 @@ import { useSearchParams } from "next/navigation";
 
 import AddTaskOutlinedIcon from "@mui/icons-material/AddTaskOutlined";
 import AssignmentTurnedInOutlinedIcon from "@mui/icons-material/AssignmentTurnedInOutlined";
-import CloseIcon from "@mui/icons-material/Close";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import EventBusyOutlinedIcon from "@mui/icons-material/EventBusyOutlined";
 import EventNoteOutlinedIcon from "@mui/icons-material/EventNoteOutlined";
@@ -15,7 +14,6 @@ import ScheduleOutlinedIcon from "@mui/icons-material/ScheduleOutlined";
 import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
 import TaskAltOutlinedIcon from "@mui/icons-material/TaskAltOutlined";
 import TimelineOutlinedIcon from "@mui/icons-material/TimelineOutlined";
-import VisibilityOutlinedIcon from "@mui/icons-material/VisibilityOutlined";
 import WorkOutlineOutlinedIcon from "@mui/icons-material/WorkOutlineOutlined";
 import {
   Alert,
@@ -23,18 +21,10 @@ import {
   Box,
   Button,
   CircularProgress,
-  Drawer,
-  IconButton,
   InputAdornment,
   MenuItem,
   Paper,
   Stack,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TablePagination,
-  TableRow,
   TextField,
   Tooltip,
   Typography,
@@ -46,7 +36,6 @@ import {
   AdminFormField,
   AdminFormTextField,
 } from "@/components/forms/AdminFormDialog";
-import { OutletPage } from "@/components/layout/OutletPage";
 import { useAuth } from "@/context/AuthContext";
 import { parseApiValidationError } from "@/services/apiErrorParser";
 import {
@@ -68,7 +57,6 @@ import {
   updateAugmisBusinessTask,
 } from "@/services/augmisBusinessService";
 import {
-  TaskDueIndicator,
   TaskPriorityChip,
   TaskStatusChip,
   formatTaskDateTime,
@@ -78,6 +66,13 @@ import {
   isTaskOverdue,
   isTaskUpcoming,
 } from "../components/BusinessTaskUI";
+import BusinessDataTable, { type BusinessDataTableColumn } from "../components/BusinessDataTable";
+import BusinessDetailDrawer from "../components/BusinessDetailDrawer";
+import BusinessFilterBar from "../components/BusinessFilterBar";
+import BusinessMetricCarousel, { type BusinessMetricItem } from "../components/BusinessMetricCarousel";
+import BusinessPageFrame from "../components/BusinessPageFrame";
+import BusinessRowActionMenu from "../components/BusinessRowActionMenu";
+import BusinessTabs, { type BusinessTabItem } from "../components/BusinessTabs";
 
 type TimingView = "all" | "overdue" | "due_today" | "upcoming" | "in_progress" | "completed";
 type ToastSeverity = "success" | "error" | "info" | "warning";
@@ -91,13 +86,6 @@ type TaskFormState = {
   priority: string;
   task_status: string;
   due_at: string;
-};
-
-type TaskMetrics = {
-  total: number;
-  inProgress: number;
-  completed: number;
-  highPriority: number;
 };
 
 type TaskDetailState = {
@@ -119,7 +107,6 @@ const TASK_TYPE_OPTIONS = [
 ];
 
 const TASK_STATUS_OPTIONS = ["open", "in_progress", "cancelled"];
-const TASK_FILTER_STATUS_OPTIONS = ["all", "open", "in_progress", "completed", "cancelled"];
 const PRIORITY_OPTIONS = ["low", "medium", "high"];
 const TIMING_OPTIONS: Array<{ value: TimingView; label: string }> = [
   { value: "all", label: "All" },
@@ -224,43 +211,11 @@ function formatAssignedUserSummary(user: AugmisBusinessAssignableUser | null | u
   return user.email ? `${getUserLabel(user)} (${user.email})` : getUserLabel(user) || fallbackId || "Unassigned";
 }
 
-function MetricCard({
-  title,
-  value,
-  subtitle,
-  icon,
-  gradient,
-}: {
-  title: string;
-  value: string | number;
-  subtitle: string;
-  icon: React.ReactNode;
-  gradient: string;
-}) {
-  return (
-    <Paper
-      elevation={0}
-      sx={{
-        borderRadius: "8px",
-        border: "1px solid #D9E2EC",
-        overflow: "hidden",
-        minHeight: 126,
-      }}
-    >
-      <Box sx={{ px: 2, py: 1.15, background: gradient, borderBottom: "1px solid #E2E8F0" }}>
-        <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
-          <Box sx={{ color: "#0F4C81", display: "flex" }}>{icon}</Box>
-          <Typography sx={{ fontWeight: 700, color: "#0F172A" }}>{title}</Typography>
-        </Stack>
-      </Box>
-      <Box sx={{ px: 2, py: 1.8 }}>
-        <Typography sx={{ fontSize: 28, fontWeight: 800, color: "#0F172A", lineHeight: 1 }}>
-          {value}
-        </Typography>
-        <Typography sx={{ mt: 1, color: "#64748B", fontSize: 13 }}>{subtitle}</Typography>
-      </Box>
-    </Paper>
-  );
+function completedResultCount(tasks: AugmisBusinessTask[], timingView: TimingView, total: number) {
+  if (timingView === "completed") {
+    return total;
+  }
+  return tasks.filter((task) => task.task_status === "completed").length;
 }
 
 function SectionCard({
@@ -332,25 +287,22 @@ export default function TasksWorkspace() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [dashboard, setDashboard] = useState<AugmisBusinessDashboard | null>(null);
-  const [metrics, setMetrics] = useState<TaskMetrics>({
-    total: 0,
-    inProgress: 0,
-    completed: 0,
-    highPriority: 0,
-  });
   const [tasks, setTasks] = useState<AugmisBusinessTask[]>([]);
   const [leadOptions, setLeadOptions] = useState<AugmisBusinessLead[]>([]);
   const [leadMap, setLeadMap] = useState<Record<string, AugmisBusinessLead>>({});
   const [assignedUserMap, setAssignedUserMap] = useState<ResolvedUserMap>({});
+  const [assignableUserOptions, setAssignableUserOptions] = useState<AugmisBusinessAssignableUser[]>([]);
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(25);
   const [total, setTotal] = useState(0);
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState("all");
   const [priorityFilter, setPriorityFilter] = useState("all");
   const [leadFilter, setLeadFilter] = useState("all");
+  const [assignedUserFilter, setAssignedUserFilter] = useState("all");
   const [timingView, setTimingView] = useState<TimingView>("all");
+  const [taskSortBy, setTaskSortBy] = useState("due_at");
+  const [taskSortOrder, setTaskSortOrder] = useState<"asc" | "desc">("asc");
   const [refreshTick, setRefreshTick] = useState(0);
 
   const [createOpen, setCreateOpen] = useState(false);
@@ -397,6 +349,9 @@ export default function TasksWorkspace() {
   const requestedCreate = searchParams.get("create") === "1";
   const activeAssigneeInput = createOpen ? createAssigneeInput : editOpen ? editAssigneeInput : "";
   const activeSelectedAssignee = createOpen ? createAssignee : editOpen ? editAssignee : null;
+
+  const taskStatusFilter =
+    timingView === "in_progress" || timingView === "completed" ? timingView : undefined;
 
   useEffect(() => {
     if (requestedCreate && canCreate && !createOpen) {
@@ -478,19 +433,25 @@ export default function TasksWorkspace() {
           page: page + 1,
           page_size: pageSize,
           search: search || undefined,
-          status: statusFilter !== "all" ? statusFilter : undefined,
+          status: taskStatusFilter,
           priority: priorityFilter !== "all" ? priorityFilter : undefined,
           lead_id: leadFilter !== "all" ? leadFilter : undefined,
+          assigned_user_id: assignedUserFilter !== "all" ? assignedUserFilter : undefined,
+          sort_by: taskSortBy,
+          sort_order: taskSortOrder,
         };
 
-        const [dashboardResult, taskResult, leadListResult, inProgressResult, completedResult, highPriorityResult] =
+        const [dashboardResult, taskResult, leadListResult, inProgressResult, completedResult, assignableUsersResult] =
           await Promise.all([
             getAugmisBusinessDashboard(),
             listAugmisBusinessTasks(baseTaskParams),
             listAugmisBusinessLeads({ page: 1, page_size: 100 }),
             listAugmisBusinessTasks({ page: 1, page_size: 1, status: "in_progress" }),
             listAugmisBusinessTasks({ page: 1, page_size: 1, status: "completed" }),
-            listAugmisBusinessTasks({ page: 1, page_size: 1, priority: "high" }),
+            listAugmisBusinessAssignableUsers({
+              include_inactive: true,
+              limit: 200,
+            }),
           ]);
 
         const taskRows = taskResult.data || [];
@@ -514,7 +475,7 @@ export default function TasksWorkspace() {
             }
           })
         );
-        const assignableUsersResult = uniqueAssignedUserIds.length
+        const relatedAssignableUsersResult = uniqueAssignedUserIds.length
           ? await listAugmisBusinessAssignableUsers({
               user_ids: uniqueAssignedUserIds,
               include_inactive: true,
@@ -532,7 +493,7 @@ export default function TasksWorkspace() {
           }
           return acc;
         }, {});
-        const nextAssignedUserMap = (assignableUsersResult.data || []).reduce<ResolvedUserMap>(
+        const nextAssignedUserMap = (relatedAssignableUsersResult.data || []).reduce<ResolvedUserMap>(
           (acc, user) => {
             acc[user.user_id] = user;
             return acc;
@@ -545,13 +506,8 @@ export default function TasksWorkspace() {
         setLeadOptions(leadListResult.data || []);
         setLeadMap(nextLeadMap);
         setAssignedUserMap(nextAssignedUserMap);
+        setAssignableUserOptions(assignableUsersResult.data || []);
         setTotal(taskResult.pagination?.total || 0);
-        setMetrics({
-          total: taskResult.pagination?.total || 0,
-          inProgress: inProgressResult.pagination?.total || 0,
-          completed: completedResult.pagination?.total || 0,
-          highPriority: highPriorityResult.pagination?.total || 0,
-        });
       } catch (loadError) {
         if (!active) {
           return;
@@ -562,6 +518,7 @@ export default function TasksWorkspace() {
         setLeadOptions([]);
         setLeadMap({});
         setAssignedUserMap({});
+        setAssignableUserOptions([]);
         setTotal(0);
       } finally {
         if (active) {
@@ -575,7 +532,19 @@ export default function TasksWorkspace() {
     return () => {
       active = false;
     };
-  }, [canRead, leadFilter, page, pageSize, priorityFilter, refreshTick, search, statusFilter]);
+  }, [
+    assignedUserFilter,
+    canRead,
+    leadFilter,
+    page,
+    pageSize,
+    priorityFilter,
+    refreshTick,
+    search,
+    taskSortBy,
+    taskSortOrder,
+    taskStatusFilter,
+  ]);
 
   const displayedTasks = useMemo(() => {
     if (timingView === "all" || timingView === "in_progress" || timingView === "completed") {
@@ -597,6 +566,196 @@ export default function TasksWorkspace() {
     leadOptions.find((lead) => lead.id === createForm.lead_id) || leadMap[createForm.lead_id] || null;
   const selectedEditLead =
     leadOptions.find((lead) => lead.id === editForm.lead_id) || leadMap[editForm.lead_id] || null;
+  const metricItems = useMemo<BusinessMetricItem[]>(
+    () => [
+      {
+        key: "open",
+        title: "Open",
+        value: total,
+        subtitle: "Matching open task records",
+        icon: <TaskAltOutlinedIcon fontSize="small" />,
+        accent: "linear-gradient(90deg, #DBEAFE 0%, #F8FAFC 100%)",
+      },
+      {
+        key: "overdue",
+        title: "Overdue",
+        value: dashboard?.overdue_tasks ?? 0,
+        subtitle: "Open or in-progress tasks past due",
+        icon: <EventBusyOutlinedIcon fontSize="small" />,
+        accent: "linear-gradient(90deg, #FEE4E2 0%, #FFF5F4 100%)",
+      },
+      {
+        key: "due-today",
+        title: "Due Today",
+        value: dashboard?.tasks_due_today ?? 0,
+        subtitle: "Live tasks due before close of day",
+        icon: <ScheduleOutlinedIcon fontSize="small" />,
+        accent: "linear-gradient(90deg, #FEF3C7 0%, #FFFBEB 100%)",
+      },
+      {
+        key: "upcoming",
+        title: "Upcoming",
+        value: displayedTasks.filter((task) => isTaskUpcoming(task)).length,
+        subtitle: "Loaded tasks due after today",
+        icon: <EventNoteOutlinedIcon fontSize="small" />,
+        accent: "linear-gradient(90deg, #E0F2FE 0%, #F8FAFC 100%)",
+      },
+      {
+        key: "completed",
+        title: "Completed",
+        value: completedResultCount(displayedTasks, timingView, total),
+        subtitle: "Matching completed tasks",
+        icon: <AssignmentTurnedInOutlinedIcon fontSize="small" />,
+        accent: "linear-gradient(90deg, #DCFCE7 0%, #F0FDF4 100%)",
+      },
+    ],
+    [dashboard?.overdue_tasks, dashboard?.tasks_due_today, displayedTasks, timingView, total]
+  );
+  const timingTabItems = useMemo<BusinessTabItem[]>(
+    () =>
+      TIMING_OPTIONS.map((option) => {
+        const disabled =
+          (option.value === "overdue" ||
+            option.value === "due_today" ||
+            option.value === "upcoming") &&
+          !reliableTimingFilters;
+        return {
+          value: option.value,
+          label: option.label,
+          disabled,
+        };
+      }),
+    [reliableTimingFilters]
+  );
+  const taskColumns = useMemo<BusinessDataTableColumn<AugmisBusinessTask>[]>(
+    () => [
+      {
+        key: "title",
+        label: "Task",
+        sortable: true,
+        width: 250,
+        render: (task) => (
+          <Box sx={{ minWidth: 0 }}>
+            <Typography
+              sx={{
+                fontWeight: 700,
+                color: "#0F172A",
+                display: "-webkit-box",
+                WebkitBoxOrient: "vertical",
+                WebkitLineClamp: 2,
+                overflow: "hidden",
+                whiteSpace: "normal",
+              }}
+            >
+              {task.title}
+            </Typography>
+            <Typography sx={{ mt: 0.35, color: "#64748B", fontSize: 12.5 }}>
+              {formatTaskLabel(task.task_type)}
+            </Typography>
+          </Box>
+        ),
+      },
+      {
+        key: "priority",
+        label: "Priority",
+        sortable: true,
+        width: 110,
+        render: (task) => <TaskPriorityChip priority={task.priority} />,
+      },
+      {
+        key: "due_at",
+        label: "Due Date",
+        sortable: true,
+        width: 150,
+        render: (task) => (
+          <Typography sx={{ color: getTaskDueColor(task), fontWeight: 600 }}>
+            {formatTaskDateTime(task.due_at)}
+          </Typography>
+        ),
+      },
+      {
+        key: "status",
+        label: "Status",
+        sortable: true,
+        width: 120,
+        render: (task) => <TaskStatusChip status={task.task_status} />,
+      },
+      {
+        key: "assignee",
+        label: "Assignee",
+        sortable: true,
+        width: 220,
+        render: (task) => {
+          const assigned = getAssignedUserDisplay(task.assigned_user_id);
+          return (
+            <Box sx={{ minWidth: 0 }}>
+              <Typography sx={{ color: "#0F172A", fontWeight: 600, lineHeight: 1.2 }}>
+                {assigned.primary}
+              </Typography>
+              {assigned.secondary ? (
+                <Typography sx={{ mt: 0.35, color: "#64748B", fontSize: 12 }}>
+                  {assigned.secondary}
+                </Typography>
+              ) : null}
+            </Box>
+          );
+        },
+      },
+      {
+        key: "lead",
+        label: "Lead",
+        width: 220,
+        render: (task) => (
+          <Box sx={{ minWidth: 0 }}>
+            <Typography
+              sx={{
+                color: "#0F172A",
+                fontWeight: 600,
+                display: "-webkit-box",
+                WebkitBoxOrient: "vertical",
+                WebkitLineClamp: 2,
+                overflow: "hidden",
+                whiteSpace: "normal",
+              }}
+            >
+              {findLeadTitle(leadMap, task)}
+            </Typography>
+            <Typography sx={{ mt: 0.35, color: "#64748B", fontSize: 12.5 }}>
+              {findProspectName(leadMap, task)}
+            </Typography>
+          </Box>
+        ),
+      },
+      {
+        key: "actions",
+        label: "Actions",
+        align: "right",
+        width: 130,
+        render: (task) => (
+          <BusinessRowActionMenu
+            onView={() => void openTaskDetail(task)}
+            menuItems={[
+              {
+                key: "edit",
+                label: "Edit Task",
+                icon: <EditOutlinedIcon fontSize="small" />,
+                disabled: !canUpdate,
+                onClick: () => openEditDialog(task),
+              },
+              {
+                key: "complete",
+                label: "Complete Task",
+                icon: <AssignmentTurnedInOutlinedIcon fontSize="small" />,
+                disabled: !canUpdate || task.task_status === "completed",
+                onClick: () => openCompleteDialog(task),
+              },
+            ]}
+          />
+        ),
+      },
+    ],
+    [canUpdate, leadMap]
+  );
 
   function getAssignedUserDisplay(userId: string | null | undefined) {
     if (!userId) {
@@ -854,66 +1013,105 @@ export default function TasksWorkspace() {
   const primaryContact = findPrimaryContact(detailData.contacts);
 
   return (
-    <OutletPage
+    <BusinessPageFrame
       title="Business Development Tasks"
       description="Manage live follow-up work, due dates, and sales execution tasks across AUGMIS Business."
     >
       <Stack spacing={2.5}>
         {error ? <Alert severity="error">{error}</Alert> : null}
+        <BusinessMetricCarousel items={metricItems} />
 
-        <Box
-          sx={{
-            display: "grid",
-            gap: 2,
-            gridTemplateColumns: {
-              xs: "1fr",
-              md: "repeat(2, minmax(0, 1fr))",
-              xl: "repeat(5, minmax(0, 1fr))",
-            },
-          }}
-        >
-          <MetricCard
-            title="Overdue"
-            value={dashboard?.overdue_tasks ?? 0}
-            subtitle="Open or in-progress tasks past due"
-            icon={<EventBusyOutlinedIcon fontSize="small" />}
-            gradient="linear-gradient(90deg, #FEE4E2 0%, #FFF5F4 100%)"
-          />
-          <MetricCard
-            title="Due Today"
-            value={dashboard?.tasks_due_today ?? 0}
-            subtitle="Live tasks due before close of day"
-            icon={<ScheduleOutlinedIcon fontSize="small" />}
-            gradient="linear-gradient(90deg, #FEF3C7 0%, #FFFBEB 100%)"
-          />
-          <MetricCard
-            title="In Progress"
-            value={metrics.inProgress}
-            subtitle="Tenant-wide active execution tasks"
-            icon={<TaskAltOutlinedIcon fontSize="small" />}
-            gradient="linear-gradient(90deg, #DBEAFE 0%, #F8FAFC 100%)"
-          />
-          <MetricCard
-            title="Completed"
-            value={metrics.completed}
-            subtitle="Tenant-wide completed task records"
-            icon={<AssignmentTurnedInOutlinedIcon fontSize="small" />}
-            gradient="linear-gradient(90deg, #DCFCE7 0%, #F0FDF4 100%)"
-          />
-          <MetricCard
-            title="High Priority"
-            value={metrics.highPriority}
-            subtitle="Tenant-wide tasks marked high priority"
-            icon={<WorkOutlineOutlinedIcon fontSize="small" />}
-            gradient="linear-gradient(90deg, #FEE2E2 0%, #FFF1F2 100%)"
-          />
-        </Box>
-
-        <SectionCard
-          title="Task Filters"
-          icon={<EventNoteOutlinedIcon fontSize="small" />}
-          action={
-            <Stack direction="row" spacing={1}>
+        <BusinessFilterBar
+          filters={
+            <Stack spacing={1.2}>
+              <Box
+                sx={{
+                  display: "grid",
+                  gap: 1.1,
+                  gridTemplateColumns: { xs: "1fr", md: "repeat(4, minmax(0, 1fr))" },
+                }}
+              >
+                <TextField
+                  label="Search"
+                  size="small"
+                  value={searchInput}
+                  onChange={(event) => setSearchInput(event.target.value)}
+                  placeholder="Search tasks"
+                  slotProps={{
+                    input: {
+                      startAdornment: (
+                        <InputAdornment position="start">
+                          <SearchRoundedIcon fontSize="small" sx={{ color: "#64748B" }} />
+                        </InputAdornment>
+                      ),
+                    },
+                  }}
+                />
+                <AdminFormTextField
+                  select
+                  label="Priority"
+                  value={priorityFilter}
+                  onChange={(event) => {
+                    setPriorityFilter(event.target.value);
+                    setPage(0);
+                  }}
+                >
+                  <MenuItem value="all">All priorities</MenuItem>
+                  {PRIORITY_OPTIONS.map((priority) => (
+                    <MenuItem key={priority} value={priority}>
+                      {formatTaskLabel(priority)}
+                    </MenuItem>
+                  ))}
+                </AdminFormTextField>
+                <AdminFormTextField
+                  select
+                  label="Lead"
+                  value={leadFilter}
+                  onChange={(event) => {
+                    setLeadFilter(event.target.value);
+                    setPage(0);
+                  }}
+                >
+                  <MenuItem value="all">All leads</MenuItem>
+                  {leadOptions.map((lead) => (
+                    <MenuItem key={lead.id} value={lead.id}>
+                      {lead.title}
+                    </MenuItem>
+                  ))}
+                </AdminFormTextField>
+                <AdminFormTextField
+                  select
+                  label="Assigned To"
+                  value={assignedUserFilter}
+                  onChange={(event) => {
+                    setAssignedUserFilter(event.target.value);
+                    setPage(0);
+                  }}
+                >
+                  <MenuItem value="all">All assignees</MenuItem>
+                  {assignableUserOptions.map((user) => (
+                    <MenuItem key={user.user_id} value={user.user_id}>
+                      {getUserLabel(user) || user.user_id}
+                    </MenuItem>
+                  ))}
+                </AdminFormTextField>
+              </Box>
+              <BusinessTabs
+                compact
+                value={timingView}
+                onChange={(value) => setTimingView(value as TimingView)}
+                items={timingTabItems}
+              />
+              {!reliableTimingFilters ? (
+                <Alert severity="info" sx={{ borderRadius: "8px" }}>
+                  Overdue, Due Today, and Upcoming views stay disabled when pagination means the
+                  loaded page may not contain the full matching set.
+                </Alert>
+              ) : null}
+            </Stack>
+          }
+          actions={
+            <>
               <Button
                 variant="outlined"
                 startIcon={<RefreshRoundedIcon />}
@@ -927,287 +1125,44 @@ export default function TasksWorkspace() {
                   variant="contained"
                   startIcon={<AddTaskOutlinedIcon />}
                   onClick={openCreateDialog}
-                  sx={{
-                    borderRadius: "8px",
-                    textTransform: "none",
-                    bgcolor: "#2563EB",
-                    "&:hover": { bgcolor: "#1D4ED8" },
-                  }}
+                  sx={{ borderRadius: "8px", textTransform: "none", bgcolor: "#2563EB", "&:hover": { bgcolor: "#1D4ED8" } }}
                 >
                   New Task
                 </Button>
               ) : null}
-            </Stack>
-          }
-        >
-          <Stack spacing={1.5}>
-            <Box
-              sx={{
-                display: "grid",
-                gap: 1.25,
-                gridTemplateColumns: {
-                  xs: "1fr",
-                  md: "repeat(4, minmax(0, 1fr))",
-                },
-              }}
-            >
-              <TextField
-                label="Search"
-                value={searchInput}
-                onChange={(event) => setSearchInput(event.target.value)}
-                placeholder="Search tasks"
-                fullWidth
-                sx={{
-                  "& .MuiOutlinedInput-root": { borderRadius: "8px", backgroundColor: "#FFFFFF" },
-                }}
-                slotProps={{
-                  input: {
-                    startAdornment: (
-                      <InputAdornment position="start">
-                        <SearchRoundedIcon fontSize="small" sx={{ color: "#64748B" }} />
-                      </InputAdornment>
-                    ),
-                  },
-                }}
-              />
-              <AdminFormTextField
-                select
-                label="Status"
-                value={statusFilter}
-                onChange={(event) => {
-                  setStatusFilter(event.target.value);
-                  setPage(0);
-                  if (event.target.value === "in_progress") {
-                    setTimingView("in_progress");
-                  } else if (event.target.value === "completed") {
-                    setTimingView("completed");
-                  } else if (timingView === "in_progress" || timingView === "completed") {
-                    setTimingView("all");
-                  }
-                }}
-              >
-                {TASK_FILTER_STATUS_OPTIONS.map((status) => (
-                  <MenuItem key={status} value={status}>
-                    {status === "all" ? "All statuses" : formatTaskLabel(status)}
-                  </MenuItem>
-                ))}
-              </AdminFormTextField>
-              <AdminFormTextField
-                select
-                label="Priority"
-                value={priorityFilter}
-                onChange={(event) => {
-                  setPriorityFilter(event.target.value);
-                  setPage(0);
-                }}
-              >
-                <MenuItem value="all">All priorities</MenuItem>
-                {PRIORITY_OPTIONS.map((priority) => (
-                  <MenuItem key={priority} value={priority}>
-                    {formatTaskLabel(priority)}
-                  </MenuItem>
-                ))}
-              </AdminFormTextField>
-              <AdminFormTextField
-                select
-                label="Lead"
-                value={leadFilter}
-                onChange={(event) => {
-                  setLeadFilter(event.target.value);
-                  setPage(0);
-                }}
-              >
-                <MenuItem value="all">All leads</MenuItem>
-                {leadOptions.map((lead) => (
-                  <MenuItem key={lead.id} value={lead.id}>
-                    {lead.title}
-                  </MenuItem>
-                ))}
-              </AdminFormTextField>
-            </Box>
-
-            <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap", rowGap: 1 }}>
-              {TIMING_OPTIONS.map((option) => {
-                const needsReliableSet =
-                  option.value === "overdue" ||
-                  option.value === "due_today" ||
-                  option.value === "upcoming";
-                const disabled = needsReliableSet && !reliableTimingFilters;
-                const button = (
-                  <Button
-                    key={option.value}
-                    variant={timingView === option.value ? "contained" : "outlined"}
-                    disabled={disabled}
-                    onClick={() => setTimingView(option.value)}
-                    sx={{
-                      borderRadius: 999,
-                      textTransform: "none",
-                      minWidth: 0,
-                      bgcolor: timingView === option.value ? "#0F4C81" : undefined,
-                    }}
-                  >
-                    {option.label}
-                  </Button>
-                );
-                if (disabled) {
-                  return (
-                    <Tooltip
-                      key={option.value}
-                      title="Timing views are enabled only when the loaded page contains the full matching dataset."
-                    >
-                      <span>{button}</span>
-                    </Tooltip>
-                  );
-                }
-                return button;
-              })}
-            </Stack>
-
-            {!reliableTimingFilters ? (
-              <Alert severity="info" sx={{ borderRadius: "8px" }}>
-                Overdue, Due Today, and Upcoming tabs stay disabled because the current task result is
-                paginated and the backend does not yet expose due-date filters.
-              </Alert>
-            ) : null}
-          </Stack>
-        </SectionCard>
-
-        <SectionCard
-          title="Tasks Workspace"
-          icon={<TimelineOutlinedIcon fontSize="small" />}
-          action={
-            <Typography sx={{ color: "#64748B", fontSize: 13 }}>
-              {metrics.total.toLocaleString()} matching tasks
-            </Typography>
-          }
-        >
-          {loading ? (
-            <Stack sx={{ py: 6, alignItems: "center" }}>
-              <CircularProgress size={28} />
-            </Stack>
-          ) : displayedTasks.length ? (
-            <>
-              <Box sx={{ overflowX: "auto" }}>
-                <Table size="small">
-                  <TableHead>
-                    <TableRow>
-                      <TableCell>Task</TableCell>
-                      <TableCell>Type</TableCell>
-                      <TableCell>Related Lead</TableCell>
-                      <TableCell>Prospect</TableCell>
-                      <TableCell>Assigned To</TableCell>
-                      <TableCell>Priority</TableCell>
-                      <TableCell>Status</TableCell>
-                      <TableCell>Due Date</TableCell>
-                      <TableCell>Timing</TableCell>
-                      <TableCell>Created</TableCell>
-                      <TableCell align="right">Actions</TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {displayedTasks.map((task) => (
-                      <TableRow key={task.id} hover>
-                        <TableCell sx={{ minWidth: 220 }}>
-                          <Button
-                            variant="text"
-                            onClick={() => void openTaskDetail(task)}
-                            sx={{
-                              p: 0,
-                              minWidth: 0,
-                              justifyContent: "flex-start",
-                              textTransform: "none",
-                              color: "#0F4C81",
-                              fontWeight: 700,
-                            }}
-                          >
-                            {task.title}
-                          </Button>
-                        </TableCell>
-                        <TableCell>{formatTaskLabel(task.task_type)}</TableCell>
-                        <TableCell>{findLeadTitle(leadMap, task)}</TableCell>
-                        <TableCell>{findProspectName(leadMap, task)}</TableCell>
-                        <TableCell sx={{ minWidth: 180 }}>
-                          <Typography sx={{ color: "#0F172A", fontWeight: 600, lineHeight: 1.2 }}>
-                            {getAssignedUserDisplay(task.assigned_user_id).primary}
-                          </Typography>
-                          {getAssignedUserDisplay(task.assigned_user_id).secondary ? (
-                            <Typography sx={{ mt: 0.35, color: "#64748B", fontSize: 12 }}>
-                              {getAssignedUserDisplay(task.assigned_user_id).secondary}
-                            </Typography>
-                          ) : null}
-                        </TableCell>
-                        <TableCell>
-                          <TaskPriorityChip priority={task.priority} />
-                        </TableCell>
-                        <TableCell>
-                          <TaskStatusChip status={task.task_status} />
-                        </TableCell>
-                        <TableCell sx={{ color: getTaskDueColor(task) }}>
-                          {formatTaskDateTime(task.due_at)}
-                        </TableCell>
-                        <TableCell>
-                          <TaskDueIndicator task={task} />
-                        </TableCell>
-                        <TableCell>{formatTaskDateTime(task.created_at)}</TableCell>
-                        <TableCell align="right">
-                          <Stack direction="row" spacing={0.5} sx={{ justifyContent: "flex-end" }}>
-                            <Tooltip title="View task">
-                              <span>
-                                <IconButton size="small" onClick={() => void openTaskDetail(task)}>
-                                  <VisibilityOutlinedIcon fontSize="small" />
-                                </IconButton>
-                              </span>
-                            </Tooltip>
-                            {canUpdate ? (
-                              <Tooltip title="Edit task">
-                                <span>
-                                  <IconButton size="small" onClick={() => openEditDialog(task)}>
-                                    <EditOutlinedIcon fontSize="small" />
-                                  </IconButton>
-                                </span>
-                              </Tooltip>
-                            ) : null}
-                            {canUpdate && task.task_status !== "completed" ? (
-                              <Tooltip title="Complete task">
-                                <span>
-                                  <IconButton size="small" onClick={() => openCompleteDialog(task)}>
-                                    <AssignmentTurnedInOutlinedIcon fontSize="small" />
-                                  </IconButton>
-                                </span>
-                              </Tooltip>
-                            ) : null}
-                          </Stack>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </Box>
-              <TablePagination
-                component="div"
-                count={total}
-                page={page}
-                onPageChange={(_, nextPage) => setPage(nextPage)}
-                rowsPerPage={pageSize}
-                onRowsPerPageChange={(event) => {
-                  setPageSize(Number(event.target.value));
-                  setPage(0);
-                }}
-                rowsPerPageOptions={[25, 50, 100]}
-              />
             </>
-          ) : (
-            <Paper
-              elevation={0}
-              sx={{ p: 2.5, borderRadius: "8px", border: "1px dashed #CBD5E1", bgcolor: "#F8FAFC" }}
-            >
-              <Typography sx={{ fontWeight: 700, color: "#0F172A" }}>No tasks found</Typography>
-              <Typography sx={{ mt: 0.7, color: "#475569" }}>
-                No live tasks match the current filters. Adjust the filters or create a new task.
-              </Typography>
-            </Paper>
-          )}
-        </SectionCard>
+          }
+        />
+
+        <BusinessDataTable
+          title="Task Workspace"
+          subtitle="Live follow-up work, due dates, assignees, and completion actions."
+          icon={<TimelineOutlinedIcon fontSize="small" />}
+          count={total.toLocaleString()}
+          columns={taskColumns}
+          rows={displayedTasks}
+          loading={loading}
+          error={null}
+          emptyTitle="No tasks found"
+          emptyDescription="No live tasks match the current filters. Adjust the filters or create a new task."
+          sortBy={taskSortBy}
+          sortOrder={taskSortOrder}
+          onSortChange={(sortBy, sortOrder) => {
+            setTaskSortBy(sortBy);
+            setTaskSortOrder(sortOrder);
+            setPage(0);
+          }}
+          page={page}
+          pageSize={pageSize}
+          total={total}
+          onPageChange={setPage}
+          onRowsPerPageChange={(rows) => {
+            setPageSize(rows);
+            setPage(0);
+          }}
+          minWidth={1220}
+          tableLayout="fixed"
+        />
       </Stack>
 
       <AdminFormDialog
@@ -1543,167 +1498,123 @@ export default function TasksWorkspace() {
         />
       </AdminFormDialog>
 
-      <Drawer
-        anchor="right"
+      <BusinessDetailDrawer
         open={detailOpen}
         onClose={closeTaskDetail}
-        slotProps={{
-          paper: {
-            sx: {
-              width: { xs: "100%", sm: 520, lg: 640 },
-              bgcolor: "#F8FAFC",
-            },
-          },
-        }}
-      >
-        <Box sx={{ height: "100%", display: "flex", flexDirection: "column" }}>
-          <Box
-            sx={{
-              px: 2.5,
-              py: 2,
-              background: "linear-gradient(135deg, #0F4C81 0%, #2563EB 100%)",
-              color: "#F8FAFC",
-            }}
-          >
-            <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "flex-start" }}>
-              <Box sx={{ pr: 2 }}>
-                <Typography sx={{ fontSize: 12, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase", opacity: 0.88 }}>
-                  Task Detail
-                </Typography>
-                <Typography sx={{ mt: 0.8, fontSize: 24, fontWeight: 800, lineHeight: 1.15 }}>
-                  {selectedTask?.title || "Task"}
-                </Typography>
-                <Typography sx={{ mt: 0.8, color: "rgba(248,250,252,0.88)" }}>
-                  Live operational task context for the selected lead and prospect.
-                </Typography>
-              </Box>
-              <IconButton onClick={closeTaskDetail} sx={{ color: "#F8FAFC" }}>
-                <CloseIcon />
-              </IconButton>
-            </Stack>
-            <Stack direction="row" spacing={1} sx={{ mt: 1.5, flexWrap: "wrap", rowGap: 1 }}>
-              {selectedTask ? <TaskPriorityChip priority={selectedTask.priority} /> : null}
-              {selectedTask ? <TaskStatusChip status={selectedTask.task_status} /> : null}
-            </Stack>
-            <Stack direction="row" spacing={1} sx={{ mt: 1.75, flexWrap: "wrap", rowGap: 1 }}>
-              {canUpdate && selectedTask?.task_status !== "completed" ? (
-                <Button
-                  variant="contained"
-                  color="inherit"
-                  startIcon={<AssignmentTurnedInOutlinedIcon />}
-                  onClick={() => selectedTask && openCompleteDialog(selectedTask)}
-                  sx={{ textTransform: "none", bgcolor: "#FFFFFF", color: "#0F4C81", "&:hover": { bgcolor: "#E2E8F0" } }}
-                >
-                  Complete
-                </Button>
-              ) : null}
-              {canUpdate ? (
-                <Button
-                  variant="outlined"
-                  startIcon={<EditOutlinedIcon />}
-                  onClick={() => selectedTask && openEditDialog(selectedTask)}
-                  sx={{ textTransform: "none", color: "#FFFFFF", borderColor: "rgba(255,255,255,0.45)" }}
-                >
-                  Edit
-                </Button>
-              ) : null}
+        title={selectedTask?.title || "Task"}
+        subtitle="Live operational task context for the selected lead and prospect."
+        chips={
+          <>
+            {selectedTask ? <TaskPriorityChip priority={selectedTask.priority} /> : null}
+            {selectedTask ? <TaskStatusChip status={selectedTask.task_status} /> : null}
+          </>
+        }
+        actions={
+          <>
+            {canUpdate && selectedTask?.task_status !== "completed" ? (
+              <Button
+                variant="contained"
+                startIcon={<AssignmentTurnedInOutlinedIcon />}
+                onClick={() => selectedTask && openCompleteDialog(selectedTask)}
+                sx={{ textTransform: "none", bgcolor: "#2563EB", "&:hover": { bgcolor: "#1D4ED8" } }}
+              >
+                Complete
+              </Button>
+            ) : null}
+            {canUpdate ? (
               <Button
                 variant="outlined"
-                onClick={closeTaskDetail}
-                sx={{ textTransform: "none", color: "#FFFFFF", borderColor: "rgba(255,255,255,0.45)" }}
+                startIcon={<EditOutlinedIcon />}
+                onClick={() => selectedTask && openEditDialog(selectedTask)}
+                sx={{ textTransform: "none" }}
               >
-                Close
+                Edit
               </Button>
-            </Stack>
-          </Box>
-
-          <Box sx={{ p: 2, overflowY: "auto", flex: 1 }}>
-            {detailLoading ? (
-              <Stack sx={{ py: 6, alignItems: "center" }}>
-                <CircularProgress size={28} />
-              </Stack>
-            ) : detailError ? (
-              <Alert severity="error">{detailError}</Alert>
-            ) : selectedTask ? (
-              <Stack spacing={2}>
-                <SectionCard title="Overview" icon={<WorkOutlineOutlinedIcon fontSize="small" />}>
-                  <Box
-                    sx={{
-                      display: "grid",
-                      gap: 1.25,
-                      gridTemplateColumns: { xs: "1fr", md: "repeat(2, minmax(0, 1fr))" },
-                    }}
-                  >
-                    <DetailField label="Title" value={selectedTask.title} />
-                    <DetailField label="Task Type" value={formatTaskLabel(selectedTask.task_type)} />
-                    <DetailField label="Status" value={formatTaskLabel(selectedTask.task_status)} />
-                    <DetailField label="Priority" value={formatTaskLabel(selectedTask.priority)} />
-                    <DetailField label="Due Date" value={formatTaskDateTime(selectedTask.due_at)} />
-                    <DetailField
-                      label="Assigned User"
-                      value={formatAssignedUserSummary(
-                        assignedUserMap[selectedTask.assigned_user_id || ""],
-                        selectedTask.assigned_user_id
-                      )}
-                    />
-                    <DetailField label="Created Date" value={formatTaskDateTime(selectedTask.created_at)} />
-                    <DetailField label="Updated Date" value={formatTaskDateTime(selectedTask.updated_at)} />
-                    <DetailField label="Completed Date" value={formatTaskDateTime(selectedTask.completed_at)} />
-                    <DetailField label="Description" value={selectedTask.description || "Not available"} />
-                  </Box>
-                </SectionCard>
-
-                <SectionCard title="Related Lead" icon={<TimelineOutlinedIcon fontSize="small" />}>
-                  <Box
-                    sx={{
-                      display: "grid",
-                      gap: 1.25,
-                      gridTemplateColumns: { xs: "1fr", md: "repeat(2, minmax(0, 1fr))" },
-                    }}
-                  >
-                    <DetailField label="Lead Title" value={detailData.lead?.title || "Not available"} />
-                    <DetailField label="Lead Stage" value={formatTaskLabel(detailData.lead?.lead_stage)} />
-                    <DetailField
-                      label="Probability"
-                      value={
-                        detailData.lead?.probability_pct != null
-                          ? `${detailData.lead.probability_pct}%`
-                          : "Not available"
-                      }
-                    />
-                    <DetailField label="Next Action" value={selectedTask.title || "Not available"} />
-                  </Box>
-                </SectionCard>
-
-                <SectionCard title="Related Prospect" icon={<OpenInNewOutlinedIcon fontSize="small" />}>
-                  <Box
-                    sx={{
-                      display: "grid",
-                      gap: 1.25,
-                      gridTemplateColumns: { xs: "1fr", md: "repeat(2, minmax(0, 1fr))" },
-                    }}
-                  >
-                    <DetailField
-                      label="Organization"
-                      value={detailData.prospect?.organization_name || "Not available"}
-                    />
-                    <DetailField label="Country" value={detailData.prospect?.country || "Not available"} />
-                    <DetailField label="Industry" value={detailData.prospect?.industry || "Not available"} />
-                    <DetailField
-                      label="Primary Contact"
-                      value={
-                        primaryContact
-                          ? primaryContact.full_name || primaryContact.job_title || primaryContact.email || "Not available"
-                          : "Not available"
-                      }
-                    />
-                  </Box>
-                </SectionCard>
-              </Stack>
             ) : null}
-          </Box>
-        </Box>
-      </Drawer>
+          </>
+        }
+        loading={detailLoading}
+        error={detailError}
+        width={640}
+      >
+        {selectedTask ? (
+          <>
+            <SectionCard title="Overview" icon={<WorkOutlineOutlinedIcon fontSize="small" />}>
+              <Box
+                sx={{
+                  display: "grid",
+                  gap: 1.25,
+                  gridTemplateColumns: { xs: "1fr", md: "repeat(2, minmax(0, 1fr))" },
+                }}
+              >
+                <DetailField label="Title" value={selectedTask.title} />
+                <DetailField label="Task Type" value={formatTaskLabel(selectedTask.task_type)} />
+                <DetailField label="Status" value={formatTaskLabel(selectedTask.task_status)} />
+                <DetailField label="Priority" value={formatTaskLabel(selectedTask.priority)} />
+                <DetailField label="Due Date" value={formatTaskDateTime(selectedTask.due_at)} />
+                <DetailField
+                  label="Assigned User"
+                  value={formatAssignedUserSummary(
+                    assignedUserMap[selectedTask.assigned_user_id || ""],
+                    selectedTask.assigned_user_id
+                  )}
+                />
+                <DetailField label="Created Date" value={formatTaskDateTime(selectedTask.created_at)} />
+                <DetailField label="Updated Date" value={formatTaskDateTime(selectedTask.updated_at)} />
+                <DetailField label="Completed Date" value={formatTaskDateTime(selectedTask.completed_at)} />
+                <DetailField label="Description" value={selectedTask.description || "Not available"} />
+              </Box>
+            </SectionCard>
+
+            <SectionCard title="Related Lead" icon={<TimelineOutlinedIcon fontSize="small" />}>
+              <Box
+                sx={{
+                  display: "grid",
+                  gap: 1.25,
+                  gridTemplateColumns: { xs: "1fr", md: "repeat(2, minmax(0, 1fr))" },
+                }}
+              >
+                <DetailField label="Lead Title" value={detailData.lead?.title || "Not available"} />
+                <DetailField label="Lead Stage" value={formatTaskLabel(detailData.lead?.lead_stage)} />
+                <DetailField
+                  label="Probability"
+                  value={
+                    detailData.lead?.probability_pct != null
+                      ? `${detailData.lead.probability_pct}%`
+                      : "Not available"
+                  }
+                />
+                <DetailField label="Next Action" value={selectedTask.title || "Not available"} />
+              </Box>
+            </SectionCard>
+
+            <SectionCard title="Related Prospect" icon={<OpenInNewOutlinedIcon fontSize="small" />}>
+              <Box
+                sx={{
+                  display: "grid",
+                  gap: 1.25,
+                  gridTemplateColumns: { xs: "1fr", md: "repeat(2, minmax(0, 1fr))" },
+                }}
+              >
+                <DetailField
+                  label="Organization"
+                  value={detailData.prospect?.organization_name || "Not available"}
+                />
+                <DetailField label="Country" value={detailData.prospect?.country || "Not available"} />
+                <DetailField label="Industry" value={detailData.prospect?.industry || "Not available"} />
+                <DetailField
+                  label="Primary Contact"
+                  value={
+                    primaryContact
+                      ? primaryContact.full_name || primaryContact.job_title || primaryContact.email || "Not available"
+                      : "Not available"
+                  }
+                />
+              </Box>
+            </SectionCard>
+          </>
+        ) : null}
+      </BusinessDetailDrawer>
 
       <AppNotificationToast
         open={toastOpen}
@@ -1711,6 +1622,6 @@ export default function TasksWorkspace() {
         message={toastMessage}
         severity={toastSeverity}
       />
-    </OutletPage>
+    </BusinessPageFrame>
   );
 }

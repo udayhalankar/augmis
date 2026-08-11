@@ -804,6 +804,8 @@ def list_replies(
     status_filter: str | None = None,
     intent: str | None = None,
     lead_id: str | None = None,
+    sort_by: str | None = None,
+    sort_order: str | None = None,
 ) -> dict[str, Any]:
     try:
         rows = (
@@ -837,6 +839,43 @@ def list_replies(
             if not any(needle in candidate.lower() for candidate in haystacks):
                 continue
         filtered.append(row)
+
+    normalized_sort_by = str(sort_by or "").strip().lower()
+    normalized_sort_order = "desc" if str(sort_order or "").strip().lower() == "desc" else "asc"
+
+    if normalized_sort_by in {"received_at", "created_at", "subject", "status"}:
+        reverse = normalized_sort_order == "desc"
+
+        def reply_sort_key(row: BusinessDevelopmentReply) -> tuple[Any, str]:
+            if normalized_sort_by == "subject":
+                return ((row.subject or "").lower(), row.id)
+            if normalized_sort_by == "status":
+                return (row.reply_status or "", row.id)
+            timestamp = row.received_at if normalized_sort_by == "received_at" else row.created_at
+            sort_stamp = timestamp or datetime.min.replace(tzinfo=timezone.utc)
+            return (sort_stamp, row.id)
+
+        filtered.sort(key=reply_sort_key, reverse=reverse)
+    elif normalized_sort_by in {"intent", "engagement", "urgency"}:
+        reverse = normalized_sort_order == "desc"
+
+        def analysis_sort_key(row: BusinessDevelopmentReply) -> tuple[str, str]:
+            analysis = latest_analysis_map.get(row.id)
+            if normalized_sort_by == "intent":
+                return ((analysis.intent if analysis else "") or "", row.id)
+            if normalized_sort_by == "engagement":
+                return ((analysis.engagement_level if analysis else "") or "", row.id)
+            return ((analysis.urgency if analysis else "") or "", row.id)
+
+        filtered.sort(key=analysis_sort_key, reverse=reverse)
+    else:
+        filtered.sort(
+            key=lambda row: (
+                row.received_at or datetime.min.replace(tzinfo=timezone.utc),
+                row.created_at or datetime.min.replace(tzinfo=timezone.utc),
+            ),
+            reverse=True,
+        )
 
     total = len(filtered)
     safe_page = max(page, 1)

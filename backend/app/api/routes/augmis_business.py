@@ -42,6 +42,9 @@ from app.models.augmis_business_models import (
     AugmisBusinessTaskCompleteRequest,
     AugmisBusinessTaskCreateRequest,
     AugmisBusinessTaskUpdateRequest,
+    AugmisBusinessWebDomainUpdateRequest,
+    AugmisBusinessWebSeedCreateRequest,
+    AugmisBusinessWebSeedUpdateRequest,
 )
 from app.services.augmis_business_discovery_translation_service import (
     get_discovery_translation,
@@ -59,6 +62,7 @@ from app.services.augmis_business_listener_service import (
     list_discovery_duplicates,
     list_search_profiles,
     reject_discovery,
+    reprocess_discovery_content,
     run_connector_scan,
     set_connector_provider,
     shortlist_discovery,
@@ -66,6 +70,16 @@ from app.services.augmis_business_listener_service import (
     update_connector,
     update_discovery,
     update_search_profile,
+)
+from app.services.augmis_business_commercial_intelligence_service import (
+    get_daily_deal_desk,
+    get_discovery_commercial_intelligence,
+    recalculate_discovery_priorities,
+)
+from app.services.augmis_business_discovery_intelligence_service import (
+    deep_assess_discovery,
+    get_latest_discovery_deep_assessment,
+    list_discovery_deep_assessments,
 )
 from app.services.augmis_business_connector_credential_service import (
     delete_connector_credential,
@@ -81,6 +95,16 @@ from app.services.augmis_business_search_provider_service import (
     list_search_providers,
     test_search_provider,
     update_search_provider,
+)
+from app.services.augmis_business_independent_discovery_service import (
+    create_web_seed,
+    delete_web_seed,
+    list_web_domains,
+    list_web_pages,
+    list_web_seeds,
+    recrawl_web_domain,
+    update_web_domain,
+    update_web_seed,
 )
 from app.services.augmis_business_ai_service import (
     assess_opportunity_ai,
@@ -245,6 +269,111 @@ def update_augmis_business_connector(
     return update_connector(db, current_user["tenant_id"], connector_id, current_user, payload)
 
 
+@router.get("/connectors/{connector_id}/web-seeds")
+def get_augmis_business_web_seeds(
+    connector_id: str,
+    current_user: dict = Depends(
+        require_saas_access("augmis_business", "business_development:read")
+    ),
+    db: Session = Depends(get_db),
+):
+    return list_web_seeds(db, current_user["tenant_id"], connector_id)
+
+
+@router.post("/connectors/{connector_id}/web-seeds")
+def create_augmis_business_web_seed(
+    connector_id: str,
+    payload: AugmisBusinessWebSeedCreateRequest,
+    current_user: dict = Depends(
+        require_saas_access("augmis_business", "business_development:admin")
+    ),
+    db: Session = Depends(get_db),
+):
+    return create_web_seed(db, current_user["tenant_id"], connector_id, current_user, payload)
+
+
+@router.patch("/connectors/{connector_id}/web-seeds/{seed_id}")
+def update_augmis_business_web_seed(
+    connector_id: str,
+    seed_id: str,
+    payload: AugmisBusinessWebSeedUpdateRequest,
+    current_user: dict = Depends(
+        require_saas_access("augmis_business", "business_development:admin")
+    ),
+    db: Session = Depends(get_db),
+):
+    return update_web_seed(db, current_user["tenant_id"], connector_id, seed_id, current_user, payload)
+
+
+@router.delete("/connectors/{connector_id}/web-seeds/{seed_id}")
+def delete_augmis_business_web_seed(
+    connector_id: str,
+    seed_id: str,
+    current_user: dict = Depends(
+        require_saas_access("augmis_business", "business_development:admin")
+    ),
+    db: Session = Depends(get_db),
+):
+    return delete_web_seed(db, current_user["tenant_id"], connector_id, seed_id, current_user)
+
+
+@router.get("/connectors/{connector_id}/web-domains")
+def get_augmis_business_web_domains(
+    connector_id: str,
+    current_user: dict = Depends(
+        require_saas_access("augmis_business", "business_development:read")
+    ),
+    db: Session = Depends(get_db),
+):
+    return list_web_domains(db, current_user["tenant_id"], connector_id)
+
+
+@router.patch("/connectors/{connector_id}/web-domains/{domain_id}")
+def update_augmis_business_web_domain(
+    connector_id: str,
+    domain_id: str,
+    payload: AugmisBusinessWebDomainUpdateRequest,
+    current_user: dict = Depends(
+        require_saas_access("augmis_business", "business_development:admin")
+    ),
+    db: Session = Depends(get_db),
+):
+    return update_web_domain(db, current_user["tenant_id"], connector_id, domain_id, current_user, payload)
+
+
+@router.post("/connectors/{connector_id}/web-domains/{domain_id}/recrawl")
+def recrawl_augmis_business_web_domain(
+    connector_id: str,
+    domain_id: str,
+    current_user: dict = Depends(
+        require_saas_access("augmis_business", "business_development:admin")
+    ),
+    db: Session = Depends(get_db),
+):
+    return recrawl_web_domain(db, current_user["tenant_id"], connector_id, domain_id, current_user)
+
+
+@router.get("/connectors/{connector_id}/web-pages")
+def get_augmis_business_web_pages(
+    connector_id: str,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    search: str | None = Query(default=None),
+    current_user: dict = Depends(
+        require_saas_access("augmis_business", "business_development:read")
+    ),
+    db: Session = Depends(get_db),
+):
+    return list_web_pages(
+        db,
+        current_user["tenant_id"],
+        connector_id,
+        page=page,
+        page_size=page_size,
+        search=search,
+    )
+
+
 @router.post("/connectors/{connector_id}/test")
 def test_augmis_business_connector(
     connector_id: str,
@@ -375,7 +504,7 @@ def save_augmis_business_connector_credential(
         current_user["tenant_id"],
         provider,
         current_user,
-        payload.api_key,
+        payload.model_dump(exclude_none=True),
     )
 
 
@@ -404,7 +533,7 @@ def test_augmis_business_connector_credential_route(
         current_user["tenant_id"],
         provider,
         current_user,
-        payload.api_key,
+        payload.model_dump(exclude_none=True),
     )
 
 
@@ -468,6 +597,61 @@ def get_augmis_business_discoveries(
     )
 
 
+@router.get("/discoveries/deal-desk")
+def get_augmis_business_deal_desk(
+    limit: int = Query(10, ge=1, le=20),
+    recommendation: str | None = Query(None),
+    source_category: str | None = Query(None),
+    priority_band: str | None = Query(None),
+    opportunity_class: str | None = Query(None),
+    current_user: dict = Depends(
+        require_saas_access("augmis_business", "business_development:read")
+    ),
+    db: Session = Depends(get_db),
+):
+    return get_daily_deal_desk(
+        db,
+        current_user["tenant_id"],
+        limit=limit,
+        recommendation=recommendation,
+        source_category=source_category,
+        priority_band=priority_band,
+        opportunity_class=opportunity_class,
+    )
+
+
+@router.post("/discoveries/recalculate-priorities")
+def recalculate_augmis_business_discovery_priorities(
+    limit: int = Query(100, ge=1, le=250),
+    current_user: dict = Depends(
+        require_saas_access("augmis_business", "business_development:admin")
+    ),
+    db: Session = Depends(get_db),
+):
+    return recalculate_discovery_priorities(
+        db,
+        current_user["tenant_id"],
+        current_user,
+        limit=limit,
+    )
+
+
+@router.post("/discoveries/reprocess-content")
+def reprocess_augmis_business_discovery_content(
+    limit: int = Query(100, ge=1, le=250),
+    current_user: dict = Depends(
+        require_saas_access("augmis_business", "business_development:admin")
+    ),
+    db: Session = Depends(get_db),
+):
+    return reprocess_discovery_content(
+        db,
+        current_user["tenant_id"],
+        current_user,
+        limit=limit,
+    )
+
+
 @router.get("/discoveries/{discovery_id}")
 def get_augmis_business_discovery(
     discovery_id: str,
@@ -477,6 +661,50 @@ def get_augmis_business_discovery(
     db: Session = Depends(get_db),
 ):
     return get_discovery(db, current_user["tenant_id"], discovery_id)
+
+
+@router.get("/discoveries/{discovery_id}/commercial-intelligence")
+def get_augmis_business_discovery_commercial_intelligence(
+    discovery_id: str,
+    current_user: dict = Depends(
+        require_saas_access("augmis_business", "business_development:read")
+    ),
+    db: Session = Depends(get_db),
+):
+    return get_discovery_commercial_intelligence(db, current_user["tenant_id"], discovery_id)
+
+
+@router.post("/discoveries/{discovery_id}/deep-assess")
+def deep_assess_augmis_business_discovery(
+    discovery_id: str,
+    current_user: dict = Depends(
+        require_saas_access("augmis_business", "business_development:qualify")
+    ),
+    db: Session = Depends(get_db),
+):
+    return deep_assess_discovery(db, current_user["tenant_id"], discovery_id, current_user)
+
+
+@router.get("/discoveries/{discovery_id}/deep-assessment")
+def get_augmis_business_discovery_deep_assessment(
+    discovery_id: str,
+    current_user: dict = Depends(
+        require_saas_access("augmis_business", "business_development:read")
+    ),
+    db: Session = Depends(get_db),
+):
+    return get_latest_discovery_deep_assessment(db, current_user["tenant_id"], discovery_id)
+
+
+@router.get("/discoveries/{discovery_id}/deep-assessments")
+def get_augmis_business_discovery_deep_assessment_history(
+    discovery_id: str,
+    current_user: dict = Depends(
+        require_saas_access("augmis_business", "business_development:read")
+    ),
+    db: Session = Depends(get_db),
+):
+    return list_discovery_deep_assessments(db, current_user["tenant_id"], discovery_id)
 
 
 @router.get("/discoveries/{discovery_id}/translation")
@@ -967,6 +1195,8 @@ def get_prospects(
     page_size: int = Query(25, ge=1, le=100),
     search: str | None = Query(None),
     status_filter: str | None = Query(None, alias="status"),
+    sort_by: str | None = Query(None),
+    sort_order: str | None = Query(None),
     current_user: dict = Depends(
         require_saas_access("augmis_business", "business_development:read")
     ),
@@ -979,6 +1209,8 @@ def get_prospects(
         page_size=page_size,
         search=search,
         status_filter=status_filter,
+        sort_by=sort_by,
+        sort_order=sort_order,
     )
 
 
@@ -1132,6 +1364,8 @@ def get_leads(
     status_filter: str | None = Query(None, alias="status"),
     prospect_id: str | None = Query(None),
     opportunity_id: str | None = Query(None),
+    sort_by: str | None = Query(None),
+    sort_order: str | None = Query(None),
     current_user: dict = Depends(
         require_saas_access("augmis_business", "business_development:read")
     ),
@@ -1147,6 +1381,8 @@ def get_leads(
         status_filter=status_filter,
         prospect_id=prospect_id,
         opportunity_id=opportunity_id,
+        sort_by=sort_by,
+        sort_order=sort_order,
     )
 
 
@@ -1281,6 +1517,9 @@ def get_tasks(
     status_filter: str | None = Query(None, alias="status"),
     priority: str | None = Query(None),
     lead_id: str | None = Query(None),
+    assigned_user_id: str | None = Query(None),
+    sort_by: str | None = Query(None),
+    sort_order: str | None = Query(None),
     current_user: dict = Depends(
         require_saas_access("augmis_business", "business_development:read")
     ),
@@ -1295,6 +1534,9 @@ def get_tasks(
         status_filter=status_filter,
         priority=priority,
         lead_id=lead_id,
+        assigned_user_id=assigned_user_id,
+        sort_by=sort_by,
+        sort_order=sort_order,
     )
 
 
@@ -1379,6 +1621,8 @@ def get_replies(
     status_filter: str | None = Query(None, alias="status"),
     intent: str | None = Query(None),
     lead_id: str | None = Query(None),
+    sort_by: str | None = Query(None),
+    sort_order: str | None = Query(None),
     current_user: dict = Depends(
         require_saas_access("augmis_business", "business_development:read")
     ),
@@ -1393,6 +1637,8 @@ def get_replies(
         status_filter=status_filter,
         intent=intent,
         lead_id=lead_id,
+        sort_by=sort_by,
+        sort_order=sort_order,
     )
 
 

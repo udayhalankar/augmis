@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -15,6 +16,11 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.db_models import BusinessDevelopmentConnectorSecret, BusinessDevelopmentSearchProvider
 from app.services.audit_service import create_audit_log
+from app.services.augmis_business_external_work_client import (
+    ExternalWorkProviderError,
+    get_external_work_provider,
+)
+from app.services.augmis_business_freelancer_client import FreelancerApiError, FreelancerClient
 from app.services.augmis_business_web_search_provider import (
     MissingWebSearchApiKeyError,
     WebSearchProviderError,
@@ -22,12 +28,14 @@ from app.services.augmis_business_web_search_provider import (
 )
 
 
-BUILTIN_CREDENTIAL_PROVIDERS = {"tavily", "brave"}
+BUILTIN_CREDENTIAL_PROVIDERS = {"tavily", "brave", "freelancer", "adzuna"}
 DEFAULT_CREDENTIAL_TYPE = "api_key"
 SECRET_KEY_VERSION = "v1"
 ENVIRONMENT_CREDENTIAL_NAMES = {
     "tavily": "TAVILY_API_KEY",
     "brave": "BRAVE_SEARCH_API_KEY",
+    "freelancer": "FREELANCER_ACCESS_TOKEN",
+    "adzuna": "ADZUNA_APP_KEY",
 }
 
 
@@ -38,6 +46,7 @@ class ResolvedProviderCredential:
     credential_source: str
     masked_hint: str | None = None
     secret_row: BusinessDevelopmentConnectorSecret | None = None
+    credential_payload: dict[str, Any] | None = None
 
 
 def _now() -> datetime:
@@ -86,7 +95,53 @@ def _environment_credential_value(provider: str) -> str | None:
         return settings.TAVILY_API_KEY
     if provider == "brave":
         return settings.BRAVE_SEARCH_API_KEY
+    if provider == "freelancer":
+        return settings.FREELANCER_ACCESS_TOKEN
     return None
+
+
+def _environment_credential_payload(provider: str) -> dict[str, Any] | None:
+    if provider == "adzuna":
+        if settings.ADZUNA_APP_ID and settings.ADZUNA_APP_KEY:
+            return {"app_id": settings.ADZUNA_APP_ID, "app_key": settings.ADZUNA_APP_KEY}
+        return None
+    value = _environment_credential_value(provider)
+    return {"api_key": value} if value else None
+
+
+def _credential_label(provider: str) -> str:
+    if provider == "freelancer":
+        return "access token"
+    if provider == "adzuna":
+        return "app key"
+    return "API key"
+
+
+def _serialize_credential_payload(provider: str, payload: dict[str, Any]) -> str:
+    if provider == "adzuna":
+        return json.dumps(
+            {
+                "app_id": str(payload.get("app_id") or "").strip(),
+                "app_key": str(payload.get("app_key") or "").strip(),
+            }
+        )
+    return str(payload.get("api_key") or payload.get("access_token") or "").strip()
+
+
+def _deserialize_credential_payload(provider: str, encrypted_value: str) -> dict[str, Any]:
+    decrypted = _decrypt_value(encrypted_value)
+    if provider == "adzuna":
+        try:
+            payload = json.loads(decrypted)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Stored provider credential is invalid.") from exc
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Stored provider credential is invalid.")
+        return {
+            "app_id": str(payload.get("app_id") or "").strip() or None,
+            "app_key": str(payload.get("app_key") or "").strip() or None,
+        }
+    return {"api_key": decrypted}
 
 
 def _decode_master_key() -> bytes:
@@ -169,6 +224,7 @@ def _serialize_secret_status(
         "last_test_error": row.last_test_error if row else None,
         "storage_available": storage_status["storage_available"],
         "storage_message": storage_status["storage_message"],
+        "requires_multiple_fields": provider == "adzuna",
     }
 
 
@@ -243,21 +299,24 @@ def resolve_provider_credential(
         raise HTTPException(status_code=404, detail="Credential provider not found")
     row = _require_secret_row(db, tenant_id, normalized)
     if row:
+        payload = _deserialize_credential_payload(normalized, row.encrypted_value)
         return ResolvedProviderCredential(
             provider=normalized,
-            api_key=_decrypt_value(row.encrypted_value),
+            api_key=payload.get("api_key") or payload.get("app_key"),
             credential_source="tenant_secret",
             masked_hint=_masked_hint(row.last_four),
             secret_row=row,
+            credential_payload=payload,
         )
-    env_value = _environment_credential_value(normalized)
-    if env_value:
+    env_payload = _environment_credential_payload(normalized)
+    if env_payload:
         return ResolvedProviderCredential(
             provider=normalized,
-            api_key=env_value,
+            api_key=env_payload.get("api_key") or env_payload.get("app_key"),
             credential_source="environment",
-            masked_hint=_masked_hint(env_value),
+            masked_hint=_masked_hint(env_payload.get("app_key") or env_payload.get("api_key")),
             secret_row=None,
+            credential_payload=env_payload,
         )
     return ResolvedProviderCredential(
         provider=normalized,
@@ -265,6 +324,7 @@ def resolve_provider_credential(
         credential_source="none",
         masked_hint=None,
         secret_row=None,
+        credential_payload=None,
     )
 
 
@@ -278,11 +338,16 @@ def test_connector_credential(
     tenant_id: str,
     provider: str,
     current_user: dict,
-    transient_api_key: str | None = None,
+    transient_credential: str | dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     normalized = _normalize_provider(provider)
     provider_row = _provider_row(db, tenant_id, normalized)
-    api_key = transient_api_key.strip() if transient_api_key else None
+    transient_payload = (
+        {"api_key": transient_credential.strip()}
+        if isinstance(transient_credential, str)
+        else {key: value for key, value in (transient_credential or {}).items() if value}
+    )
+    api_key = str(transient_payload.get("api_key") or transient_payload.get("app_key") or "").strip() or None
     resolved = (
         ResolvedProviderCredential(
             provider=normalized,
@@ -290,12 +355,13 @@ def test_connector_credential(
             credential_source="transient",
             masked_hint=_masked_hint(api_key),
             secret_row=None,
+            credential_payload=transient_payload,
         )
-        if api_key
+        if transient_payload
         else resolve_provider_credential(db, tenant_id, normalized)
     )
     if not resolved.api_key:
-        message = f"{normalized.title()} API key is not configured."
+        message = f"{normalized.title()} {_credential_label(normalized)} is not configured."
         if resolved.secret_row:
             resolved.secret_row.last_tested_at = _now()
             resolved.secret_row.last_test_status = "failed"
@@ -312,15 +378,21 @@ def test_connector_credential(
                 },
             },
         }
-    provider_client = get_web_search_provider(
-        normalized,
-        api_key=resolved.api_key,
-        provider_type=provider_row.provider_type if provider_row else "builtin",
-        configuration=provider_row.configuration_json if provider_row else {},
-        adapter_code=provider_row.adapter_code if provider_row else normalized,
-    )
     try:
-        result = provider_client.test_connection()
+        if normalized == "freelancer":
+            result = FreelancerClient(access_token=resolved.api_key).test_connection()
+        elif normalized == "adzuna":
+            provider_client = get_external_work_provider("adzuna")
+            result = provider_client.test_connection({}, credential_payload=resolved.credential_payload)
+        else:
+            provider_client = get_web_search_provider(
+                normalized,
+                api_key=resolved.api_key,
+                provider_type=provider_row.provider_type if provider_row else "builtin",
+                configuration=provider_row.configuration_json if provider_row else {},
+                adapter_code=provider_row.adapter_code if provider_row else normalized,
+            )
+            result = provider_client.test_connection()
         if resolved.secret_row:
             resolved.secret_row.last_tested_at = _now()
             resolved.secret_row.last_test_status = "success"
@@ -344,7 +416,7 @@ def test_connector_credential(
                 "result": result,
             },
         }
-    except (MissingWebSearchApiKeyError, WebSearchProviderError, HTTPException) as exc:
+    except (MissingWebSearchApiKeyError, WebSearchProviderError, FreelancerApiError, ExternalWorkProviderError, HTTPException) as exc:
         safe_message = _safe_provider_error_message(normalized, exc)
         if resolved.secret_row:
             resolved.secret_row.last_tested_at = _now()
@@ -380,13 +452,19 @@ def save_connector_credential(
     tenant_id: str,
     provider: str,
     current_user: dict,
-    api_key: str,
+    credential_input: str | dict[str, Any],
 ) -> dict[str, Any]:
     normalized = _normalize_provider(provider)
     if not _provider_row(db, tenant_id, normalized) and normalized not in BUILTIN_CREDENTIAL_PROVIDERS:
         raise HTTPException(status_code=404, detail="Credential provider not found")
     credential_type = _credential_type_for_provider(db, tenant_id, normalized)
-    encrypted = _encrypt_value(api_key.strip())
+    payload = (
+        {"api_key": credential_input.strip()}
+        if isinstance(credential_input, str)
+        else {key: value for key, value in credential_input.items() if value is not None}
+    )
+    encrypted = _encrypt_value(_serialize_credential_payload(normalized, payload))
+    last_visible = str(payload.get("app_key") or payload.get("api_key") or "").strip()
     row = _require_secret_row(db, tenant_id, normalized)
     action = "replaced" if row else "created"
     now = _now()
@@ -394,7 +472,7 @@ def save_connector_credential(
         row.encrypted_value = encrypted
         row.key_version = SECRET_KEY_VERSION
         row.status = "active"
-        row.last_four = api_key.strip()[-4:] if len(api_key.strip()) >= 4 else None
+        row.last_four = last_visible[-4:] if len(last_visible) >= 4 else None
         row.updated_by = current_user["user_id"]
         row.updated_at = now
         row.last_tested_at = None
@@ -410,7 +488,7 @@ def save_connector_credential(
             encrypted_value=encrypted,
             key_version=SECRET_KEY_VERSION,
             status="active",
-            last_four=api_key.strip()[-4:] if len(api_key.strip()) >= 4 else None,
+            last_four=last_visible[-4:] if len(last_visible) >= 4 else None,
             created_by=current_user["user_id"],
             updated_by=current_user["user_id"],
             updated_at=now,

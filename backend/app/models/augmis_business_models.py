@@ -153,6 +153,21 @@ ALLOWED_DISCOVERY_STATUSES = {
     "expired",
     "irrelevant",
 }
+ALLOWED_WEB_SEED_TYPES = {
+    "domain",
+    "url",
+    "sitemap",
+    "procurement_portal",
+    "career_portal",
+    "target_account",
+    "industry_directory",
+    "government_portal",
+    "university",
+    "public_organization",
+}
+ALLOWED_WEB_SEED_SCOPES = {"same_domain", "approved_domains", "cross_domain_trusted"}
+ALLOWED_WEB_SEED_FREQUENCIES = {"daily", "weekly", "monthly", "manual"}
+ALLOWED_WEB_DOMAIN_APPROVAL_STATUSES = {"approved", "pending_review", "ignored"}
 
 
 def _normalize_optional_text(value: str | None) -> str | None:
@@ -1641,21 +1656,33 @@ class AugmisBusinessConnectorUpdateRequest(BaseModel):
 
 
 class AugmisBusinessConnectorCredentialWriteRequest(BaseModel):
-    api_key: str = Field(min_length=8, max_length=512)
+    api_key: str | None = Field(default=None, min_length=8, max_length=512)
+    app_id: str | None = Field(default=None, min_length=2, max_length=256)
+    app_key: str | None = Field(default=None, min_length=8, max_length=512)
 
-    @field_validator("api_key")
+    @field_validator("api_key", "app_key")
     @classmethod
-    def validate_api_key(cls, value: str) -> str:
-        normalized = str(value or "").strip()
+    def validate_api_key(cls, value: str | None) -> str | None:
+        normalized = _normalize_optional_text(value)
+        if normalized is None:
+            return None
         if len(normalized) < 8:
             raise ValueError("API key is too short")
         return normalized
 
+    @model_validator(mode="after")
+    def validate_any_credential(self):
+        if self.api_key or (self.app_id and self.app_key):
+            return self
+        raise ValueError("Either api_key or app_id/app_key is required")
+
 
 class AugmisBusinessConnectorCredentialTestRequest(BaseModel):
     api_key: str | None = Field(default=None, max_length=512)
+    app_id: str | None = Field(default=None, max_length=256)
+    app_key: str | None = Field(default=None, max_length=512)
 
-    @field_validator("api_key")
+    @field_validator("api_key", "app_key")
     @classmethod
     def validate_optional_api_key(cls, value: str | None) -> str | None:
         normalized = _normalize_optional_text(value)
@@ -1840,6 +1867,193 @@ class AugmisBusinessConnectorScanRequest(BaseModel):
         return normalized
 
 
+class AugmisBusinessWebSeedBase(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    seed_url: str = Field(min_length=8, max_length=2000)
+    seed_type: str = Field(min_length=1, max_length=80)
+    enabled: bool = True
+    crawl_scope: str = Field(default="same_domain", min_length=1, max_length=80)
+    max_depth: int = Field(default=2, ge=0, le=10)
+    max_pages: int = Field(default=25, ge=1, le=500)
+    crawl_frequency: str = Field(default="weekly", min_length=1, max_length=30)
+    priority: int = Field(default=50, ge=0, le=100)
+    country: str | None = Field(default=None, max_length=120)
+    industry: str | None = Field(default=None, max_length=120)
+    organization_name: str | None = Field(default=None, max_length=255)
+    notes: str | None = Field(default=None, max_length=2000)
+
+    @field_validator("seed_type")
+    @classmethod
+    def validate_seed_type(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized not in ALLOWED_WEB_SEED_TYPES:
+            raise ValueError(f"Invalid seed type: {value}")
+        return normalized
+
+    @field_validator("crawl_scope")
+    @classmethod
+    def validate_crawl_scope(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized not in ALLOWED_WEB_SEED_SCOPES:
+            raise ValueError(f"Invalid crawl scope: {value}")
+        return normalized
+
+    @field_validator("crawl_frequency")
+    @classmethod
+    def validate_crawl_frequency(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized not in ALLOWED_WEB_SEED_FREQUENCIES:
+            raise ValueError(f"Invalid crawl frequency: {value}")
+        return normalized
+
+
+class AugmisBusinessWebSeedCreateRequest(AugmisBusinessWebSeedBase):
+    pass
+
+
+class AugmisBusinessWebSeedUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    seed_url: str | None = Field(default=None, min_length=8, max_length=2000)
+    seed_type: str | None = Field(default=None, min_length=1, max_length=80)
+    enabled: bool | None = None
+    crawl_scope: str | None = Field(default=None, min_length=1, max_length=80)
+    max_depth: int | None = Field(default=None, ge=0, le=10)
+    max_pages: int | None = Field(default=None, ge=1, le=500)
+    crawl_frequency: str | None = Field(default=None, min_length=1, max_length=30)
+    priority: int | None = Field(default=None, ge=0, le=100)
+    country: str | None = Field(default=None, max_length=120)
+    industry: str | None = Field(default=None, max_length=120)
+    organization_name: str | None = Field(default=None, max_length=255)
+    notes: str | None = Field(default=None, max_length=2000)
+
+    @field_validator("seed_type")
+    @classmethod
+    def validate_optional_seed_type(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = str(value or "").strip().lower()
+        if normalized not in ALLOWED_WEB_SEED_TYPES:
+            raise ValueError(f"Invalid seed type: {value}")
+        return normalized
+
+    @field_validator("crawl_scope")
+    @classmethod
+    def validate_optional_crawl_scope(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = str(value or "").strip().lower()
+        if normalized not in ALLOWED_WEB_SEED_SCOPES:
+            raise ValueError(f"Invalid crawl scope: {value}")
+        return normalized
+
+    @field_validator("crawl_frequency")
+    @classmethod
+    def validate_optional_crawl_frequency(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = str(value or "").strip().lower()
+        if normalized not in ALLOWED_WEB_SEED_FREQUENCIES:
+            raise ValueError(f"Invalid crawl frequency: {value}")
+        return normalized
+
+
+class AugmisBusinessWebSeedResponse(BaseModel):
+    id: str
+    tenant_id: str
+    connector_id: str
+    name: str
+    seed_url: str
+    seed_type: str
+    enabled: bool
+    crawl_scope: str
+    max_depth: int
+    max_pages: int
+    crawl_frequency: str
+    priority: int
+    country: str | None = None
+    industry: str | None = None
+    organization_name: str | None = None
+    notes: str | None = None
+    last_crawled_at: datetime | None = None
+    next_crawl_at: datetime | None = None
+    created_by: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class AugmisBusinessWebDomainUpdateRequest(BaseModel):
+    enabled: bool | None = None
+    approval_status: str | None = Field(default=None, min_length=1, max_length=50)
+    proposed_type: str | None = Field(default=None, max_length=80)
+    next_crawl_at: datetime | None = None
+
+    @field_validator("approval_status")
+    @classmethod
+    def validate_domain_approval_status(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = str(value or "").strip().lower()
+        if normalized not in ALLOWED_WEB_DOMAIN_APPROVAL_STATUSES:
+            raise ValueError(f"Invalid approval status: {value}")
+        return normalized
+
+
+class AugmisBusinessWebDomainResponse(BaseModel):
+    id: str
+    tenant_id: str
+    connector_id: str
+    seed_id: str | None = None
+    domain: str
+    source: str | None = None
+    proposed_type: str | None = None
+    trust_source_type: str | None = None
+    enabled: bool
+    approval_status: str
+    robots_status: str
+    robots_crawl_delay_seconds: int | None = None
+    robots_fetched_at: datetime | None = None
+    robots_url: str | None = None
+    found_from_url: str | None = None
+    found_context: str | None = None
+    pages_indexed: int
+    opportunities_found: int
+    error_count: int
+    last_crawl_at: datetime | None = None
+    next_crawl_at: datetime | None = None
+    status: str
+    created_by: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class AugmisBusinessWebPageResponse(BaseModel):
+    id: str
+    tenant_id: str
+    connector_id: str
+    seed_id: str | None = None
+    domain_id: str | None = None
+    url: str
+    canonical_url: str
+    domain: str
+    title: str | None = None
+    plain_text: str | None = None
+    safe_html: str | None = None
+    language: str | None = None
+    page_type: str
+    published_at: datetime | None = None
+    last_modified_at: datetime | None = None
+    content_hash: str | None = None
+    first_seen_at: datetime | None = None
+    last_seen_at: datetime | None = None
+    last_changed_at: datetime | None = None
+    http_status: int | None = None
+    source_metadata_json: dict[str, object] = Field(default_factory=dict)
+    contact_routes_json: list[dict[str, object]] = Field(default_factory=list)
+    opportunity_candidate_json: dict[str, object] = Field(default_factory=dict)
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
 class AugmisBusinessDiscoveredOpportunityCandidate(BaseModel):
     external_id: str | None = None
     source_type: str = Field(min_length=1, max_length=100)
@@ -1926,6 +2140,118 @@ class AugmisBusinessDiscoveryUpdateRequest(BaseModel):
         return _validate_currency(value)
 
 
+class AugmisBusinessDiscoveryExperienceMatchSummary(BaseModel):
+    experience_item_id: str
+    name: str
+    category: str
+    match_score: float
+    relevance_label: str
+    matching_signals: dict[str, list[str]] = Field(default_factory=dict)
+    reasons: list[str] = Field(default_factory=list)
+
+
+class AugmisBusinessCommercialComponentDetail(BaseModel):
+    score: float
+    reason: str
+
+
+class AugmisBusinessDiscoveryIntelligenceResponse(BaseModel):
+    commercial_priority_score: float | None = None
+    commercial_priority_band: str | None = None
+    commercial_recommendation: str | None = None
+    commercial_component_scores_json: dict[str, AugmisBusinessCommercialComponentDetail] = Field(
+        default_factory=dict
+    )
+    commercial_recommendation_reasons_json: list[str] = Field(default_factory=list)
+    commercial_risks_json: list[str] = Field(default_factory=list)
+    experience_match_score: float | None = None
+    matched_experience_ids_json: list[str] = Field(default_factory=list)
+    matched_experience_reasons_json: list[str] = Field(default_factory=list)
+    matched_experience_summary_json: list[AugmisBusinessDiscoveryExperienceMatchSummary] = Field(
+        default_factory=list
+    )
+    delivery_feasibility_score: float | None = None
+    delivery_complexity: str | None = None
+    delivery_model: str | None = None
+    urgency_status: str | None = None
+    data_quality_status: str | None = None
+    intelligence_updated_at: datetime | None = None
+
+
+class AugmisBusinessDiscoveryAssessmentScore(BaseModel):
+    score: float
+    reason: str
+
+
+class AugmisBusinessDiscoveryAssessmentEffort(BaseModel):
+    level: str
+    reason: str
+
+    @field_validator("level")
+    @classmethod
+    def validate_effort_level(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        allowed = {"very_low", "low", "medium", "high", "very_high", "insufficient_information"}
+        if normalized not in allowed:
+            raise ValueError(f"Invalid effort level: {value}")
+        return normalized
+
+
+class AugmisBusinessDiscoveryDeepAssessmentResult(BaseModel):
+    executive_summary: str
+    recommendation: str
+    recommendation_confidence: float
+    solution_fit: AugmisBusinessDiscoveryAssessmentScore
+    commercial_attractiveness: AugmisBusinessDiscoveryAssessmentScore
+    delivery_feasibility: AugmisBusinessDiscoveryAssessmentScore
+    estimated_effort: AugmisBusinessDiscoveryAssessmentEffort
+    experience_matches: list[str] = Field(default_factory=list)
+    key_requirements: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    unknowns: list[str] = Field(default_factory=list)
+    suggested_next_action: str
+    questions_to_clarify: list[str] = Field(default_factory=list)
+
+    @field_validator("recommendation")
+    @classmethod
+    def validate_assessment_recommendation(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized not in {"pursue", "watch", "skip"}:
+            raise ValueError(f"Invalid recommendation: {value}")
+        return normalized
+
+    @field_validator("recommendation_confidence")
+    @classmethod
+    def validate_assessment_confidence(cls, value: float) -> float:
+        if value < 0 or value > 100:
+            raise ValueError("Recommendation confidence must be between 0 and 100")
+        return value
+
+
+class AugmisBusinessDiscoveryAIAssessmentHistoryItem(BaseModel):
+    id: str
+    discovery_id: str
+    analysis_version: int
+    provider: str
+    model: str
+    recommendation: str | None = None
+    recommendation_confidence: float | None = None
+    commercial_score: float | None = None
+    created_at: datetime | None = None
+
+
+class AugmisBusinessDiscoveryAIAssessmentResponse(
+    AugmisBusinessDiscoveryAIAssessmentHistoryItem
+):
+    prompt_bundle_version: str
+    prompt_version: str
+    delivery_feasibility_score: float | None = None
+    executive_summary: str | None = None
+    analysis_json: AugmisBusinessDiscoveryDeepAssessmentResult
+    usage_json: dict[str, object] = Field(default_factory=dict)
+    created_by: str | None = None
+
+
 class AugmisBusinessDiscoveryResponse(BaseModel):
     id: str
     tenant_id: str
@@ -1946,6 +2272,7 @@ class AugmisBusinessDiscoveryResponse(BaseModel):
     closing_date: datetime | None = None
     raw_summary: str | None = None
     requirement_summary: str | None = None
+    normalized_content_json: dict[str, object] = Field(default_factory=dict)
     raw_content_json: dict[str, object] = Field(default_factory=dict)
     raw_text: str | None = None
     country: str | None = None
@@ -1961,6 +2288,22 @@ class AugmisBusinessDiscoveryResponse(BaseModel):
     possible_duplicate_of_discovery_id: str | None = None
     imported_opportunity_id: str | None = None
     preliminary_relevance_score: float | None = None
+    commercial_priority_score: float | None = None
+    commercial_priority_band: str | None = None
+    commercial_recommendation: str | None = None
+    commercial_component_scores_json: dict[str, object] = Field(default_factory=dict)
+    commercial_recommendation_reasons_json: list[str] = Field(default_factory=list)
+    commercial_risks_json: list[str] = Field(default_factory=list)
+    experience_match_score: float | None = None
+    matched_experience_ids_json: list[str] = Field(default_factory=list)
+    matched_experience_reasons_json: list[str] = Field(default_factory=list)
+    matched_experience_summary_json: list[dict[str, object]] = Field(default_factory=list)
+    delivery_feasibility_score: float | None = None
+    delivery_complexity: str | None = None
+    delivery_model: str | None = None
+    urgency_status: str | None = None
+    data_quality_status: str | None = None
+    intelligence_updated_at: datetime | None = None
     source_language_code: str | None = None
     source_language_label: str | None = None
     source_language_is_english: bool = False

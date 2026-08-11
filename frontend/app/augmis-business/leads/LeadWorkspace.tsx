@@ -16,7 +16,6 @@ import RefreshRoundedIcon from "@mui/icons-material/RefreshRounded";
 import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
 import SourceOutlinedIcon from "@mui/icons-material/SourceOutlined";
 import SwapHorizOutlinedIcon from "@mui/icons-material/SwapHorizOutlined";
-import TimelineOutlinedIcon from "@mui/icons-material/TimelineOutlined";
 import VisibilityOutlined from "@mui/icons-material/VisibilityOutlined";
 import WorkOutlineOutlinedIcon from "@mui/icons-material/WorkOutlineOutlined";
 import {
@@ -46,7 +45,6 @@ import {
 
 import { AppNotificationToast } from "@/components/feedback/AppNotificationToast";
 import { AdminFormDialog, AdminFormTextField } from "@/components/forms/AdminFormDialog";
-import { OutletPage } from "@/components/layout/OutletPage";
 import { useAuth } from "@/context/AuthContext";
 import { parseApiValidationError } from "@/services/apiErrorParser";
 import {
@@ -79,6 +77,7 @@ import {
 } from "../components/BusinessTaskUI";
 import OutreachWorkspaceDialog from "../components/OutreachWorkspaceDialog";
 import MiniSolutionWorkspaceDrawer from "../components/MiniSolutionWorkspaceDrawer";
+import BusinessPageFrame from "../components/BusinessPageFrame";
 
 type WorkspaceMode = "table" | "pipeline";
 type ToastSeverity = "success" | "error" | "info" | "warning";
@@ -119,6 +118,7 @@ type LeadRowMeta = {
 
 const ACTIVE_STAGE_ORDER = ["new", "qualified", "proposal", "negotiation"] as const;
 const TERMINAL_STAGE_ORDER = ["closed_won", "closed_lost"] as const;
+const PIPELINE_STAGE_ORDER = [...ACTIVE_STAGE_ORDER, ...TERMINAL_STAGE_ORDER] as const;
 
 const DEFAULT_EDIT_FORM: LeadEditFormState = {
   title: "",
@@ -843,20 +843,20 @@ export default function LeadWorkspace({ mode }: { mode: WorkspaceMode }) {
 
   if (!canRead) {
     return (
-      <OutletPage
+      <BusinessPageFrame
         title={isPipeline ? "Pipeline" : "Leads"}
         description="This workspace requires business development read access."
       >
         <Alert severity="warning">
           You do not currently have permission to view tenant lead records.
         </Alert>
-      </OutletPage>
+      </BusinessPageFrame>
     );
   }
 
   return (
     <>
-      <OutletPage
+      <BusinessPageFrame
         title={isPipeline ? "Pipeline" : "Leads"}
         description={
           isPipeline
@@ -1046,8 +1046,8 @@ export default function LeadWorkspace({ mode }: { mode: WorkspaceMode }) {
               </Box>
             ) : isPipeline ? (
               <Box sx={{ p: 2, overflowX: "auto" }}>
-                <Stack direction="row" spacing={1.5} sx={{ minWidth: 1080, alignItems: "flex-start" }}>
-                  {ACTIVE_STAGE_ORDER.map((stage) => (
+                <Stack direction="row" spacing={1.5} sx={{ minWidth: 1560, alignItems: "flex-start" }}>
+                  {PIPELINE_STAGE_ORDER.map((stage) => (
                     <Paper
                       key={stage}
                       elevation={0}
@@ -1063,7 +1063,12 @@ export default function LeadWorkspace({ mode }: { mode: WorkspaceMode }) {
                         sx={{
                           px: 1.5,
                           py: 1.2,
-                          background: "linear-gradient(90deg, #DBEAFE 0%, #F8FAFC 100%)",
+                          background:
+                            stage === "closed_won"
+                              ? "linear-gradient(90deg, #DCFCE7 0%, #F8FAFC 100%)"
+                              : stage === "closed_lost"
+                                ? "linear-gradient(90deg, #FEE2E2 0%, #F8FAFC 100%)"
+                                : "linear-gradient(90deg, #DBEAFE 0%, #F8FAFC 100%)",
                           borderBottom: "1px solid #E2E8F0",
                         }}
                       >
@@ -1156,59 +1161,6 @@ export default function LeadWorkspace({ mode }: { mode: WorkspaceMode }) {
                         )}
                       </Stack>
                     </Paper>
-                  ))}
-                </Stack>
-
-                <Stack spacing={1.5} sx={{ mt: 2 }}>
-                  {TERMINAL_STAGE_ORDER.map((stage) => (
-                    <SectionPanel
-                      key={stage}
-                      title={formatStageLabel(stage)}
-                      icon={<TimelineOutlinedIcon fontSize="small" />}
-                      gradient={
-                        stage === "closed_won"
-                          ? "linear-gradient(90deg, #DCFCE7 0%, #F8FAFC 100%)"
-                          : "linear-gradient(90deg, #FEE2E2 0%, #F8FAFC 100%)"
-                      }
-                    >
-                      {leadsByStage[stage]?.length ? (
-                        <Table size="small">
-                          <TableHead>
-                            <TableRow>
-                              <TableCell>Lead</TableCell>
-                              <TableCell>Prospect</TableCell>
-                              <TableCell>Value</TableCell>
-                              <TableCell>Updated</TableCell>
-                              <TableCell align="right">Actions</TableCell>
-                            </TableRow>
-                          </TableHead>
-                          <TableBody>
-                            {leadsByStage[stage].map((lead) => (
-                              <TableRow key={lead.id}>
-                                <TableCell>{lead.title}</TableCell>
-                                <TableCell>{lead.prospect?.organization_name || "Not available"}</TableCell>
-                                <TableCell>{formatCurrency(lead.estimated_value, lead.opportunity?.estimated_currency)}</TableCell>
-                                <TableCell>{formatDateTime(lead.updated_at)}</TableCell>
-                                <TableCell align="right">
-                                  <Button
-                                    size="small"
-                                    variant="outlined"
-                                    onClick={() => void openLeadDetail(lead.id)}
-                                    sx={{ textTransform: "none", borderRadius: "8px" }}
-                                  >
-                                    View
-                                  </Button>
-                                </TableCell>
-                              </TableRow>
-                            ))}
-                          </TableBody>
-                        </Table>
-                      ) : (
-                        <Typography sx={{ color: "#64748B" }}>
-                          No leads in this stage.
-                        </Typography>
-                      )}
-                    </SectionPanel>
                   ))}
                 </Stack>
               </Box>
@@ -1319,7 +1271,7 @@ export default function LeadWorkspace({ mode }: { mode: WorkspaceMode }) {
             )}
           </Paper>
         </Stack>
-      </OutletPage>
+      </BusinessPageFrame>
 
       <Menu anchorEl={menuAnchorEl} open={Boolean(menuAnchorEl)} onClose={closeActionMenu}>
         <MenuItem

@@ -1,24 +1,21 @@
 "use client";
 
-import { useEffect, useMemo, useState, type MouseEvent } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import AddCircleRoundedIcon from "@mui/icons-material/AddCircleRounded";
 import ApartmentOutlinedIcon from "@mui/icons-material/ApartmentOutlined";
 import AutoAwesomeOutlinedIcon from "@mui/icons-material/AutoAwesomeOutlined";
 import CalendarMonthOutlinedIcon from "@mui/icons-material/CalendarMonthOutlined";
-import CloseIcon from "@mui/icons-material/Close";
 import DeleteOutline from "@mui/icons-material/DeleteOutlineOutlined";
 import EditOutlined from "@mui/icons-material/EditOutlined";
 import HubOutlinedIcon from "@mui/icons-material/HubOutlined";
 import InsightsOutlinedIcon from "@mui/icons-material/InsightsOutlined";
 import LanguageOutlinedIcon from "@mui/icons-material/LanguageOutlined";
-import MoreVertRoundedIcon from "@mui/icons-material/MoreVertRounded";
 import PublicOutlinedIcon from "@mui/icons-material/PublicOutlined";
 import RefreshRoundedIcon from "@mui/icons-material/RefreshRounded";
 import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
 import SourceOutlinedIcon from "@mui/icons-material/SourceOutlined";
 import TuneOutlinedIcon from "@mui/icons-material/TuneOutlined";
-import VisibilityOutlined from "@mui/icons-material/VisibilityOutlined";
 import MarkEmailReadOutlinedIcon from "@mui/icons-material/MarkEmailReadOutlined";
 import LightbulbOutlinedIcon from "@mui/icons-material/LightbulbOutlined";
 import WorkOutlineOutlinedIcon from "@mui/icons-material/WorkOutlineOutlined";
@@ -32,28 +29,17 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
-  Drawer,
-  IconButton,
   InputAdornment,
-  Menu,
   MenuItem,
   Paper,
   Stack,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TablePagination,
-  TableRow,
   TextField,
-  Tooltip,
   Typography,
 } from "@mui/material";
 
 import { useAuth } from "@/context/AuthContext";
 import { AppNotificationToast } from "@/components/feedback/AppNotificationToast";
 import { AdminFormDialog, AdminFormTextField } from "@/components/forms/AdminFormDialog";
-import { OutletPage } from "@/components/layout/OutletPage";
 import { parseApiValidationError } from "@/services/apiErrorParser";
 import {
   type AugmisBusinessOpportunity,
@@ -73,6 +59,17 @@ import {
 import BuildLeadDialog from "./BuildLeadDialog";
 import OutreachWorkspaceDialog from "../components/OutreachWorkspaceDialog";
 import MiniSolutionWorkspaceDrawer from "../components/MiniSolutionWorkspaceDrawer";
+import BusinessPageFrame from "../components/BusinessPageFrame";
+import BusinessFilterBar from "../components/BusinessFilterBar";
+import BusinessDataTable, { type BusinessDataTableColumn } from "../components/BusinessDataTable";
+import BusinessDetailDrawer from "../components/BusinessDetailDrawer";
+import BusinessRowActionMenu from "../components/BusinessRowActionMenu";
+import {
+  BusinessRecommendationChip,
+  BusinessSourceChip,
+  BusinessStatusChip,
+} from "../components/BusinessChips";
+import type { BusinessMetricItem } from "../components/BusinessMetricCarousel";
 
 type OpportunityFormState = {
   title: string;
@@ -203,6 +200,18 @@ function formatDeliveryModel(value: string | null | undefined) {
     default:
       return value.replaceAll("_", " ");
   }
+}
+
+function clampedTextSx(lines = 2) {
+  return {
+    display: "-webkit-box",
+    WebkitBoxOrient: "vertical",
+    WebkitLineClamp: lines,
+    overflow: "hidden",
+    whiteSpace: "normal",
+    textOverflow: "ellipsis",
+    overflowWrap: "anywhere",
+  } as const;
 }
 
 function parseCsvList(value: string) {
@@ -609,6 +618,8 @@ export default function AugmisBusinessOpportunitiesPage() {
   const [toastSeverity, setToastSeverity] = useState<ToastSeverity>("success");
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [sortBy, setSortBy] = useState("closing_at");
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(10);
   const [total, setTotal] = useState(0);
@@ -617,8 +628,6 @@ export default function AugmisBusinessOpportunitiesPage() {
     opportunity_count?: number;
     experience_item_count?: number;
   } | null>(null);
-  const [menuAnchorEl, setMenuAnchorEl] = useState<HTMLElement | null>(null);
-  const [menuOpportunity, setMenuOpportunity] = useState<AugmisBusinessOpportunity | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState("");
@@ -653,6 +662,8 @@ export default function AugmisBusinessOpportunitiesPage() {
         page_size: pageSize,
         search: search.trim() || undefined,
         status: statusFilter !== "all" ? statusFilter : undefined,
+        sort_by: sortBy,
+        sort_order: sortOrder,
       }),
       getAugmisBusinessHealth(),
     ])
@@ -677,7 +688,7 @@ export default function AugmisBusinessOpportunitiesPage() {
     return () => {
       active = false;
     };
-  }, [page, pageSize, refreshTick, search, statusFilter]);
+  }, [page, pageSize, refreshTick, search, sortBy, sortOrder, statusFilter]);
 
   const selectedOpportunityEvidence = useMemo(() => {
     if (!selectedOpportunity?.source_evidence_json?.length) {
@@ -685,6 +696,226 @@ export default function AugmisBusinessOpportunitiesPage() {
     }
     return selectedOpportunity.source_evidence_json.map((entry) => JSON.stringify(entry));
   }, [selectedOpportunity]);
+
+  const metrics = useMemo<BusinessMetricItem[]>(
+    () => [
+      {
+        key: "total-opportunities",
+        title: "Total Opportunities",
+        value: String(healthSummary?.opportunity_count ?? 0),
+        subtitle: "Tenant-scoped opportunity records",
+        accent: "linear-gradient(90deg, #DBEAFE 0%, #F8FAFC 100%)",
+        icon: <ApartmentOutlinedIcon fontSize="small" />,
+      },
+      {
+        key: "experience-catalogue",
+        title: "Experience Catalogue",
+        value: String(healthSummary?.experience_item_count ?? 0),
+        subtitle: "Reusable qualification references",
+        accent: "linear-gradient(90deg, #DCFCE7 0%, #F0FDF4 100%)",
+        icon: <HubOutlinedIcon fontSize="small" />,
+      },
+      {
+        key: "open-opportunities",
+        title: "Open / Active",
+        value: String(
+          items.filter((item) => ["new", "under_review", "qualified"].includes(item.opportunity_status))
+            .length
+        ),
+        subtitle: "Rows on the current filtered page",
+        accent: "linear-gradient(90deg, #FEF3C7 0%, #FFFBEB 100%)",
+        icon: <SourceOutlinedIcon fontSize="small" />,
+      },
+      {
+        key: "converted-opportunities",
+        title: "Converted",
+        value: String(items.filter((item) => item.opportunity_status === "converted").length),
+        subtitle: "Already converted to leads",
+        accent: "linear-gradient(90deg, #EDE9FE 0%, #F8FAFC 100%)",
+        icon: <WorkOutlineOutlinedIcon fontSize="small" />,
+      },
+      {
+        key: "assessed-opportunities",
+        title: "AI Assessed",
+        value: String(items.filter((item) => item.ai_recommendation || item.fit_score != null).length),
+        subtitle: "Assessment data available on the page",
+        accent: "linear-gradient(90deg, #D1FAE5 0%, #F0FDFA 100%)",
+        icon: <AutoAwesomeOutlinedIcon fontSize="small" />,
+      },
+    ],
+    [healthSummary, items]
+  );
+
+  const tableColumns: BusinessDataTableColumn<AugmisBusinessOpportunity>[] = [
+      {
+        key: "title",
+        label: "Opportunity",
+        sortable: true,
+        width: 360,
+        render: (item) => (
+          <Box>
+            <Button
+              variant="text"
+              onClick={() => void openDetailDrawer(item)}
+              sx={{
+                p: 0,
+                minWidth: 0,
+                justifyContent: "flex-start",
+                textTransform: "none",
+                fontWeight: 700,
+                color: "#0F172A",
+                textAlign: "left",
+                ...clampedTextSx(2),
+                "&:hover": { bgcolor: "transparent", color: "#1D4ED8" },
+              }}
+            >
+              {item.title}
+            </Button>
+            <Typography sx={{ mt: 0.35, color: "#475569", fontSize: 13, ...clampedTextSx(2) }}>
+              {item.requirement_summary}
+            </Typography>
+            {(item.requirement_summary || "").length > 140 ? (
+              <Button
+                size="small"
+                onClick={() => void openDetailDrawer(item)}
+                sx={{ mt: 0.25, px: 0, minWidth: 0, textTransform: "none", fontWeight: 700 }}
+              >
+                View requirement
+              </Button>
+            ) : null}
+          </Box>
+        ),
+      },
+      {
+        key: "organization_name",
+        label: "Organization",
+        sortable: true,
+        width: 210,
+        render: (item) => (
+          <Box>
+            <Typography sx={{ fontWeight: 600, color: "#0F172A" }}>{item.organization_name}</Typography>
+            <Typography sx={{ mt: 0.35, color: "#64748B", fontSize: 13 }}>
+              {[item.country, item.region].filter(Boolean).join(" / ") || "Location not set"}
+            </Typography>
+          </Box>
+        ),
+      },
+      {
+        key: "source_name",
+        label: "Source",
+        width: 170,
+        render: (item) => (
+          <Stack spacing={0.6} sx={{ alignItems: "flex-start" }}>
+            <BusinessSourceChip label={item.source_name || item.source_type} sourceType={item.source_type} />
+            <Typography sx={{ color: "#64748B", fontSize: 12.5 }}>{item.source_type}</Typography>
+          </Stack>
+        ),
+      },
+      {
+        key: "opportunity_status",
+        label: "Status",
+        sortable: true,
+        width: 130,
+        render: (item) => <BusinessStatusChip value={item.opportunity_status} />,
+      },
+      {
+        key: "closing_at",
+        label: "Closing",
+        sortable: true,
+        width: 150,
+        render: (item) => formatDate(item.closing_at),
+      },
+      {
+        key: "fit_score",
+        label: "AI Fit",
+        sortable: true,
+        width: 96,
+        render: (item) => (item.fit_score == null ? "Not assessed" : item.fit_score.toFixed(1)),
+      },
+      {
+        key: "ai_recommendation",
+        label: "Recommendation",
+        width: 148,
+        render: (item) => <BusinessRecommendationChip value={item.ai_recommendation || "watch"} />,
+      },
+      {
+        key: "actions",
+        label: "Actions",
+        align: "right",
+        width: 230,
+        render: (item) => (
+          <BusinessRowActionMenu
+            primaryAction={
+              canQualify && isBuildLeadEligible(item) ? (
+                <Button
+                  size="small"
+                  variant="contained"
+                  startIcon={<HubOutlinedIcon sx={{ color: "#FFFFFF" }} />}
+                  onClick={() => openBuildLeadDialog(item)}
+                  sx={{
+                    minWidth: 0,
+                    px: 1.05,
+                    py: 0.4,
+                    borderRadius: "8px",
+                    textTransform: "none",
+                    fontSize: 12,
+                    fontWeight: 700,
+                    bgcolor: "#2563EB",
+                    boxShadow: "none",
+                    "&:hover": { bgcolor: "#1D4ED8", boxShadow: "none" },
+                  }}
+                >
+                  Build Lead
+                </Button>
+              ) : undefined
+            }
+            onView={canRead ? () => void openDetailDrawer(item) : undefined}
+            menuItems={[
+              ...(canQualify
+                ? [
+                    {
+                      key: "assess",
+                      label: item.ai_recommendation ? "Re-run Assessment" : "AI Assess",
+                      icon: <AutoAwesomeOutlinedIcon fontSize="small" />,
+                      onClick: () => promptAssess(item),
+                    },
+                  ]
+                : []),
+              ...(canOutreach
+                ? [
+                    {
+                      key: "outreach",
+                      label: "Personalized Outreach",
+                      icon: <MarkEmailReadOutlinedIcon fontSize="small" />,
+                      onClick: () => openOutreachWorkspace(item),
+                    },
+                    {
+                      key: "mini-solution",
+                      label: "Mini Solution",
+                      icon: <LightbulbOutlinedIcon fontSize="small" />,
+                      onClick: () => openMiniSolutionWorkspace(item),
+                    },
+                  ]
+                : []),
+              {
+                key: "edit",
+                label: "Edit",
+                icon: <EditOutlined fontSize="small" />,
+                onClick: () => void openEditDialog(item),
+                disabled: !canUpdate,
+              },
+              {
+                key: "delete",
+                label: "Delete",
+                icon: <DeleteOutline fontSize="small" />,
+                onClick: () => promptDelete(item),
+                disabled: !canDelete,
+              },
+            ]}
+          />
+        ),
+      },
+    ];
 
   function showToast(message: string, severity: ToastSeverity) {
     setToastMessage(message);
@@ -705,16 +936,6 @@ export default function AugmisBusinessOpportunitiesPage() {
       return next;
     });
     setForm((current) => ({ ...current, [field]: value }));
-  }
-
-  function closeActionMenu() {
-    setMenuAnchorEl(null);
-    setMenuOpportunity(null);
-  }
-
-  function openActionMenu(event: MouseEvent<HTMLElement>, opportunity: AugmisBusinessOpportunity) {
-    setMenuAnchorEl(event.currentTarget);
-    setMenuOpportunity(opportunity);
   }
 
   function openCreateDialog() {
@@ -740,7 +961,6 @@ export default function AugmisBusinessOpportunitiesPage() {
 
   function promptAssess(opportunity: AugmisBusinessOpportunity) {
     if (!canQualify) return;
-    closeActionMenu();
     setAssessmentTarget(opportunity);
     setAssessmentRunError("");
     setAssessDialogOpen(true);
@@ -754,20 +974,17 @@ export default function AugmisBusinessOpportunitiesPage() {
   }
 
   function openOutreachWorkspace(opportunity: AugmisBusinessOpportunity) {
-    closeActionMenu();
     setSelectedOpportunity(opportunity);
     setOutreachOpen(true);
   }
 
   function openMiniSolutionWorkspace(opportunity: AugmisBusinessOpportunity) {
-    closeActionMenu();
     setSelectedOpportunity(opportunity);
     setMiniSolutionOpen(true);
   }
 
   function openBuildLeadDialog(opportunity: AugmisBusinessOpportunity) {
     if (!canQualify || !isBuildLeadEligible(opportunity)) return;
-    closeActionMenu();
     setBuildLeadOpportunity(opportunity);
     setBuildLeadOpen(true);
   }
@@ -825,7 +1042,6 @@ export default function AugmisBusinessOpportunitiesPage() {
 
   async function openEditDialog(opportunity: AugmisBusinessOpportunity) {
     if (!canUpdate) return;
-    closeActionMenu();
     setDialogMode("edit");
     setDialogError("");
     setDialogFieldErrors({});
@@ -845,7 +1061,6 @@ export default function AugmisBusinessOpportunitiesPage() {
 
   function promptDelete(opportunity: AugmisBusinessOpportunity) {
     if (!canDelete) return;
-    closeActionMenu();
     setDeleteTarget(opportunity);
     setDeleteError("");
     setDeleteDialogOpen(true);
@@ -1063,407 +1278,161 @@ export default function AugmisBusinessOpportunitiesPage() {
 
   return (
     <>
-      <OutletPage
+      <BusinessPageFrame
         title="Opportunities"
         description="Live tenant-scoped opportunity records from PostgreSQL, filtered through the existing AUGMIS authentication and SaaS access model."
-        actions={
-          <Stack direction={{ xs: "column", md: "row" }} spacing={1.25}>
-            <Button
-              variant="contained"
-              startIcon={<AddCircleRoundedIcon sx={{ color: "#FFFFFF" }} />}
-              onClick={openCreateDialog}
-              sx={{
-                minWidth: 180,
-                borderRadius: "8px",
-                bgcolor: "#2563EB",
-                textTransform: "none",
-                fontWeight: 700,
-                boxShadow: "none",
-                "&:hover": {
-                  bgcolor: "#1D4ED8",
-                  boxShadow: "none",
-                },
-              }}
-            >
-              + New Opportunity
-            </Button>
-            <TextField
-              size="small"
-              value={search}
-              onChange={(event) => {
-                setLoading(true);
-                setPage(0);
-                setSearch(event.target.value);
-              }}
-              placeholder="Search opportunities"
-              sx={{ minWidth: { md: 280 } }}
-              slotProps={{
-                input: {
-                  startAdornment: (
-                    <InputAdornment position="start">
-                      <SearchRoundedIcon fontSize="small" />
-                    </InputAdornment>
-                  ),
-                },
-              }}
-            />
-            <TextField
-              select
-              size="small"
-              value={statusFilter}
-              onChange={(event) => {
-                setLoading(true);
-                setPage(0);
-                setStatusFilter(event.target.value);
-              }}
-              sx={{ minWidth: 170 }}
-            >
-              <MenuItem value="all">All statuses</MenuItem>
-              <MenuItem value="draft">Draft</MenuItem>
-              <MenuItem value="new">New</MenuItem>
-              <MenuItem value="under_review">Under Review</MenuItem>
-              <MenuItem value="qualified">Qualified</MenuItem>
-              <MenuItem value="converted">Converted</MenuItem>
-              <MenuItem value="dismissed">Dismissed</MenuItem>
-              <MenuItem value="expired">Expired</MenuItem>
-            </TextField>
-            <Button
-              variant="outlined"
-              startIcon={<RefreshRoundedIcon />}
-              onClick={() => {
-                setLoading(true);
-                setRefreshTick((value) => value + 1);
-              }}
-            >
-              Refresh
-            </Button>
-            {canQualify ? (
-              <Button
-                variant="contained"
-                startIcon={<AutoAwesomeOutlinedIcon sx={{ color: "#FFFFFF" }} />}
-                onClick={() => {
-                  if (selectedOpportunity) {
-                    promptAssess(selectedOpportunity);
-                    return;
-                  }
-                  if (items[0]) {
-                    promptAssess(items[0]);
-                  }
-                }}
-                disabled={assessmentRunning || (!selectedOpportunity && items.length === 0)}
-                sx={{
-                  minWidth: 150,
-                  borderRadius: "8px",
-                  bgcolor: "#0F766E",
-                  textTransform: "none",
-                  fontWeight: 700,
-                  boxShadow: "none",
-                  "&:hover": {
-                    bgcolor: "#115E59",
+        metrics={metrics}
+        toolbar={
+          <BusinessFilterBar
+            filters={
+              <Stack direction={{ xs: "column", lg: "row" }} spacing={1.1}>
+                <TextField
+                  size="small"
+                  value={search}
+                  onChange={(event) => {
+                    setLoading(true);
+                    setPage(0);
+                    setSearch(event.target.value);
+                  }}
+                  placeholder="Search opportunities"
+                  sx={{ minWidth: { lg: 300 } }}
+                  slotProps={{
+                    input: {
+                      startAdornment: (
+                        <InputAdornment position="start">
+                          <SearchRoundedIcon fontSize="small" />
+                        </InputAdornment>
+                      ),
+                    },
+                  }}
+                />
+                <TextField
+                  select
+                  size="small"
+                  value={statusFilter}
+                  onChange={(event) => {
+                    setLoading(true);
+                    setPage(0);
+                    setStatusFilter(event.target.value);
+                  }}
+                  sx={{ minWidth: 170 }}
+                >
+                  <MenuItem value="all">All statuses</MenuItem>
+                  <MenuItem value="draft">Draft</MenuItem>
+                  <MenuItem value="new">New</MenuItem>
+                  <MenuItem value="under_review">Under Review</MenuItem>
+                  <MenuItem value="qualified">Qualified</MenuItem>
+                  <MenuItem value="converted">Converted</MenuItem>
+                  <MenuItem value="dismissed">Dismissed</MenuItem>
+                  <MenuItem value="expired">Expired</MenuItem>
+                </TextField>
+              </Stack>
+            }
+            actions={
+              <>
+                <Button
+                  variant="contained"
+                  startIcon={<AddCircleRoundedIcon sx={{ color: "#FFFFFF" }} />}
+                  onClick={openCreateDialog}
+                  sx={{
+                    minWidth: 180,
+                    borderRadius: "8px",
+                    bgcolor: "#2563EB",
+                    textTransform: "none",
+                    fontWeight: 700,
                     boxShadow: "none",
-                  },
-                }}
-              >
-                AI Assess
-              </Button>
-            ) : null}
-          </Stack>
+                    "&:hover": {
+                      bgcolor: "#1D4ED8",
+                      boxShadow: "none",
+                    },
+                  }}
+                >
+                  + New Opportunity
+                </Button>
+                <Button
+                  variant="outlined"
+                  startIcon={<RefreshRoundedIcon />}
+                  onClick={() => {
+                    setLoading(true);
+                    setRefreshTick((value) => value + 1);
+                  }}
+                >
+                  Refresh
+                </Button>
+                {canQualify ? (
+                  <Button
+                    variant="contained"
+                    startIcon={<AutoAwesomeOutlinedIcon sx={{ color: "#FFFFFF" }} />}
+                    onClick={() => {
+                      if (selectedOpportunity) {
+                        promptAssess(selectedOpportunity);
+                        return;
+                      }
+                      if (items[0]) {
+                        promptAssess(items[0]);
+                      }
+                    }}
+                    disabled={assessmentRunning || (!selectedOpportunity && items.length === 0)}
+                    sx={{
+                      minWidth: 150,
+                      borderRadius: "8px",
+                      bgcolor: "#0F766E",
+                      textTransform: "none",
+                      fontWeight: 700,
+                      boxShadow: "none",
+                      "&:hover": {
+                        bgcolor: "#115E59",
+                        boxShadow: "none",
+                      },
+                    }}
+                  >
+                    AI Assess
+                  </Button>
+                ) : null}
+              </>
+            }
+          />
         }
       >
         <Stack spacing={2.5}>
-          <Box
-            sx={{
-              display: "grid",
-              gap: 2,
-              gridTemplateColumns: { xs: "1fr", md: "repeat(3, minmax(0, 1fr))" },
-            }}
-          >
-            <Paper elevation={0} sx={{ p: 2.25, borderRadius: 3, border: "1px solid #E2E8F0" }}>
-              <Typography sx={{ color: "#475569", fontSize: 13 }}>Total opportunities</Typography>
-              <Typography sx={{ mt: 0.75, fontSize: 28, fontWeight: 700, color: "#0F172A" }}>
-                {healthSummary?.opportunity_count ?? 0}
-              </Typography>
-            </Paper>
-            <Paper elevation={0} sx={{ p: 2.25, borderRadius: 3, border: "1px solid #E2E8F0" }}>
-              <Typography sx={{ color: "#475569", fontSize: 13 }}>Experience catalogue</Typography>
-              <Typography sx={{ mt: 0.75, fontSize: 28, fontWeight: 700, color: "#0F172A" }}>
-                {healthSummary?.experience_item_count ?? 0}
-              </Typography>
-            </Paper>
-            <Paper elevation={0} sx={{ p: 2.25, borderRadius: 3, border: "1px solid #E2E8F0" }}>
-              <Typography sx={{ color: "#475569", fontSize: 13 }}>Access model</Typography>
-              <Typography sx={{ mt: 0.75, fontSize: 16, fontWeight: 700, color: "#0F172A" }}>
-                JWT tenant scope + `require_saas_access`
-              </Typography>
-            </Paper>
-          </Box>
-
           {error ? <Alert severity="error">{error}</Alert> : null}
-
-          <Paper elevation={0} sx={{ borderRadius: 3, border: "1px solid #E2E8F0", overflow: "hidden" }}>
-            {loading ? (
-              <Stack sx={{ minHeight: 260, alignItems: "center", justifyContent: "center" }} spacing={1.5}>
-                <CircularProgress />
-                <Typography sx={{ color: "#475569" }}>Loading tenant opportunities...</Typography>
-              </Stack>
-            ) : items.length === 0 ? (
-              <Box sx={{ px: 3, py: 5 }}>
-                <Chip
-                  label="No opportunities yet"
-                  size="small"
-                  sx={{ mb: 1.5, bgcolor: "#EFF6FF", color: "#1D4ED8", border: "1px solid #BFDBFE" }}
-                />
-                <Typography variant="h6" sx={{ fontWeight: 700, color: "#0F172A" }}>
-                  PostgreSQL connection is live, but this tenant has no opportunity rows yet.
-                </Typography>
-                <Typography sx={{ mt: 1, maxWidth: 760, color: "#475569" }}>
-                  Phase 2 wires this page to the live `bd_opportunities` table. Use the new
-                  `/api/augmis-business/opportunities` endpoints to create manual records for this tenant.
-                </Typography>
-              </Box>
-            ) : (
-              <>
-                <Table size="small">
-                  <TableHead>
-                    <TableRow>
-                      <TableCell>Opportunity</TableCell>
-                      <TableCell>Organization</TableCell>
-                      <TableCell>Source</TableCell>
-                      <TableCell>Status</TableCell>
-                      <TableCell>Closing</TableCell>
-                      <TableCell>AI Fit</TableCell>
-                      <TableCell>Recommendation</TableCell>
-                      <TableCell align="right">Actions</TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {items.map((item) => (
-                      <TableRow key={item.id} hover>
-                        <TableCell>
-                          <Button
-                            variant="text"
-                            onClick={() => openDetailDrawer(item)}
-                            sx={{
-                              p: 0,
-                              minWidth: 0,
-                              justifyContent: "flex-start",
-                              textTransform: "none",
-                              fontWeight: 700,
-                              color: "#0F172A",
-                              "&:hover": { bgcolor: "transparent", color: "#1D4ED8" },
-                            }}
-                          >
-                            {item.title}
-                          </Button>
-                          <Typography sx={{ mt: 0.35, color: "#475569", fontSize: 13 }}>
-                            {item.requirement_summary}
-                          </Typography>
-                        </TableCell>
-                        <TableCell>
-                          <Typography sx={{ fontWeight: 600, color: "#0F172A" }}>
-                            {item.organization_name}
-                          </Typography>
-                          <Typography sx={{ mt: 0.35, color: "#64748B", fontSize: 13 }}>
-                            {[item.country, item.region].filter(Boolean).join(" / ") || "Location not set"}
-                          </Typography>
-                        </TableCell>
-                        <TableCell>
-                          <Typography sx={{ fontWeight: 600, color: "#0F172A" }}>{item.source_name}</Typography>
-                          <Typography sx={{ mt: 0.35, color: "#64748B", fontSize: 13 }}>
-                            {item.source_type}
-                          </Typography>
-                        </TableCell>
-                        <TableCell>
-                          <Chip
-                            label={item.opportunity_status.replaceAll("_", " ")}
-                            size="small"
-                            sx={{
-                              textTransform: "capitalize",
-                              border: "1px solid",
-                              ...statusChipColor(item.opportunity_status),
-                            }}
-                          />
-                        </TableCell>
-                        <TableCell>{formatDate(item.closing_at)}</TableCell>
-                        <TableCell>{item.fit_score == null ? "Not assessed" : item.fit_score.toFixed(1)}</TableCell>
-                        <TableCell>
-                          <Chip
-                            label={formatRecommendation(item.ai_recommendation)}
-                            size="small"
-                            sx={{
-                              textTransform: "capitalize",
-                              border: "1px solid",
-                              ...recommendationChipColor(item.ai_recommendation),
-                            }}
-                          />
-                        </TableCell>
-                        <TableCell align="right">
-                          {canOutreach ? (
-                            <Tooltip title="Personalized Outreach">
-                              <IconButton size="small" onClick={() => openOutreachWorkspace(item)}>
-                                <MarkEmailReadOutlinedIcon fontSize="small" sx={{ color: "#2563EB" }} />
-                              </IconButton>
-                            </Tooltip>
-                          ) : null}
-                          {canOutreach ? (
-                            <Tooltip title="Mini Solution">
-                              <IconButton size="small" onClick={() => openMiniSolutionWorkspace(item)}>
-                                <LightbulbOutlinedIcon fontSize="small" sx={{ color: "#0F766E" }} />
-                              </IconButton>
-                            </Tooltip>
-                          ) : null}
-                          {canQualify ? (
-                            <Tooltip title="AI Assess">
-                              <IconButton size="small" onClick={() => promptAssess(item)}>
-                                <AutoAwesomeOutlinedIcon fontSize="small" sx={{ color: "#0F766E" }} />
-                              </IconButton>
-                            </Tooltip>
-                          ) : null}
-                          {canQualify && isBuildLeadEligible(item) ? (
-                            <Tooltip title="Build Lead">
-                              <Button
-                                size="small"
-                                variant="contained"
-                                startIcon={<HubOutlinedIcon sx={{ color: "#FFFFFF" }} />}
-                                onClick={() => openBuildLeadDialog(item)}
-                                sx={{
-                                  mr: 0.75,
-                                  minWidth: 0,
-                                  px: 1.15,
-                                  py: 0.45,
-                                  borderRadius: "8px",
-                                  textTransform: "none",
-                                  fontSize: 12,
-                                  fontWeight: 700,
-                                  bgcolor: "#2563EB",
-                                  boxShadow: "none",
-                                  "&:hover": {
-                                    bgcolor: "#1D4ED8",
-                                    boxShadow: "none",
-                                  },
-                                }}
-                              >
-                                Build Lead
-                              </Button>
-                            </Tooltip>
-                          ) : null}
-                          <Tooltip title="View Details">
-                            <span>
-                              <IconButton size="small" onClick={() => openDetailDrawer(item)} disabled={!canRead}>
-                                <VisibilityOutlined fontSize="small" />
-                              </IconButton>
-                            </span>
-                          </Tooltip>
-                          <Tooltip title="Actions">
-                            <IconButton size="small" onClick={(event) => openActionMenu(event, item)}>
-                              <MoreVertRoundedIcon fontSize="small" />
-                            </IconButton>
-                          </Tooltip>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-                <TablePagination
-                  component="div"
-                  count={total}
-                  page={page}
-                  onPageChange={(_, nextPage) => {
-                    setLoading(true);
-                    setPage(nextPage);
-                  }}
-                  rowsPerPage={pageSize}
-                  onRowsPerPageChange={(event) => {
-                    setLoading(true);
-                    setPage(0);
-                    setPageSize(Number(event.target.value));
-                  }}
-                  rowsPerPageOptions={[10, 25, 50]}
-                />
-              </>
-            )}
-          </Paper>
+          <BusinessDataTable
+            title="Opportunity Register"
+            subtitle="Tenant-scoped opportunities with shared sorting, paging, and row actions."
+            icon={<SourceOutlinedIcon fontSize="small" />}
+            count={total}
+            columns={tableColumns}
+            rows={items}
+            loading={loading}
+            error={error || null}
+            emptyTitle="No opportunities yet"
+            emptyDescription="PostgreSQL is connected, but this tenant does not currently have opportunity rows. Use the shared manual create flow to register the first one."
+            sortBy={sortBy}
+            sortOrder={sortOrder}
+            onSortChange={(nextSortBy, nextSortOrder) => {
+              setLoading(true);
+              setPage(0);
+              setSortBy(nextSortBy);
+              setSortOrder(nextSortOrder);
+            }}
+            page={page}
+            pageSize={pageSize}
+            total={total}
+            onPageChange={(nextPage) => {
+              setLoading(true);
+              setPage(nextPage);
+            }}
+            onRowsPerPageChange={(nextPageSize) => {
+              setLoading(true);
+              setPage(0);
+              setPageSize(nextPageSize);
+            }}
+            selectedRowKey={selectedOpportunity?.id || null}
+            rowKey={(item) => item.id}
+            minWidth={1320}
+          />
         </Stack>
-      </OutletPage>
-
-      <Menu anchorEl={menuAnchorEl} open={Boolean(menuAnchorEl)} onClose={closeActionMenu}>
-        {canQualify && menuOpportunity && isBuildLeadEligible(menuOpportunity) ? (
-          <MenuItem
-            onClick={() => {
-              if (menuOpportunity) {
-                openBuildLeadDialog(menuOpportunity);
-              }
-            }}
-          >
-            <HubOutlinedIcon fontSize="small" style={{ marginRight: 10, color: "#2563EB" }} />
-            Build Lead
-          </MenuItem>
-        ) : null}
-        {canQualify && menuOpportunity ? (
-          <MenuItem
-            onClick={() => {
-              promptAssess(menuOpportunity);
-            }}
-          >
-            <AutoAwesomeOutlinedIcon fontSize="small" style={{ marginRight: 10, color: "#0F766E" }} />
-            {menuOpportunity.ai_recommendation ? "Re-run Assessment" : "AI Assess"}
-          </MenuItem>
-        ) : null}
-        {canOutreach && menuOpportunity ? (
-          <MenuItem
-            onClick={() => {
-              openOutreachWorkspace(menuOpportunity);
-            }}
-          >
-            <MarkEmailReadOutlinedIcon fontSize="small" style={{ marginRight: 10, color: "#2563EB" }} />
-            Personalized Outreach
-          </MenuItem>
-        ) : null}
-        {canOutreach && menuOpportunity ? (
-          <MenuItem
-            onClick={() => {
-              openMiniSolutionWorkspace(menuOpportunity);
-            }}
-          >
-            <LightbulbOutlinedIcon fontSize="small" style={{ marginRight: 10, color: "#0F766E" }} />
-            Mini Solution
-          </MenuItem>
-        ) : null}
-        <MenuItem
-          onClick={() => {
-            if (menuOpportunity) {
-              void openDetailDrawer(menuOpportunity);
-            }
-            closeActionMenu();
-          }}
-          disabled={!canRead}
-        >
-          <VisibilityOutlined fontSize="small" style={{ marginRight: 10 }} />
-          View Details
-        </MenuItem>
-        <MenuItem
-          onClick={() => {
-            if (menuOpportunity) {
-              void openEditDialog(menuOpportunity);
-            }
-          }}
-          disabled={!canUpdate}
-        >
-          <EditOutlined fontSize="small" style={{ marginRight: 10 }} />
-          Edit
-        </MenuItem>
-        <MenuItem
-          onClick={() => {
-            if (menuOpportunity) {
-              promptDelete(menuOpportunity);
-            }
-          }}
-          disabled={!canDelete}
-        >
-          <DeleteOutline fontSize="small" style={{ marginRight: 10 }} />
-          Delete
-        </MenuItem>
-      </Menu>
+      </BusinessPageFrame>
 
       <AdminFormDialog
         open={dialogOpen}
@@ -1588,44 +1557,22 @@ export default function AugmisBusinessOpportunitiesPage() {
         </DialogActions>
       </Dialog>
 
-      <Drawer
-        anchor="right"
+      <BusinessDetailDrawer
         open={detailOpen}
         onClose={() => setDetailOpen(false)}
-        slotProps={{
-          paper: {
-            sx: {
-              width: { xs: "100%", md: 680 },
-              bgcolor: "#F8FAFC",
-            },
-          },
-        }}
-      >
-        <Box sx={{ height: "100%", display: "flex", flexDirection: "column" }}>
-          <Box
-            sx={{
-              px: 2.5,
-              py: 2,
-              borderBottom: "1px solid #E2E8F0",
-              background:
-                "linear-gradient(135deg, rgba(13,45,78,0.98) 0%, rgba(25,93,161,0.95) 58%, rgba(222,239,255,0.92) 100%)",
-              color: "#F8FAFC",
-            }}
-          >
-            <Stack direction="row" spacing={1.5} sx={{ justifyContent: "space-between", alignItems: "flex-start" }}>
-              <Box sx={{ minWidth: 0 }}>
-                <Typography variant="h6" sx={{ fontWeight: 700 }}>
-                  Opportunity Details
-                </Typography>
-                <Typography sx={{ mt: 0.6, color: "rgba(248,250,252,0.88)" }}>
-                  Review the full tenant-scoped opportunity record.
-                </Typography>
-              </Box>
-              <IconButton onClick={() => setDetailOpen(false)} sx={{ color: "#F8FAFC" }}>
-                <CloseIcon />
-              </IconButton>
-            </Stack>
-            <Stack direction="row" spacing={1} sx={{ mt: 2, flexWrap: "wrap" }}>
+        title={selectedOpportunity?.title || "Opportunity Details"}
+        subtitle={selectedOpportunity?.organization_name || "Review the full tenant-scoped opportunity record."}
+        chips={
+          selectedOpportunity ? (
+            <>
+              <BusinessStatusChip value={selectedOpportunity.opportunity_status} />
+              <BusinessSourceChip label={selectedOpportunity.source_name || selectedOpportunity.source_type} sourceType={selectedOpportunity.source_type} />
+              <BusinessRecommendationChip value={selectedOpportunity.ai_recommendation || "watch"} />
+            </>
+          ) : undefined
+        }
+        actions={
+          <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap" }}>
               <Button
                 variant="contained"
                 startIcon={<MarkEmailReadOutlinedIcon />}
@@ -1721,19 +1668,16 @@ export default function AugmisBusinessOpportunitiesPage() {
               <Button
                 variant="outlined"
                 onClick={() => setDetailOpen(false)}
-                sx={{
-                  textTransform: "none",
-                  borderRadius: "8px",
-                  color: "#FFFFFF",
-                  borderColor: "rgba(255,255,255,0.4)",
-                }}
+                sx={{ textTransform: "none", borderRadius: "8px" }}
               >
                 Close
               </Button>
-            </Stack>
-          </Box>
-
-          <Box sx={{ p: 2.5, overflowY: "auto", flex: 1 }}>
+          </Stack>
+        }
+        loading={detailLoading}
+        error={detailError || null}
+        width={780}
+      >
             {detailLoading ? (
               <Stack sx={{ minHeight: 280, alignItems: "center", justifyContent: "center" }} spacing={1.5}>
                 <CircularProgress />
@@ -2141,9 +2085,7 @@ export default function AugmisBusinessOpportunitiesPage() {
             ) : (
               <Typography sx={{ color: "#475569" }}>Not available</Typography>
             )}
-          </Box>
-        </Box>
-      </Drawer>
+      </BusinessDetailDrawer>
 
       <AppNotificationToast
         open={toastOpen}

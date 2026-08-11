@@ -75,6 +75,40 @@ ALLOWED_SORT_FIELDS = {
     "organization_name": BusinessDevelopmentOpportunity.organization_name,
     "opportunity_status": BusinessDevelopmentOpportunity.opportunity_status,
 }
+ALLOWED_PROSPECT_SORT_FIELDS = {
+    "name": BusinessDevelopmentProspect.organization_name,
+    "organization_name": BusinessDevelopmentProspect.organization_name,
+    "country": BusinessDevelopmentProspect.country,
+    "industry": BusinessDevelopmentProspect.industry,
+    "potential": BusinessDevelopmentProspect.estimated_account_potential_min,
+    "estimated_account_potential_min": BusinessDevelopmentProspect.estimated_account_potential_min,
+    "created_at": BusinessDevelopmentProspect.created_at,
+    "updated_at": BusinessDevelopmentProspect.updated_at,
+    "status": BusinessDevelopmentProspect.prospect_status,
+    "prospect_status": BusinessDevelopmentProspect.prospect_status,
+}
+ALLOWED_LEAD_SORT_FIELDS = {
+    "title": BusinessDevelopmentLead.title,
+    "stage": BusinessDevelopmentLead.lead_stage,
+    "lead_stage": BusinessDevelopmentLead.lead_stage,
+    "status": BusinessDevelopmentLead.lead_status,
+    "lead_status": BusinessDevelopmentLead.lead_status,
+    "priority": BusinessDevelopmentLead.priority,
+    "estimated_value": BusinessDevelopmentLead.estimated_value,
+    "created_at": BusinessDevelopmentLead.created_at,
+    "updated_at": BusinessDevelopmentLead.updated_at,
+}
+ALLOWED_TASK_SORT_FIELDS = {
+    "title": BusinessDevelopmentTask.title,
+    "priority": BusinessDevelopmentTask.priority,
+    "due_at": BusinessDevelopmentTask.due_at,
+    "status": BusinessDevelopmentTask.task_status,
+    "task_status": BusinessDevelopmentTask.task_status,
+    "assignee": BusinessDevelopmentTask.assigned_user_id,
+    "assigned_user_id": BusinessDevelopmentTask.assigned_user_id,
+    "created_at": BusinessDevelopmentTask.created_at,
+    "updated_at": BusinessDevelopmentTask.updated_at,
+}
 DOMAIN_PATTERN = re.compile(
     r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$"
 )
@@ -582,6 +616,45 @@ def _apply_opportunity_sorting(query, sort_by: str | None, sort_order: str | Non
     )
 
 
+def _apply_prospect_sorting(query, sort_by: str | None, sort_order: str | None):
+    normalized_order = "desc" if str(sort_order or "").lower() == "desc" else "asc"
+    normalized_sort_by = str(sort_by or "").lower()
+    column = ALLOWED_PROSPECT_SORT_FIELDS.get(normalized_sort_by)
+    if column is None:
+        return query.order_by(
+            BusinessDevelopmentProspect.organization_name.asc(),
+            BusinessDevelopmentProspect.created_at.desc(),
+        )
+    order_fn = desc if normalized_order == "desc" else asc
+    return query.order_by(order_fn(column).nullslast(), BusinessDevelopmentProspect.created_at.desc())
+
+
+def _apply_lead_sorting(query, sort_by: str | None, sort_order: str | None):
+    normalized_order = "desc" if str(sort_order or "").lower() == "desc" else "asc"
+    normalized_sort_by = str(sort_by or "").lower()
+    column = ALLOWED_LEAD_SORT_FIELDS.get(normalized_sort_by)
+    if column is None:
+        return query.order_by(
+            BusinessDevelopmentLead.updated_at.desc(),
+            BusinessDevelopmentLead.created_at.desc(),
+        )
+    order_fn = desc if normalized_order == "desc" else asc
+    return query.order_by(order_fn(column).nullslast(), BusinessDevelopmentLead.created_at.desc())
+
+
+def _apply_task_sorting(query, sort_by: str | None, sort_order: str | None):
+    normalized_order = "desc" if str(sort_order or "").lower() == "desc" else "asc"
+    normalized_sort_by = str(sort_by or "").lower()
+    column = ALLOWED_TASK_SORT_FIELDS.get(normalized_sort_by)
+    if column is None:
+        return query.order_by(
+            BusinessDevelopmentTask.due_at.asc().nullslast(),
+            BusinessDevelopmentTask.created_at.desc(),
+        )
+    order_fn = desc if normalized_order == "desc" else asc
+    return query.order_by(order_fn(column).nullslast(), BusinessDevelopmentTask.created_at.desc())
+
+
 def list_opportunities(
     db: Session,
     tenant_id: str,
@@ -1026,6 +1099,8 @@ def list_prospects(
     page_size: int = 25,
     search: str | None = None,
     status_filter: str | None = None,
+    sort_by: str | None = None,
+    sort_order: str | None = None,
 ) -> dict[str, Any]:
     safe_page = max(page, 1)
     safe_page_size = min(max(page_size, 1), 100)
@@ -1050,7 +1125,7 @@ def list_prospects(
     total = query.count()
     total_pages = ceil(total / safe_page_size) if total else 0
     rows = (
-        query.order_by(BusinessDevelopmentProspect.organization_name.asc())
+        _apply_prospect_sorting(query, sort_by=sort_by, sort_order=sort_order)
         .offset((safe_page - 1) * safe_page_size)
         .limit(safe_page_size)
         .all()
@@ -1549,6 +1624,8 @@ def list_leads(
     status_filter: str | None = None,
     prospect_id: str | None = None,
     opportunity_id: str | None = None,
+    sort_by: str | None = None,
+    sort_order: str | None = None,
 ) -> dict[str, Any]:
     safe_page = max(page, 1)
     safe_page_size = min(max(page_size, 1), 100)
@@ -1569,7 +1646,7 @@ def list_leads(
     total = query.count()
     total_pages = ceil(total / safe_page_size) if total else 0
     rows = (
-        query.order_by(BusinessDevelopmentLead.updated_at.desc(), BusinessDevelopmentLead.created_at.desc())
+        _apply_lead_sorting(query, sort_by=sort_by, sort_order=sort_order)
         .offset((safe_page - 1) * safe_page_size)
         .limit(safe_page_size)
         .all()
@@ -1771,7 +1848,10 @@ def list_tasks(
     status_filter: str | None = None,
     priority: str | None = None,
     lead_id: str | None = None,
+    assigned_user_id: str | None = None,
     search: str | None = None,
+    sort_by: str | None = None,
+    sort_order: str | None = None,
 ) -> dict[str, Any]:
     safe_page = max(page, 1)
     safe_page_size = min(max(page_size, 1), 100)
@@ -1782,6 +1862,8 @@ def list_tasks(
         query = query.filter(BusinessDevelopmentTask.priority == _normalize_priority(priority))
     if lead_id:
         query = query.filter(BusinessDevelopmentTask.lead_id == lead_id)
+    if assigned_user_id:
+        query = query.filter(BusinessDevelopmentTask.assigned_user_id == assigned_user_id)
     if search and search.strip():
         pattern = f"%{search.strip()}%"
         query = query.filter(
@@ -1794,7 +1876,7 @@ def list_tasks(
     total = query.count()
     total_pages = ceil(total / safe_page_size) if total else 0
     rows = (
-        query.order_by(BusinessDevelopmentTask.due_at.asc().nullslast(), BusinessDevelopmentTask.created_at.desc())
+        _apply_task_sorting(query, sort_by=sort_by, sort_order=sort_order)
         .offset((safe_page - 1) * safe_page_size)
         .limit(safe_page_size)
         .all()

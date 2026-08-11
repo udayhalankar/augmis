@@ -32,6 +32,7 @@ class WebFetchRuntimePolicy:
     fetch_timeout_seconds: int = 10
     max_extracted_text_chars: int = 30000
     max_redirects: int = 3
+    user_agent: str = "AUGMIS-Web-Listener/1.0"
 
 
 def _is_public_ip(address: str) -> bool:
@@ -74,13 +75,15 @@ def default_web_fetch_runtime_policy() -> WebFetchRuntimePolicy:
         fetch_timeout_seconds=settings.AUGMIS_WEB_FETCH_TIMEOUT_SECONDS,
         max_extracted_text_chars=min(settings.AUGMIS_WEB_FETCH_MAX_BYTES, 30000),
         max_redirects=settings.AUGMIS_WEB_FETCH_MAX_REDIRECTS,
+        user_agent=settings.AUGMIS_WEB_DISCOVERY_USER_AGENT or "AUGMIS-Web-Listener/1.0",
     )
 
 
-def fetch_public_webpage(
+def _fetch_public_text_resource(
     url: str,
     *,
     policy: WebFetchRuntimePolicy | None = None,
+    allowed_content_types: tuple[str, ...] = ("text/html", "text/plain"),
 ) -> dict[str, str | int | None]:
     validate_public_http_url(url)
     current_url = url
@@ -94,7 +97,7 @@ def fetch_public_webpage(
                 current_url,
                 timeout=timeout,
                 allow_redirects=False,
-                headers={"User-Agent": "AUGMIS-Web-Listener/1.0"},
+                headers={"User-Agent": runtime_policy.user_agent},
                 stream=True,
             )
         except requests.Timeout as exc:
@@ -115,7 +118,7 @@ def fetch_public_webpage(
             raise SafeWebFetchError(f"Source page returned HTTP {response.status_code}.")
 
         content_type = (response.headers.get("Content-Type") or "").lower()
-        if "text/html" not in content_type and "text/plain" not in content_type:
+        if not any(allowed in content_type for allowed in allowed_content_types):
             raise SafeWebFetchError("Unsupported source content type.")
 
         chunks: list[bytes] = []
@@ -138,6 +141,30 @@ def fetch_public_webpage(
             "bytes_read": total,
         }
     raise SafeWebFetchError("Source page exceeded maximum redirects.")
+
+
+def fetch_public_webpage(
+    url: str,
+    *,
+    policy: WebFetchRuntimePolicy | None = None,
+) -> dict[str, str | int | None]:
+    return _fetch_public_text_resource(
+        url,
+        policy=policy,
+        allowed_content_types=("text/html", "text/plain"),
+    )
+
+
+def fetch_public_text_resource(
+    url: str,
+    *,
+    policy: WebFetchRuntimePolicy | None = None,
+) -> dict[str, str | int | None]:
+    return _fetch_public_text_resource(
+        url,
+        policy=policy,
+        allowed_content_types=("text/plain", "text/html", "application/xml", "text/xml"),
+    )
 
 
 def extract_text_from_webpage(
