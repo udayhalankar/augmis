@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 from sqlalchemy import create_engine
@@ -31,6 +31,7 @@ from app.models.augmis_business_models import (
 )
 from app.services import augmis_business_listener_service as listener_service
 from app.services import augmis_business_independent_discovery_service as discovery_service
+from app.services.augmis_business_web_fetcher import SafeWebFetchError
 
 
 class AugmisBusinessIndependentDiscoveryServiceTest(unittest.TestCase):
@@ -608,7 +609,7 @@ class AugmisBusinessIndependentDiscoveryServiceTest(unittest.TestCase):
                 "bytes_read": 260,
             },
         }
-        mock_fetch_page.side_effect = lambda url, policy: payloads[url]
+        mock_fetch_page.side_effect = lambda url, policy, **kwargs: payloads[url]
 
         connector = listener_service.ensure_independent_web_connector(self.db, "TENANT-1", self.current_user)
         discovery_service.create_web_seed(
@@ -639,6 +640,163 @@ class AugmisBusinessIndependentDiscoveryServiceTest(unittest.TestCase):
         self.assertEqual(result["run"]["run_metadata_json"]["listing_pages"], 1)
         self.assertEqual(result["run"]["run_metadata_json"]["detail_links_discovered"], 1)
         self.assertEqual(result["run"]["run_metadata_json"]["detail_links_queued"], 1)
+
+    def test_same_domain_session_reused_and_cross_domain_isolated(self):
+        connector = listener_service.ensure_independent_web_connector(self.db, "TENANT-1", self.current_user)
+        engine = discovery_service.IndependentWebDiscoveryEngine(self.db, connector, None)
+        first = engine._session_for_domain("buyer.example")
+        second = engine._session_for_domain("buyer.example")
+        third = engine._session_for_domain("other.example")
+        self.assertIs(first, second)
+        self.assertIsNot(first, third)
+        engine._close_sessions()
+
+    def test_session_bound_url_detection_only_flags_tokenized_session_links(self):
+        durable = discovery_service._session_bound_url_reasons("https://eprocure.example/app?page=list&session=T")
+        transient = discovery_service._session_bound_url_reasons(
+            "https://eprocure.example/app?page=detail&jsessionid=ABCDEF1234567890"
+        )
+        self.assertEqual(durable, [])
+        self.assertIn("query_jsessionid", transient)
+
+    def test_retry_delay_is_bounded_for_429_5xx_and_timeout(self):
+        self.assertEqual(
+            discovery_service._retry_delay_for_diagnostic({"error_code": "HTTP_429", "retryable": True, "retry_after": "120"}, attempt_number=1),
+            timedelta(seconds=120),
+        )
+        self.assertEqual(
+            discovery_service._retry_delay_for_diagnostic({"error_code": "HTTP_5XX", "retryable": True}, attempt_number=2),
+            timedelta(minutes=10),
+        )
+        self.assertEqual(
+            discovery_service._retry_delay_for_diagnostic({"error_code": "READ_TIMEOUT", "retryable": True}, attempt_number=3),
+            timedelta(minutes=30),
+        )
+        self.assertIsNone(
+            discovery_service._retry_delay_for_diagnostic({"error_code": "HTTP_403", "retryable": False}, attempt_number=1)
+        )
+
+    @patch("app.services.augmis_business_independent_discovery_service.validate_public_http_url")
+    @patch("app.services.augmis_business_independent_discovery_service.fetch_public_webpage")
+    @patch("app.services.augmis_business_independent_discovery_service.fetch_public_text_resource")
+    def test_relative_html_entity_url_is_normalized_and_invalid_links_ignored(
+        self,
+        mock_fetch_text,
+        mock_fetch_page,
+        mock_validate_url,
+    ):
+        del mock_validate_url
+        mock_fetch_text.return_value = {
+            "url": "https://buyer.example/robots.txt",
+            "status_code": 200,
+            "content_type": "text/plain",
+            "body": "User-agent: *\nAllow: /",
+            "bytes_read": 18,
+        }
+        mock_fetch_page.return_value = {
+            "url": "https://buyer.example/tenders",
+            "status_code": 200,
+            "content_type": "text/html",
+            "body": """
+                <html>
+                  <head><title>Active Tenders</title></head>
+                  <body>
+                    <a href="/notice?id=44&amp;mode=view">Open Tender</a>
+                    <a href="javascript:void(0)">Ignore JS</a>
+                    <a href="mailto:buyer@example.com">Ignore Mail</a>
+                    <a href="#fragment">Ignore Anchor</a>
+                  </body>
+                </html>
+            """,
+            "bytes_read": 220,
+        }
+
+        connector = listener_service.ensure_independent_web_connector(self.db, "TENANT-1", self.current_user)
+        discovery_service.create_web_seed(
+            self.db,
+            "TENANT-1",
+            connector.id,
+            self.current_user,
+            AugmisBusinessWebSeedCreateRequest(
+                name="HTML Entity Seed",
+                seed_url="https://buyer.example/tenders",
+                seed_type="url",
+                crawl_scope="same_domain",
+                max_depth=1,
+                max_pages=10,
+                crawl_frequency="weekly",
+                priority=70,
+            ),
+        )
+
+        listener_service.run_connector_scan(
+            self.db,
+            "TENANT-1",
+            connector.id,
+            self.current_user,
+            AugmisBusinessConnectorScanRequest(run_type="manual"),
+        )
+        frontier_rows = self.db.query(BusinessDevelopmentWebFrontier).order_by(BusinessDevelopmentWebFrontier.depth.asc()).all()
+        self.assertEqual(len(frontier_rows), 2)
+        self.assertEqual(frontier_rows[1].canonical_url, "https://buyer.example/notice?id=44&mode=view")
+
+    @patch("app.services.augmis_business_independent_discovery_service.validate_public_http_url")
+    @patch("app.services.augmis_business_independent_discovery_service.fetch_public_webpage")
+    @patch("app.services.augmis_business_independent_discovery_service.fetch_public_text_resource")
+    def test_failure_diagnostics_are_persisted_on_frontier(
+        self,
+        mock_fetch_text,
+        mock_fetch_page,
+        mock_validate_url,
+    ):
+        del mock_validate_url
+        mock_fetch_text.return_value = {
+            "url": "https://buyer.example/robots.txt",
+            "status_code": 200,
+            "content_type": "text/plain",
+            "body": "User-agent: *\nAllow: /",
+            "bytes_read": 18,
+        }
+        mock_fetch_page.side_effect = SafeWebFetchError(
+            "Source page returned HTTP 403.",
+            code="HTTP_403",
+            retryable=False,
+            http_status=403,
+            final_url="https://buyer.example/forbidden",
+        )
+
+        connector = listener_service.ensure_independent_web_connector(self.db, "TENANT-1", self.current_user)
+        discovery_service.create_web_seed(
+            self.db,
+            "TENANT-1",
+            connector.id,
+            self.current_user,
+            AugmisBusinessWebSeedCreateRequest(
+                name="Forbidden Seed",
+                seed_url="https://buyer.example/forbidden",
+                seed_type="url",
+                crawl_scope="same_domain",
+                max_depth=1,
+                max_pages=10,
+                crawl_frequency="weekly",
+                priority=50,
+            ),
+        )
+
+        result = listener_service.run_connector_scan(
+            self.db,
+            "TENANT-1",
+            connector.id,
+            self.current_user,
+            AugmisBusinessConnectorScanRequest(run_type="manual"),
+        )["data"]
+        frontier = self.db.query(BusinessDevelopmentWebFrontier).first()
+        self.assertIsNotNone(frontier)
+        assert frontier is not None
+        self.assertEqual(frontier.error_code, "HTTP_403")
+        self.assertFalse(frontier.diagnostic_json["retryable"])
+        self.assertEqual(frontier.diagnostic_json["http_status"], 403)
+        self.assertEqual(result["run"]["run_metadata_json"]["fetch_failure_counts"]["HTTP_403"], 1)
 
 
 if __name__ == "__main__":
