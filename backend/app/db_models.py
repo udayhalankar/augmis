@@ -767,6 +767,7 @@ class BusinessDevelopmentWebFrontier(Base):
     content_hash = Column(String, nullable=True, index=True)
     error_code = Column(String, nullable=True, index=True)
     error_message = Column(Text, nullable=True)
+    diagnostic_json = Column(JSON, nullable=False, default=dict)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at = Column(
         DateTime(timezone=True),

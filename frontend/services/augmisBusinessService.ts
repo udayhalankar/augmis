@@ -681,6 +681,28 @@ export type AugmisBusinessWebPage = {
   updated_at: string | null;
 };
 
+export type AugmisBusinessWebFetchDiagnostic = {
+  url: string;
+  allowed_by_policy: boolean;
+  robots_status: string;
+  robots_allowed?: boolean | null;
+  http_status?: number | null;
+  final_url?: string | null;
+  redirect_count?: number | null;
+  redirect_chain?: Array<Record<string, unknown>>;
+  content_type?: string | null;
+  response_bytes?: number | null;
+  server?: string | null;
+  retry_after?: string | null;
+  dns_result?: string[];
+  page_title?: string | null;
+  page_type?: string | null;
+  fetch_decision?: string | null;
+  failure_code?: string | null;
+  failure_reason?: string | null;
+  session_bound_reasons?: string[];
+};
+
 export type AugmisBusinessConnectorCredentialStatus = {
   provider: string;
   credential_type: string;
@@ -1779,6 +1801,20 @@ export async function listAugmisBusinessWebPages(
     page: number;
     page_size: number;
     total: number;
+  };
+}
+
+export async function testAugmisBusinessWebFetchUrl(
+  connectorId: string,
+  payload: { url: string; parent_url?: string | null }
+) {
+  const response = await apiClient.post(
+    `/api/augmis-business/connectors/${encodeURIComponent(connectorId)}/web-fetch-test`,
+    payload
+  );
+  return response.data as {
+    success: boolean;
+    data: AugmisBusinessWebFetchDiagnostic;
   };
 }
 

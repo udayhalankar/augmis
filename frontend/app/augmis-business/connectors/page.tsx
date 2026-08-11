@@ -65,6 +65,7 @@ import {
   type AugmisBusinessSearchProfile,
   type AugmisBusinessSearchProvider,
   type AugmisBusinessWebDomain,
+  type AugmisBusinessWebFetchDiagnostic,
   type AugmisBusinessWebPage,
   type AugmisBusinessWebSeed,
   createAugmisBusinessSearchProvider,
@@ -95,6 +96,7 @@ import {
   saveAugmisBusinessConnectorCredential,
   setAugmisBusinessConnectorSearchProvider,
   shortlistAugmisBusinessDiscovery,
+  testAugmisBusinessWebFetchUrl,
   testAugmisBusinessConnectorCredential,
   testAugmisBusinessConnector,
   testAugmisBusinessSearchProvider,
@@ -336,6 +338,17 @@ type ConnectorRunMetadata = {
   detail_links_skipped_domain_policy?: number;
   detail_links_fetch_failed?: number;
   detail_links_robots_denied?: number;
+  fetch_failure_counts?: Record<string, number>;
+  fetch_failure_samples?: Array<{
+    error_code?: string;
+    url?: string;
+    domain?: string;
+    depth?: number;
+    parent_url?: string | null;
+    retryable?: boolean;
+    http_status?: number | null;
+    message?: string;
+  }>;
   candidate_outcomes?: Array<{
     title?: string;
     source_url?: string;
@@ -1228,6 +1241,7 @@ export default function AugmisBusinessConnectorsPage() {
   const [seedDialogOpen, setSeedDialogOpen] = useState(false);
   const [seedForm, setSeedForm] = useState<WebSeedForm>(buildWebSeedForm());
   const [editingSeed, setEditingSeed] = useState<AugmisBusinessWebSeed | null>(null);
+  const [webFetchTestResult, setWebFetchTestResult] = useState<AugmisBusinessWebFetchDiagnostic | null>(null);
   const [toastOpen, setToastOpen] = useState(false);
   const [toastSeverity, setToastSeverity] = useState<ToastSeverity>("info");
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -1376,6 +1390,7 @@ export default function AugmisBusinessConnectorsPage() {
   async function openConnectorDrawer(connector: AugmisBusinessConnector) {
     setActiveCredentialProviderCode(null);
     setSelectedConnector(connector);
+    setWebFetchTestResult(null);
     setConnectorDrawerOpen(true);
     try {
       const tasks: Promise<unknown>[] = [
@@ -1605,6 +1620,29 @@ export default function AugmisBusinessConnectorsPage() {
       showToast("Seed removed.", "success");
     } catch (error) {
       showToast(getBackendErrorMessage(error, "Unable to delete web seed."), "error");
+    } finally {
+      setBusy(false);
+      setActiveActionLabel(null);
+    }
+  }
+
+  async function handleTestWebSeed(seed: AugmisBusinessWebSeed) {
+    if (!selectedConnector) return;
+    setBusy(true);
+    setActiveActionLabel(`Testing ${seed.name}`);
+    try {
+      const result = await testAugmisBusinessWebFetchUrl(selectedConnector.id, {
+        url: seed.seed_url,
+      });
+      setWebFetchTestResult(result.data);
+      showToast(
+        result.data.failure_code
+          ? `Seed test completed: ${formatDiagnosticCode(result.data.failure_code)}`
+          : `Seed test completed: ${result.data.fetch_decision || "FETCHABLE"}`,
+        result.data.failure_code ? "warning" : "success"
+      );
+    } catch (error) {
+      showToast(getBackendErrorMessage(error, "Unable to test seed URL."), "error");
     } finally {
       setBusy(false);
       setActiveActionLabel(null);
@@ -3596,6 +3634,11 @@ export default function AugmisBusinessConnectorsPage() {
                                         <SettingsSuggestOutlinedIcon sx={{ fontSize: 18, color: "#1D4ED8" }} />
                                       </IconButton>
                                     </Tooltip>
+                                    <Tooltip title="Test Seed">
+                                      <IconButton size="small" disabled={!canScan || busy} onClick={() => void handleTestWebSeed(seed)}>
+                                        <FindInPageOutlinedIcon sx={{ fontSize: 18, color: "#0F766E" }} />
+                                      </IconButton>
+                                    </Tooltip>
                                     <Tooltip title="Delete Seed">
                                       <IconButton size="small" disabled={!canAdmin || busy} onClick={() => void handleDeleteWebSeed(seed)}>
                                         <VisibilityOffOutlinedIcon sx={{ fontSize: 18, color: "#B42318" }} />
@@ -3617,6 +3660,31 @@ export default function AugmisBusinessConnectorsPage() {
                         </TableBody>
                       </Table>
                     </Box>
+                    {webFetchTestResult ? (
+                      <Alert severity={webFetchTestResult.failure_code ? "warning" : "success"} sx={{ mt: 1.2, borderRadius: "8px" }}>
+                        <Typography sx={{ fontWeight: 700, fontSize: 13 }}>
+                          {webFetchTestResult.fetch_decision || (webFetchTestResult.failure_code ? "FAILED" : "FETCHABLE")}
+                          {webFetchTestResult.http_status != null ? ` · HTTP ${webFetchTestResult.http_status}` : ""}
+                          {webFetchTestResult.content_type ? ` · ${webFetchTestResult.content_type}` : ""}
+                          {webFetchTestResult.response_bytes != null ? ` · ${formatBytes(webFetchTestResult.response_bytes)}` : ""}
+                        </Typography>
+                        <Typography sx={{ mt: 0.45, fontSize: 12 }}>
+                          Robots: {webFetchTestResult.robots_status}
+                          {webFetchTestResult.final_url ? ` · Final URL: ${webFetchTestResult.final_url}` : ""}
+                        </Typography>
+                        {webFetchTestResult.failure_code ? (
+                          <Typography sx={{ mt: 0.45, fontSize: 12 }}>
+                            {formatDiagnosticCode(webFetchTestResult.failure_code)}
+                            {webFetchTestResult.failure_reason ? ` · ${webFetchTestResult.failure_reason}` : ""}
+                          </Typography>
+                        ) : null}
+                        {webFetchTestResult.page_title || webFetchTestResult.page_type ? (
+                          <Typography sx={{ mt: 0.45, fontSize: 12 }}>
+                            {webFetchTestResult.page_title || "Untitled page"}{webFetchTestResult.page_type ? ` · ${webFetchTestResult.page_type}` : ""}
+                          </Typography>
+                        ) : null}
+                      </Alert>
+                    ) : null}
                   </Paper>
 
                   <Paper elevation={0} sx={{ p: 1.5, borderRadius: "8px", border: "1px solid #E2E8F0" }}>
@@ -4556,6 +4624,44 @@ export default function AugmisBusinessConnectorsPage() {
                             <Chip size="small" label={`Robots Denied ${selectedRunMetadata.detail_links_robots_denied ?? 0}`} sx={{ bgcolor: "#FEF2F2", color: "#991B1B", borderRadius: "8px" }} />
                           </Stack>
                         </Box>
+                        {recordEntriesDescending(selectedRunMetadata.fetch_failure_counts).length ? (
+                          <Box>
+                            <Typography sx={{ fontWeight: 700, color: "#0F172A", fontSize: 12 }}>Fetch Failures</Typography>
+                            <Stack direction="row" spacing={0.75} sx={{ mt: 0.8, flexWrap: "wrap", rowGap: 0.75 }}>
+                              {recordEntriesDescending(selectedRunMetadata.fetch_failure_counts).map(([code, count]) => (
+                                <Chip key={`fetch-${code}`} size="small" label={`${formatDiagnosticCode(code)} · ${count}`} sx={{ bgcolor: "#FEF2F2", color: "#991B1B", borderRadius: "8px" }} />
+                              ))}
+                            </Stack>
+                          </Box>
+                        ) : null}
+                        {selectedRunMetadata.fetch_failure_samples?.length ? (
+                          <Stack spacing={1}>
+                            {selectedRunMetadata.fetch_failure_samples.slice(0, 6).map((sample, index) => (
+                              <Paper key={`${selectedConnectorRun?.id}-fetch-sample-${index}`} elevation={0} sx={{ p: 1, borderRadius: "8px", border: "1px solid #E2E8F0" }}>
+                                <Typography sx={{ fontWeight: 700, color: "#0F172A", fontSize: 13 }}>
+                                  {formatDiagnosticCode(sample.error_code || "UNKNOWN_FETCH_ERROR")}
+                                </Typography>
+                                <Typography sx={{ mt: 0.35, color: "#475569", fontSize: 12, overflowWrap: "anywhere" }}>
+                                  {sample.url || "No URL recorded"}
+                                </Typography>
+                                <Typography sx={{ mt: 0.35, color: "#64748B", fontSize: 12 }}>
+                                  Domain: {sample.domain || "n/a"} · Depth: {sample.depth ?? 0} · Retryable: {sample.retryable ? "Yes" : "No"}
+                                  {sample.http_status != null ? ` · HTTP ${sample.http_status}` : ""}
+                                </Typography>
+                                {sample.parent_url ? (
+                                  <Typography sx={{ mt: 0.35, color: "#64748B", fontSize: 12, overflowWrap: "anywhere" }}>
+                                    Parent: {sample.parent_url}
+                                  </Typography>
+                                ) : null}
+                                {sample.message ? (
+                                  <Typography sx={{ mt: 0.35, color: "#64748B", fontSize: 12 }}>
+                                    {sample.message}
+                                  </Typography>
+                                ) : null}
+                              </Paper>
+                            ))}
+                          </Stack>
+                        ) : null}
                         {recordEntriesDescending(selectedRunMetadata.filter_reason_counts).length ? (
                           <Box>
                             <Typography sx={{ fontWeight: 700, color: "#0F172A", fontSize: 12 }}>Filter Reasons</Typography>
@@ -4694,6 +4800,13 @@ export default function AugmisBusinessConnectorsPage() {
                             <Typography sx={{ mt: 0.6, color: "#475569", fontSize: 12 }}>
                               {metadata.outcome_message}
                             </Typography>
+                          ) : null}
+                          {selectedConnector?.connector_type === "independent_web_discovery" && recordEntriesDescending(metadata.fetch_failure_counts).length ? (
+                            <Stack direction="row" spacing={0.6} sx={{ mt: 0.8, flexWrap: "wrap", rowGap: 0.6 }}>
+                              {recordEntriesDescending(metadata.fetch_failure_counts).slice(0, 4).map(([code, count]) => (
+                                <Chip key={`${run.id}-${code}`} size="small" label={`${formatDiagnosticCode(code)} · ${count}`} sx={{ bgcolor: "#FEF2F2", color: "#991B1B", borderRadius: "8px" }} />
+                              ))}
+                            </Stack>
                           ) : null}
                           {run.error_summary ? (
                             <Alert severity="warning" sx={{ mt: 0.9, borderRadius: "8px" }}>

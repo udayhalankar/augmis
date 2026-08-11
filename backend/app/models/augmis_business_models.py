@@ -1867,6 +1867,11 @@ class AugmisBusinessConnectorScanRequest(BaseModel):
         return normalized
 
 
+class AugmisBusinessWebFetchTestRequest(BaseModel):
+    url: str = Field(min_length=8, max_length=2000)
+    parent_url: str | None = Field(default=None, max_length=2000)
+
+
 class AugmisBusinessWebSeedBase(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     seed_url: str = Field(min_length=8, max_length=2000)

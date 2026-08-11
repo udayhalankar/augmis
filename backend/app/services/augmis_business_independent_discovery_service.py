@@ -11,6 +11,7 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 from xml.etree import ElementTree
 
 from fastapi import HTTPException, status
+import requests
 from sqlalchemy import asc, desc, func
 from sqlalchemy.orm import Session
 
@@ -25,6 +26,7 @@ from app.db_models import (
 )
 from app.models.augmis_business_models import (
     AugmisBusinessDiscoveredOpportunityCandidate,
+    AugmisBusinessWebFetchTestRequest,
     AugmisBusinessWebDomainUpdateRequest,
     AugmisBusinessWebSeedCreateRequest,
     AugmisBusinessWebSeedUpdateRequest,
@@ -156,19 +158,19 @@ DYNAMIC_CONTENT_TERMS = (
     "please wait",
     "single page application",
 )
+SESSION_BOUND_QUERY_KEYS = {
+    "jsessionid",
+    "sessionid",
+    "phpsessid",
+    "aspsessionid",
+    "asp.net_sessionid",
+    "sid",
+    "session",
+}
+SESSION_BOUND_VALUE_HINTS = ("jsessionid", "sessionid", "phpsessid", "aspsessionid")
 CONTACT_PATH_HINTS = (
     "/contact",
     "/contact-us",
-    "/procurement",
-    "/purchasing",
-    "/vendors",
-    "/vendor-registration",
-    "/departments",
-    "/technology",
-    "/it",
-    "/digital",
-    "/team",
-    "/leadership",
 )
 EMAIL_PATTERN = re.compile(r"\b([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})\b", re.IGNORECASE)
 PHONE_PATTERN = re.compile(r"(?:(?:\+|00)\d{1,3}[\s.-]?)?(?:\(?\d{2,4}\)?[\s.-]?){2,5}\d{2,4}")
@@ -276,6 +278,109 @@ def _as_public_url(url: str) -> tuple[str, str]:
     canonical, domain = canonicalize_url(url)
     validate_public_http_url(canonical)
     return canonical, domain
+
+
+def _same_origin_referer(parent_url: str | None, target_url: str) -> str | None:
+    if not parent_url:
+        return None
+    parent_host = (urlsplit(parent_url).hostname or "").lower()
+    target_host = (urlsplit(target_url).hostname or "").lower()
+    if parent_host and parent_host == target_host:
+        return parent_url
+    return None
+
+
+def _session_bound_url_reasons(url: str) -> list[str]:
+    parts = urlsplit(url)
+    reasons: list[str] = []
+    lowered_path = parts.path.lower()
+    lowered_query = parts.query.lower()
+    if ";jsessionid=" in lowered_path:
+        reasons.append("path_jsessionid")
+    parsed_query = [(key.lower(), value.lower()) for key, value in parse_qsl(parts.query, keep_blank_values=True)]
+    for key, value in parsed_query:
+        if key in SESSION_BOUND_QUERY_KEYS and (len(value) >= 8 or any(hint in value for hint in SESSION_BOUND_VALUE_HINTS) or bool(re.search(r"[0-9_-]{4,}", value))):
+            reasons.append(f"query_{key}")
+        if any(hint in value for hint in SESSION_BOUND_VALUE_HINTS):
+            reasons.append(f"value_{key or 'session'}")
+    if "sessionexpired" in lowered_query or "stalesession" in lowered_query:
+        reasons.append("query_session_expired")
+    return list(dict.fromkeys(reasons))[:6]
+
+
+def _diagnostic_message(code: str) -> str:
+    return {
+        "ROBOTS_DENIED": "Robots policy denied this URL.",
+        "SESSION_BOUND_URL": "URL appears bound to a transient public session and will not be retried as a durable link.",
+    }.get(code, code.replace("_", " ").title())
+
+
+def _record_failure_metric(
+    metrics: dict[str, Any],
+    *,
+    frontier: BusinessDevelopmentWebFrontier,
+    diagnostic: dict[str, Any],
+) -> None:
+    code = str(diagnostic.get("error_code") or frontier.error_code or "UNKNOWN_FETCH_ERROR")
+    counts = dict(metrics.get("fetch_failure_counts") or {})
+    counts[code] = int(counts.get(code, 0) or 0) + 1
+    metrics["fetch_failure_counts"] = counts
+    samples = list(metrics.get("fetch_failure_samples") or [])
+    if len([item for item in samples if item.get("error_code") == code]) < 3:
+        samples.append(
+            {
+                "error_code": code,
+                "url": frontier.canonical_url,
+                "domain": frontier.domain,
+                "depth": frontier.depth,
+                "parent_url": frontier.parent_url,
+                "retryable": bool(diagnostic.get("retryable")),
+                "http_status": diagnostic.get("http_status"),
+                "message": diagnostic.get("error_message") or frontier.error_message,
+            }
+        )
+    metrics["fetch_failure_samples"] = samples[-24:]
+
+
+def _retry_delay_for_diagnostic(diagnostic: dict[str, Any], *, attempt_number: int) -> timedelta | None:
+    code = str(diagnostic.get("error_code") or "")
+    if not diagnostic.get("retryable"):
+        return None
+    retry_after = str(diagnostic.get("retry_after") or "").strip()
+    if retry_after.isdigit():
+        return timedelta(seconds=max(1, min(int(retry_after), 86_400)))
+    if code == "HTTP_429":
+        return timedelta(hours=24)
+    if code == "HTTP_5XX":
+        return timedelta(minutes=min(60, 5 * max(1, attempt_number)))
+    if code in {"CONNECTION_TIMEOUT", "READ_TIMEOUT", "CONNECTION_RESET", "DNS_FAILURE", "DECOMPRESSION_ERROR"}:
+        return timedelta(minutes=min(60, 10 * max(1, attempt_number)))
+    return timedelta(hours=12)
+
+
+def _apply_frontier_failure(
+    frontier: BusinessDevelopmentWebFrontier,
+    *,
+    diagnostic: dict[str, Any],
+    domain_row: BusinessDevelopmentWebDomain,
+    metrics: dict[str, Any],
+    detail_link_queued: bool,
+) -> None:
+    frontier.status = "failed"
+    frontier.error_code = str(diagnostic.get("error_code") or "UNKNOWN_FETCH_ERROR")
+    frontier.error_message = str(diagnostic.get("error_message") or _diagnostic_message(frontier.error_code))
+    frontier.http_status = int(diagnostic.get("http_status")) if diagnostic.get("http_status") is not None else None
+    frontier.diagnostic_json = diagnostic
+    frontier.retry_count += 1
+    retry_delay = _retry_delay_for_diagnostic(diagnostic, attempt_number=int(frontier.retry_count or 1))
+    frontier.next_fetch_at = (_now() + retry_delay) if retry_delay else None
+    domain_row.error_count += 1
+    domain_row.status = "attention"
+    metrics["errors"] += 1
+    metrics["stale_or_error_pages"] += 1
+    _record_failure_metric(metrics, frontier=frontier, diagnostic=diagnostic)
+    if detail_link_queued:
+        metrics["detail_links_fetch_failed"] += 1
 
 
 def _allowed_domain_mode(config: dict[str, Any]) -> str:
@@ -1209,6 +1314,116 @@ def list_web_pages(
     }
 
 
+def test_web_fetch_url(
+    db: Session,
+    tenant_id: str,
+    connector_id: str,
+    payload: AugmisBusinessWebFetchTestRequest,
+) -> dict[str, Any]:
+    connector = _require_connector(db, tenant_id, connector_id)
+    if connector.connector_type != INDEPENDENT_WEB_CONNECTOR_TYPE:
+        raise HTTPException(status_code=400, detail="URL fetch testing is only supported for the independent web discovery connector.")
+    policy = _runtime_policy(dict(connector.configuration_json or {}))
+    canonical_url, domain = _as_public_url(payload.url)
+    referer = _same_origin_referer(payload.parent_url, canonical_url)
+    robots_status = "not_checked"
+    robots_allowed = None
+    try:
+        robots_row = BusinessDevelopmentWebDomain(
+            id="diagnostic-domain",
+            tenant_id=tenant_id,
+            connector_id=connector_id,
+            domain=domain,
+            robots_status="unknown",
+        )
+        robots = _fetch_robots(robots_row, policy)
+        if robots.parser:
+            robots_allowed = bool(robots.parser.can_fetch(settings.AUGMIS_WEB_DISCOVERY_USER_AGENT, canonical_url))
+            robots_status = "allowed" if robots_allowed else "denied"
+        else:
+            robots_allowed = True
+            robots_status = robots.status
+    except Exception:
+        robots_allowed = None
+        robots_status = "unavailable"
+
+    if robots_allowed is False:
+        return {
+            "success": True,
+            "data": {
+                "url": canonical_url,
+                "allowed_by_policy": True,
+                "robots_status": robots_status,
+                "robots_allowed": False,
+                "fetch_decision": "FAILED",
+                "failure_code": "ROBOTS_DENIED",
+                "failure_reason": _diagnostic_message("ROBOTS_DENIED"),
+            },
+        }
+
+    session_bound_reasons = _session_bound_url_reasons(canonical_url)
+    if session_bound_reasons:
+        return {
+            "success": True,
+            "data": {
+                "url": canonical_url,
+                "allowed_by_policy": True,
+                "robots_status": robots_status,
+                "robots_allowed": robots_allowed,
+                "fetch_decision": "SESSION_BOUND_URL",
+                "failure_code": "SESSION_BOUND_URL",
+                "failure_reason": "URL appears bound to a transient public session and is not a durable follow-up target.",
+                "session_bound_reasons": session_bound_reasons,
+            },
+        }
+
+    session = requests.Session()
+    try:
+        result = fetch_public_webpage(canonical_url, policy=policy, session=session, referer=referer)
+        html = str(result.get("body") or "")
+        parsed = _extract_parsed_page(str(result.get("url") or canonical_url), html, policy)
+        return {
+            "success": True,
+            "data": {
+                "url": canonical_url,
+                "allowed_by_policy": True,
+                "robots_status": robots_status,
+                "robots_allowed": robots_allowed,
+                "http_status": result.get("status_code"),
+                "final_url": result.get("final_url") or result.get("url"),
+                "redirect_count": result.get("redirect_count"),
+                "redirect_chain": result.get("redirect_chain") or [],
+                "content_type": result.get("content_type"),
+                "response_bytes": result.get("response_bytes") or result.get("bytes_read"),
+                "server": result.get("server"),
+                "retry_after": result.get("retry_after"),
+                "dns_result": result.get("dns_result") or [],
+                "page_title": parsed.title,
+                "page_type": parsed.page_type,
+                "fetch_decision": "FETCHABLE" if parsed.page_type not in {"stale_session", "dynamic_content_only"} else parsed.page_type.upper(),
+                "failure_code": None,
+                "failure_reason": None,
+            },
+        }
+    except SafeWebFetchError as exc:
+        diagnostic = exc.to_diagnostic()
+        return {
+            "success": True,
+            "data": {
+                "url": canonical_url,
+                "allowed_by_policy": True,
+                "robots_status": robots_status,
+                "robots_allowed": robots_allowed,
+                "fetch_decision": "FAILED",
+                "failure_code": diagnostic.get("error_code"),
+                "failure_reason": diagnostic.get("error_message"),
+                **diagnostic,
+            },
+        }
+    finally:
+        session.close()
+
+
 def _ensure_domain(
     db: Session,
     *,
@@ -1404,6 +1619,8 @@ class IndependentWebDiscoveryEngine:
             "classification_counts": {},
             "candidate_visibility_counts": {},
             "candidate_exclusion_reason_counts": {},
+            "fetch_failure_counts": {},
+            "fetch_failure_samples": [],
             "detail_links_discovered": 0,
             "detail_links_queued": 0,
             "detail_links_skipped_depth": 0,
@@ -1415,6 +1632,19 @@ class IndependentWebDiscoveryEngine:
         self.seed_by_id: dict[str, BusinessDevelopmentWebSeed] = {}
         self.listing_detail_links_discovered: set[str] = set()
         self.listing_detail_links_queued: set[str] = set()
+        self.http_sessions: dict[str, requests.Session] = {}
+
+    def _session_for_domain(self, domain: str) -> requests.Session:
+        session = self.http_sessions.get(domain)
+        if session is None:
+            session = requests.Session()
+            self.http_sessions[domain] = session
+        return session
+
+    def _close_sessions(self) -> None:
+        for session in self.http_sessions.values():
+            session.close()
+        self.http_sessions.clear()
 
     def validate_config(self) -> None:
         if int(self.config.get("maximum_domains_per_run", 5) or 5) < 1:
@@ -1772,121 +2002,197 @@ class IndependentWebDiscoveryEngine:
             self._seed_frontier(seed)
         self.db.flush()
         discoveries: list[AugmisBusinessDiscoveredOpportunityCandidate] = []
-        while self.metrics["pages_fetched"] < self._max_total_pages():
-            if (_now() - self.started_at).total_seconds() >= self._run_duration_limit():
-                break
-            frontier = self._pick_frontier()
-            if frontier is None:
-                break
-            seed = self.seed_by_id.get(frontier.seed_id) if frontier.seed_id else None
-            domain_row, robots = _robots_policy_for_frontier(
-                self.db,
-                tenant_id=self.connector.tenant_id,
-                connector_id=self.connector.id,
-                seed=seed,
-                domain=frontier.domain,
-                found_from_url=frontier.parent_url,
-                found_context=frontier.anchor_text,
-                policy=self.policy,
-            )
-            if robots.parser and not robots.parser.can_fetch(settings.AUGMIS_WEB_DISCOVERY_USER_AGENT, frontier.canonical_url):
-                frontier.status = "robots_denied"
-                frontier.error_code = "ROBOTS_DENIED"
-                domain_row.robots_status = "denied"
-                self.metrics["robots_denied"] += 1
-                if frontier.canonical_url in self.listing_detail_links_queued:
-                    self.metrics["detail_links_robots_denied"] += 1
-                continue
-            frontier.status = "fetching"
-            frontier.last_attempted_at = _now()
-            self.metrics["pages_attempted"] += 1
-            try:
-                result = fetch_public_webpage(frontier.canonical_url, policy=self.policy)
-                html = str(result.get("body") or "")
-                frontier.http_status = int(result.get("status_code") or 200)
-                frontier.last_fetched_at = _now()
-                frontier.status = "fetched"
-                domain_row.last_crawl_at = frontier.last_fetched_at
-                domain_row.status = "ready"
-                self.visited_domains.add(frontier.domain)
-                self.metrics["pages_fetched"] += 1
-                parsed = _extract_parsed_page(str(result.get("url") or frontier.canonical_url), html, self.policy)
-                if parsed.page_type in {"procurement_list"}:
-                    self.metrics["listing_pages"] += 1
-                    self.metrics["opportunity_like_pages"] += 1
-                elif parsed.page_type in {"procurement_detail", "tender", "rfp", "rfq", "eoi"}:
-                    self.metrics["detail_pages"] += 1
-                    self.metrics["opportunity_like_pages"] += 1
-                elif parsed.page_type in {"stale_session", "dynamic_content_only"}:
-                    self.metrics["stale_or_error_pages"] += 1
-                    if parsed.page_type == "dynamic_content_only":
-                        self.metrics["dynamic_content_only_pages"] += 1
-                elif parsed.page_type == "unknown":
-                    self.metrics["unknown_pages"] += 1
-                content_hash = _content_hash(parsed.text)
-                candidate, candidate_diagnostics = _build_candidate(parsed, search_profile=self.search_profile, seed=seed)
-                visibility_key = "eligible" if candidate_diagnostics.get("eligible") else "excluded"
-                self.metrics["candidate_visibility_counts"][visibility_key] = int(
-                    self.metrics["candidate_visibility_counts"].get(visibility_key, 0)
-                ) + 1
-                if not candidate_diagnostics.get("eligible"):
-                    for code in candidate_diagnostics.get("reason_codes") or []:
-                        self.metrics["candidate_exclusion_reason_counts"][code] = int(
-                            self.metrics["candidate_exclusion_reason_counts"].get(code, 0)
-                        ) + 1
-                if candidate:
-                    discoveries.append(candidate)
-                    domain_row.opportunities_found += 1
-                    self.metrics["opportunity_candidates"] += 1
-                    self.metrics["contacts_found"] += len(parsed.contact_routes)
-                domain_row.pages_indexed += 1
-                self.metrics["classification_counts"][parsed.page_type] = int(self.metrics["classification_counts"].get(parsed.page_type, 0)) + 1
-                self._store_page(
-                    frontier=frontier,
-                    domain_row=domain_row,
-                    parsed=parsed,
-                    content_hash=content_hash,
-                    candidate=candidate,
-                    candidate_diagnostics=candidate_diagnostics,
+        try:
+            while self.metrics["pages_fetched"] < self._max_total_pages():
+                if (_now() - self.started_at).total_seconds() >= self._run_duration_limit():
+                    break
+                frontier = self._pick_frontier()
+                if frontier is None:
+                    break
+                seed = self.seed_by_id.get(frontier.seed_id) if frontier.seed_id else None
+                domain_row, robots = _robots_policy_for_frontier(
+                    self.db,
+                    tenant_id=self.connector.tenant_id,
+                    connector_id=self.connector.id,
+                    seed=seed,
+                    domain=frontier.domain,
+                    found_from_url=frontier.parent_url,
+                    found_context=frontier.anchor_text,
+                    policy=self.policy,
                 )
-                self._discover_links(frontier=frontier, parsed=parsed, seed=seed)
-                if seed:
-                    seed.last_crawled_at = _now()
-                    seed.next_crawl_at = _now() + timedelta(hours=_seed_recheck_interval_hours(seed))
-                domain_row.next_crawl_at = _now() + timedelta(hours=_page_recheck_interval_hours(parsed.page_type))
-            except SafeWebFetchError as exc:
-                frontier.status = "failed"
-                frontier.error_code = "FETCH_ERROR"
-                frontier.error_message = str(exc)
-                frontier.retry_count += 1
-                frontier.next_fetch_at = _now() + timedelta(hours=12 if "429" not in str(exc) else 24)
-                domain_row.error_count += 1
-                domain_row.status = "attention"
-                self.metrics["errors"] += 1
-                self.metrics["stale_or_error_pages"] += 1
-                if frontier.canonical_url in self.listing_detail_links_queued:
-                    self.metrics["detail_links_fetch_failed"] += 1
-                if "larger than the configured fetch limit" in str(exc):
-                    self.metrics["pages_blocked"] += 1
-            except Exception as exc:
-                frontier.status = "failed"
-                frontier.error_code = "UNEXPECTED"
-                frontier.error_message = str(exc)
-                frontier.retry_count += 1
-                frontier.next_fetch_at = _now() + timedelta(hours=24)
-                domain_row.error_count += 1
-                domain_row.status = "attention"
-                self.metrics["errors"] += 1
-                self.metrics["stale_or_error_pages"] += 1
-                if frontier.canonical_url in self.listing_detail_links_queued:
-                    self.metrics["detail_links_fetch_failed"] += 1
-            self.db.flush()
-            if len(self.visited_domains) >= self._max_domains_per_run():
-                break
-        metrics = {
-            **self.metrics,
-            "domains_visited": len(self.visited_domains),
-            "duration_seconds": int((_now() - self.started_at).total_seconds()),
-            "status": "completed",
-        }
-        return discoveries, metrics
+                if robots.parser and not robots.parser.can_fetch(settings.AUGMIS_WEB_DISCOVERY_USER_AGENT, frontier.canonical_url):
+                    frontier.status = "robots_denied"
+                    frontier.error_code = "ROBOTS_DENIED"
+                    frontier.error_message = _diagnostic_message("ROBOTS_DENIED")
+                    frontier.diagnostic_json = {
+                        "error_code": "ROBOTS_DENIED",
+                        "error_message": frontier.error_message,
+                        "http_status": None,
+                        "final_url": frontier.canonical_url,
+                        "redirect_count": 0,
+                        "content_type": None,
+                        "response_bytes": None,
+                        "exception_class": None,
+                        "attempted_at": _now().isoformat(),
+                        "retryable": False,
+                        "server": None,
+                        "retry_after": None,
+                    }
+                    frontier.next_fetch_at = None
+                    domain_row.robots_status = "denied"
+                    self.metrics["robots_denied"] += 1
+                    if frontier.canonical_url in self.listing_detail_links_queued:
+                        self.metrics["detail_links_robots_denied"] += 1
+                    self.db.flush()
+                    continue
+                frontier.status = "fetching"
+                frontier.last_attempted_at = _now()
+                self.metrics["pages_attempted"] += 1
+                detail_link_queued = frontier.canonical_url in self.listing_detail_links_queued
+                session_bound_reasons = _session_bound_url_reasons(frontier.canonical_url)
+                if session_bound_reasons:
+                    _apply_frontier_failure(
+                        frontier,
+                        diagnostic={
+                            "error_code": "SESSION_BOUND_URL",
+                            "error_message": "URL appears bound to a transient public session and will not be retried as a durable link.",
+                            "http_status": None,
+                            "final_url": frontier.canonical_url,
+                            "redirect_count": 0,
+                            "content_type": None,
+                            "response_bytes": None,
+                            "exception_class": None,
+                            "attempted_at": _now().isoformat(),
+                            "retryable": False,
+                            "server": None,
+                            "retry_after": None,
+                            "session_bound_reasons": session_bound_reasons,
+                        },
+                        domain_row=domain_row,
+                        metrics=self.metrics,
+                        detail_link_queued=detail_link_queued,
+                    )
+                    self.db.flush()
+                    continue
+                try:
+                    result = fetch_public_webpage(
+                        frontier.canonical_url,
+                        policy=self.policy,
+                        session=self._session_for_domain(frontier.domain),
+                        referer=_same_origin_referer(frontier.parent_url, frontier.canonical_url),
+                    )
+                    html = str(result.get("body") or "")
+                    frontier.http_status = int(result.get("status_code") or 200)
+                    frontier.last_fetched_at = _now()
+                    frontier.status = "fetched"
+                    frontier.error_code = None
+                    frontier.error_message = None
+                    frontier.diagnostic_json = {
+                        "error_code": None,
+                        "error_message": None,
+                        "http_status": frontier.http_status,
+                        "final_url": result.get("final_url") or result.get("url") or frontier.canonical_url,
+                        "redirect_count": int(result.get("redirect_count") or 0),
+                        "redirect_chain": list(result.get("redirect_chain") or [])[:8],
+                        "content_type": result.get("content_type"),
+                        "response_bytes": result.get("response_bytes") or result.get("bytes_read"),
+                        "exception_class": None,
+                        "attempted_at": frontier.last_fetched_at.isoformat(),
+                        "retryable": False,
+                        "server": result.get("server"),
+                        "retry_after": result.get("retry_after"),
+                        "dns_result": list(result.get("dns_result") or [])[:8],
+                    }
+                    frontier.next_fetch_at = None
+                    domain_row.last_crawl_at = frontier.last_fetched_at
+                    domain_row.status = "ready"
+                    self.visited_domains.add(frontier.domain)
+                    self.metrics["pages_fetched"] += 1
+                    parsed = _extract_parsed_page(str(result.get("url") or frontier.canonical_url), html, self.policy)
+                    if parsed.page_type in {"procurement_list"}:
+                        self.metrics["listing_pages"] += 1
+                        self.metrics["opportunity_like_pages"] += 1
+                    elif parsed.page_type in {"procurement_detail", "tender", "rfp", "rfq", "eoi"}:
+                        self.metrics["detail_pages"] += 1
+                        self.metrics["opportunity_like_pages"] += 1
+                    elif parsed.page_type in {"stale_session", "dynamic_content_only"}:
+                        self.metrics["stale_or_error_pages"] += 1
+                        if parsed.page_type == "dynamic_content_only":
+                            self.metrics["dynamic_content_only_pages"] += 1
+                    elif parsed.page_type == "unknown":
+                        self.metrics["unknown_pages"] += 1
+                    content_hash = _content_hash(parsed.text)
+                    candidate, candidate_diagnostics = _build_candidate(parsed, search_profile=self.search_profile, seed=seed)
+                    visibility_key = "eligible" if candidate_diagnostics.get("eligible") else "excluded"
+                    self.metrics["candidate_visibility_counts"][visibility_key] = int(
+                        self.metrics["candidate_visibility_counts"].get(visibility_key, 0)
+                    ) + 1
+                    if not candidate_diagnostics.get("eligible"):
+                        for code in candidate_diagnostics.get("reason_codes") or []:
+                            self.metrics["candidate_exclusion_reason_counts"][code] = int(
+                                self.metrics["candidate_exclusion_reason_counts"].get(code, 0)
+                            ) + 1
+                    if candidate:
+                        discoveries.append(candidate)
+                        domain_row.opportunities_found += 1
+                        self.metrics["opportunity_candidates"] += 1
+                        self.metrics["contacts_found"] += len(parsed.contact_routes)
+                    domain_row.pages_indexed += 1
+                    self.metrics["classification_counts"][parsed.page_type] = int(self.metrics["classification_counts"].get(parsed.page_type, 0)) + 1
+                    self._store_page(
+                        frontier=frontier,
+                        domain_row=domain_row,
+                        parsed=parsed,
+                        content_hash=content_hash,
+                        candidate=candidate,
+                        candidate_diagnostics=candidate_diagnostics,
+                    )
+                    self._discover_links(frontier=frontier, parsed=parsed, seed=seed)
+                    if seed:
+                        seed.last_crawled_at = _now()
+                        seed.next_crawl_at = _now() + timedelta(hours=_seed_recheck_interval_hours(seed))
+                    domain_row.next_crawl_at = _now() + timedelta(hours=_page_recheck_interval_hours(parsed.page_type))
+                except SafeWebFetchError as exc:
+                    diagnostic = exc.to_diagnostic()
+                    _apply_frontier_failure(
+                        frontier,
+                        diagnostic=diagnostic,
+                        domain_row=domain_row,
+                        metrics=self.metrics,
+                        detail_link_queued=detail_link_queued,
+                    )
+                    if frontier.error_code == "BODY_TOO_LARGE":
+                        self.metrics["pages_blocked"] += 1
+                except Exception as exc:
+                    _apply_frontier_failure(
+                        frontier,
+                        diagnostic={
+                            "error_code": "UNKNOWN_FETCH_ERROR",
+                            "error_message": "Unexpected fetch failure.",
+                            "http_status": None,
+                            "final_url": frontier.canonical_url,
+                            "redirect_count": 0,
+                            "content_type": None,
+                            "response_bytes": None,
+                            "exception_class": type(exc).__name__,
+                            "attempted_at": _now().isoformat(),
+                            "retryable": False,
+                            "server": None,
+                            "retry_after": None,
+                        },
+                        domain_row=domain_row,
+                        metrics=self.metrics,
+                        detail_link_queued=detail_link_queued,
+                    )
+                self.db.flush()
+                if len(self.visited_domains) >= self._max_domains_per_run():
+                    break
+            metrics = {
+                **self.metrics,
+                "domains_visited": len(self.visited_domains),
+                "duration_seconds": int((_now() - self.started_at).total_seconds()),
+                "status": "completed",
+            }
+            return discoveries, metrics
+        finally:
+            self._close_sessions()

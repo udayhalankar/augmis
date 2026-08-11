@@ -42,6 +42,7 @@ from app.models.augmis_business_models import (
     AugmisBusinessTaskCompleteRequest,
     AugmisBusinessTaskCreateRequest,
     AugmisBusinessTaskUpdateRequest,
+    AugmisBusinessWebFetchTestRequest,
     AugmisBusinessWebDomainUpdateRequest,
     AugmisBusinessWebSeedCreateRequest,
     AugmisBusinessWebSeedUpdateRequest,
@@ -103,6 +104,7 @@ from app.services.augmis_business_independent_discovery_service import (
     list_web_pages,
     list_web_seeds,
     recrawl_web_domain,
+    test_web_fetch_url,
     update_web_domain,
     update_web_seed,
 )
@@ -371,6 +373,23 @@ def get_augmis_business_web_pages(
         page=page,
         page_size=page_size,
         search=search,
+    )
+
+
+@router.post("/connectors/{connector_id}/web-fetch-test")
+def test_augmis_business_web_fetch_url(
+    connector_id: str,
+    payload: AugmisBusinessWebFetchTestRequest,
+    current_user: dict = Depends(
+        require_saas_access("augmis_business", "business_development:scan")
+    ),
+    db: Session = Depends(get_db),
+):
+    return test_web_fetch_url(
+        db,
+        current_user["tenant_id"],
+        connector_id,
+        payload,
     )
 
 
