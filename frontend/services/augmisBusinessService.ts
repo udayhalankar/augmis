@@ -1984,7 +1984,7 @@ export async function testAugmisBusinessConnectorCredential(
 
 export async function scanAugmisBusinessConnector(
   connectorId: string,
-  payload: { run_type?: string } = {}
+  payload: { run_type?: string; crawl_engine?: "augmis_native" | "scrapy" } = {}
 ) {
   const response = await apiClient.post(
     `/api/augmis-business/connectors/${encodeURIComponent(connectorId)}/scan`,
@@ -2016,6 +2016,29 @@ export async function listAugmisBusinessConnectorRuns(
       page_size: number;
       total: number;
       total_pages: number;
+    };
+  };
+}
+
+export async function getAugmisBusinessConnectorRun(connectorId: string, runId: string) {
+  const response = await apiClient.get(
+    `/api/augmis-business/connectors/${encodeURIComponent(connectorId)}/runs/${encodeURIComponent(runId)}`
+  );
+  return response.data as {
+    success: boolean;
+    data: AugmisBusinessConnectorRun;
+  };
+}
+
+export async function stopAugmisBusinessConnectorRun(connectorId: string, runId: string) {
+  const response = await apiClient.post(
+    `/api/augmis-business/connectors/${encodeURIComponent(connectorId)}/runs/${encodeURIComponent(runId)}/stop`
+  );
+  return response.data as {
+    success: boolean;
+    data: {
+      connector: AugmisBusinessConnector;
+      run: AugmisBusinessConnectorRun;
     };
   };
 }

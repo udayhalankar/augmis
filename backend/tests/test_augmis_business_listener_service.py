@@ -305,6 +305,104 @@ class AugmisBusinessListenerServiceTest(unittest.TestCase):
             )
         self.assertIn("already in progress", str(exc.exception))
 
+    def test_manual_independent_scan_starts_with_queued_run_and_readable_progress_row(self):
+        connector = service.ensure_independent_web_connector(self.db, "TENANT-1", self.current_user)
+
+        result = service.start_connector_scan(
+            self.db,
+            "TENANT-1",
+            connector.id,
+            self.current_user,
+            AugmisBusinessConnectorScanRequest(run_type="manual"),
+        )["data"]
+
+        self.assertEqual(result["run"]["status"], "queued")
+        self.assertEqual(result["run"]["run_metadata_json"]["stage"], "PREPARING")
+        self.assertEqual(result["connector"]["active_run_id"], result["run"]["id"])
+        fetched = service.get_connector_run(self.db, "TENANT-1", connector.id, result["run"]["id"])["data"]
+        self.assertEqual(fetched["id"], result["run"]["id"])
+        self.assertEqual(fetched["run_metadata_json"]["stage_label"], "Preparing scan")
+        self.assertEqual(fetched["run_metadata_json"]["crawl_engine"], "augmis_native")
+        self.assertEqual(fetched["run_metadata_json"]["crawl_engine_display"], "AUGMIS Native")
+        self.assertEqual(fetched["run_metadata_json"]["max_html_response_bytes"], 2000000)
+
+    def test_manual_independent_scan_can_store_scrapy_engine_override_in_run_metadata(self):
+        connector = service.ensure_independent_web_connector(self.db, "TENANT-1", self.current_user)
+
+        result = service.start_connector_scan(
+            self.db,
+            "TENANT-1",
+            connector.id,
+            self.current_user,
+            AugmisBusinessConnectorScanRequest(run_type="manual", crawl_engine="scrapy"),
+        )["data"]
+
+        self.assertEqual(result["run"]["run_metadata_json"]["crawl_engine"], "scrapy")
+        self.assertEqual(result["run"]["run_metadata_json"]["crawl_engine_display"], "Scrapy")
+
+    def test_independent_connector_defaults_include_shared_html_response_limit(self):
+        connector = service.ensure_independent_web_connector(self.db, "TENANT-1", self.current_user)
+        self.assertEqual(connector.configuration_json["max_html_response_bytes"], 2000000)
+
+    def test_stop_connector_run_cancels_active_independent_scan(self):
+        connector = service.ensure_independent_web_connector(self.db, "TENANT-1", self.current_user)
+        started = service.start_connector_scan(
+            self.db,
+            "TENANT-1",
+            connector.id,
+            self.current_user,
+            AugmisBusinessConnectorScanRequest(run_type="manual"),
+        )["data"]
+
+        stopped = service.stop_connector_run(
+            self.db,
+            "TENANT-1",
+            connector.id,
+            started["run"]["id"],
+            self.current_user,
+        )["data"]
+
+        self.assertEqual(stopped["run"]["status"], "cancelled")
+        self.assertEqual(stopped["run"]["run_metadata_json"]["stage"], "STOPPED")
+        self.assertIsNone(stopped["connector"]["active_run_id"])
+        self.assertEqual(stopped["connector"]["status"], "ready")
+
+    @patch("app.services.augmis_business_listener_service._execute_scrapy_independent_scan")
+    def test_scrapy_engine_branch_uses_shared_ingestion_path(self, mock_execute_scrapy):
+        connector = service.ensure_independent_web_connector(self.db, "TENANT-1", self.current_user)
+        candidate = self._make_independent_candidate(
+            title="Request for Proposal — Workflow Platform Modernisation",
+            summary="Authority invites proposals for workflow automation, records management, and dashboard implementation. Submit through the official portal.",
+            organization_name="Example Authority",
+            closing_date=datetime(2026, 9, 1, 12, 0, 0, tzinfo=timezone.utc),
+            reference_number="RFP-2026-200",
+            application_url="https://buyer.example/portal/rfp-2026-200/submit",
+        )
+        mock_execute_scrapy.return_value = (
+            [candidate],
+            {
+                "provider": "augmis_internal",
+                "crawl_engine": "scrapy",
+                "crawl_engine_display": "Scrapy",
+                "pages_attempted": 3,
+                "pages_fetched": 2,
+            },
+        )
+
+        result = service.run_connector_scan(
+            self.db,
+            "TENANT-1",
+            connector.id,
+            self.current_user,
+            AugmisBusinessConnectorScanRequest(run_type="manual", crawl_engine="scrapy"),
+        )["data"]
+
+        self.assertEqual(result["run"]["status"], "completed")
+        self.assertEqual(result["run"]["run_metadata_json"]["crawl_engine"], "scrapy")
+        self.assertEqual(result["run"]["run_metadata_json"]["crawl_engine_display"], "Scrapy")
+        self.assertEqual(result["run"]["items_found"], 1)
+        self.assertEqual(len(result["discoveries"]), 1)
+
     def test_import_discovery_creates_opportunity_and_blocks_repeat(self):
         connector = service.ensure_fixture_connector(self.db, "TENANT-1", self.current_user)
         service.run_connector_scan(
@@ -1240,7 +1338,7 @@ class AugmisBusinessListenerServiceTest(unittest.TestCase):
         implementation.validate_config(connector.configuration_json)
         policy = service._effective_web_search_runtime_policy(connector.configuration_json)
 
-        self.assertEqual(policy.max_fetch_bytes, 300000)
+        self.assertEqual(policy.max_fetch_bytes, 900000)
         self.assertEqual(policy.fetch_timeout_seconds, 15)
         self.assertEqual(policy.max_extracted_text_chars, 30000)
         self.assertEqual(policy.max_redirects, 3)

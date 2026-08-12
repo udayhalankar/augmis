@@ -4,9 +4,10 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from html.parser import HTMLParser
+from pathlib import Path
 import re
 import time
-from typing import Any
+from typing import Any, Callable
 from urllib import robotparser
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 from xml.etree import ElementTree
@@ -17,8 +18,10 @@ from sqlalchemy import asc, desc, func
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.database import SessionLocal
 from app.db_models import (
     BusinessDevelopmentConnector,
+    BusinessDevelopmentConnectorRun,
     BusinessDevelopmentSearchProfile,
     BusinessDevelopmentWebDomain,
     BusinessDevelopmentWebFrontier,
@@ -36,9 +39,12 @@ from app.services.audit_service import create_audit_log
 from app.services.augmis_business_web_fetcher import (
     SafeWebFetchError,
     WebFetchRuntimePolicy,
+    classify_resource_content_type,
+    content_length_from_headers,
     extract_text_from_webpage,
     fetch_public_text_resource,
     fetch_public_webpage,
+    normalize_content_type,
     validate_public_http_url,
 )
 
@@ -48,6 +54,12 @@ _sleep = time.sleep
 INDEPENDENT_WEB_CONNECTOR_TYPE = "independent_web_discovery"
 INDEPENDENT_WEB_CONNECTOR_NAME = "AUGMIS Independent Web Discovery"
 INDEPENDENT_WEB_SOURCE_NAME = "AUGMIS Web"
+CRAWL_ENGINE_AUGMIS_NATIVE = "augmis_native"
+CRAWL_ENGINE_SCRAPY = "scrapy"
+CRAWL_ENGINE_LABELS = {
+    CRAWL_ENGINE_AUGMIS_NATIVE: "AUGMIS Native",
+    CRAWL_ENGINE_SCRAPY: "Scrapy",
+}
 TRACKING_QUERY_PREFIXES = ("utm_", "fbclid", "gclid", "mc_", "ref", "source")
 TRUSTED_PORTAL_TERMS = (
     "procurement",
@@ -211,10 +223,27 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def normalize_crawl_engine(value: str | None) -> str:
+    normalized = str(value or CRAWL_ENGINE_AUGMIS_NATIVE).strip().lower()
+    if normalized not in CRAWL_ENGINE_LABELS:
+        return CRAWL_ENGINE_AUGMIS_NATIVE
+    return normalized
+
+
+def crawl_engine_display(value: str | None) -> str:
+    return CRAWL_ENGINE_LABELS[normalize_crawl_engine(value)]
+
+
+def connector_crawl_engine(config: dict[str, Any] | None, override: str | None = None) -> str:
+    if override:
+        return normalize_crawl_engine(override)
+    return normalize_crawl_engine((config or {}).get("crawl_engine"))
+
+
 def _clean_text(value: str | None) -> str | None:
     if value is None:
         return None
-    cleaned = re.sub(r"\s+", " ", value).strip()
+    cleaned = re.sub(r"\s+", " ", value.replace("\x00", "")).strip()
     return cleaned or None
 
 
@@ -326,7 +355,20 @@ def _diagnostic_message(code: str) -> str:
     return {
         "ROBOTS_DENIED": "Robots policy denied this URL.",
         "SESSION_BOUND_URL": "URL appears bound to a transient public session and will not be retried as a durable link.",
+        "ATTACHMENT_SKIPPED": "Attachment skipped because it is not parsed as HTML in this phase.",
     }.get(code, code.replace("_", " ").title())
+
+
+def _configured_max_html_response_bytes(config: dict[str, Any]) -> int:
+    configured = config.get("max_html_response_bytes")
+    legacy = config.get("max_fetch_bytes")
+    if configured is None:
+        configured = legacy if int(legacy or 0) > settings.AUGMIS_WEB_DISCOVERY_DEFAULT_MAX_HTML_RESPONSE_BYTES else settings.AUGMIS_WEB_DISCOVERY_DEFAULT_MAX_HTML_RESPONSE_BYTES
+    return _clamp(
+        int(configured or settings.AUGMIS_WEB_DISCOVERY_DEFAULT_MAX_HTML_RESPONSE_BYTES),
+        500_000,
+        settings.AUGMIS_WEB_DISCOVERY_MAX_HTML_RESPONSE_BYTES,
+    )
 
 
 def _record_failure_metric(
@@ -351,9 +393,52 @@ def _record_failure_metric(
                 "retryable": bool(diagnostic.get("retryable")),
                 "http_status": diagnostic.get("http_status"),
                 "message": diagnostic.get("error_message") or frontier.error_message,
+                "content_type": diagnostic.get("content_type"),
+                "content_length": diagnostic.get("content_length"),
+                "response_bytes": diagnostic.get("response_bytes"),
+                "limit_bytes": diagnostic.get("limit_bytes"),
+                "resource_kind": diagnostic.get("resource_kind"),
+                "engine": diagnostic.get("engine"),
             }
         )
     metrics["fetch_failure_samples"] = samples[-24:]
+
+
+def _record_skip_metric(
+    metrics: dict[str, Any],
+    *,
+    frontier: BusinessDevelopmentWebFrontier,
+    diagnostic: dict[str, Any],
+) -> None:
+    code = str(diagnostic.get("error_code") or frontier.error_code or "SKIPPED")
+    counts = dict(metrics.get("skip_reason_counts") or {})
+    counts[code] = int(counts.get(code, 0) or 0) + 1
+    metrics["skip_reason_counts"] = counts
+    if code == "ATTACHMENT_SKIPPED":
+        metrics["attachments_skipped"] = int(metrics.get("attachments_skipped", 0) or 0) + 1
+    if code == "BODY_TOO_LARGE":
+        metrics["oversized_html_skipped"] = int(metrics.get("oversized_html_skipped", 0) or 0) + 1
+        metrics["pages_blocked"] = int(metrics.get("pages_blocked", 0) or 0) + 1
+    samples = list(metrics.get("skip_samples") or [])
+    if len([item for item in samples if item.get("error_code") == code]) < 5:
+        samples.append(
+            {
+                "error_code": code,
+                "url": frontier.canonical_url,
+                "domain": frontier.domain,
+                "depth": frontier.depth,
+                "parent_url": frontier.parent_url,
+                "http_status": diagnostic.get("http_status"),
+                "message": diagnostic.get("error_message") or frontier.error_message,
+                "content_type": diagnostic.get("content_type"),
+                "content_length": diagnostic.get("content_length"),
+                "response_bytes": diagnostic.get("response_bytes"),
+                "limit_bytes": diagnostic.get("limit_bytes"),
+                "resource_kind": diagnostic.get("resource_kind"),
+                "engine": diagnostic.get("engine"),
+            }
+        )
+    metrics["skip_samples"] = samples[-24:]
 
 
 def _retry_delay_for_diagnostic(diagnostic: dict[str, Any], *, attempt_number: int) -> timedelta | None:
@@ -397,6 +482,26 @@ def _apply_frontier_failure(
         metrics["detail_links_fetch_failed"] += 1
 
 
+def _apply_frontier_skip(
+    frontier: BusinessDevelopmentWebFrontier,
+    *,
+    diagnostic: dict[str, Any],
+    domain_row: BusinessDevelopmentWebDomain,
+    metrics: dict[str, Any],
+) -> None:
+    frontier.status = "skipped"
+    frontier.error_code = str(diagnostic.get("error_code") or "SKIPPED")
+    frontier.error_message = str(diagnostic.get("error_message") or _diagnostic_message(frontier.error_code))
+    frontier.http_status = int(diagnostic.get("http_status")) if diagnostic.get("http_status") is not None else None
+    frontier.diagnostic_json = diagnostic
+    frontier.next_fetch_at = None
+    frontier.last_fetched_at = _now()
+    domain_row.last_crawl_at = frontier.last_fetched_at
+    if domain_row.status != "attention":
+        domain_row.status = "ready"
+    _record_skip_metric(metrics, frontier=frontier, diagnostic=diagnostic)
+
+
 def _allowed_domain_mode(config: dict[str, Any]) -> str:
     return str(config.get("allowed_domain_mode", "approved_only") or "approved_only").strip().lower()
 
@@ -404,11 +509,7 @@ def _allowed_domain_mode(config: dict[str, Any]) -> str:
 def _runtime_policy(config: dict[str, Any]) -> WebFetchRuntimePolicy:
     return WebFetchRuntimePolicy(
         fetch_source_page=True,
-        max_fetch_bytes=_clamp(
-            int(config.get("max_fetch_bytes", settings.AUGMIS_WEB_FETCH_MAX_BYTES) or settings.AUGMIS_WEB_FETCH_MAX_BYTES),
-            25_000,
-            settings.AUGMIS_WEB_FETCH_MAX_BYTES,
-        ),
+        max_fetch_bytes=_configured_max_html_response_bytes(config),
         fetch_timeout_seconds=_clamp(
             int(config.get("request_timeout_seconds", settings.AUGMIS_WEB_FETCH_TIMEOUT_SECONDS) or settings.AUGMIS_WEB_FETCH_TIMEOUT_SECONDS),
             3,
@@ -514,6 +615,18 @@ class PageParseResult:
     contact_routes: list[dict[str, Any]]
     application_url: str | None
     reference_number: str | None
+
+
+@dataclass
+class CrawlPageContext:
+    url: str
+    canonical_url: str
+    domain: str
+    parent_url: str | None
+    depth: int
+    seed_id: str | None
+    status: str
+    http_status: int | None = None
 
 
 @dataclass
@@ -769,9 +882,10 @@ def _extract_contact_routes(canonical_url: str, text: str, links: list[dict[str,
 
 
 def _extract_parsed_page(final_url: str, html: str, policy: WebFetchRuntimePolicy) -> PageParseResult:
+    sanitized_html = html.replace("\x00", "")
     extractor = LinkExtractor()
-    extractor.feed(html)
-    text = extract_text_from_webpage(html, max_chars=policy.max_extracted_text_chars)
+    extractor.feed(sanitized_html)
+    text = extract_text_from_webpage(sanitized_html, max_chars=policy.max_extracted_text_chars)
     title = _clean_text(extractor.title or extractor.meta.get("og:title") or extractor.h1)
     canonical_url, domain = canonicalize_url(final_url)
     page_type, reasons = _page_type(title, canonical_url, text, extractor.meta)
@@ -799,7 +913,7 @@ def _extract_parsed_page(final_url: str, html: str, policy: WebFetchRuntimePolic
         title=title,
         h1=extractor.h1,
         text=text,
-        html=html[: min(len(html), 80_000)],
+        html=sanitized_html[: min(len(sanitized_html), 80_000)],
         links=links,
         meta=extractor.meta,
         page_type=page_type,
@@ -1614,10 +1728,12 @@ class IndependentWebDiscoveryEngine:
         db: Session,
         connector: BusinessDevelopmentConnector,
         search_profile: BusinessDevelopmentSearchProfile | None,
+        progress_callback: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self.db = db
         self.connector = connector
         self.search_profile = search_profile
+        self.progress_callback = progress_callback
         self.config = dict(connector.configuration_json or {})
         self.policy = _runtime_policy(self.config)
         self.started_at = _now()
@@ -1632,6 +1748,8 @@ class IndependentWebDiscoveryEngine:
             "pages_changed": 0,
             "robots_denied": 0,
             "pages_blocked": 0,
+            "attachments_skipped": 0,
+            "oversized_html_skipped": 0,
             "opportunity_candidates": 0,
             "opportunity_like_pages": 0,
             "detail_pages": 0,
@@ -1646,6 +1764,8 @@ class IndependentWebDiscoveryEngine:
             "classification_counts": {},
             "candidate_visibility_counts": {},
             "candidate_exclusion_reason_counts": {},
+            "skip_reason_counts": {},
+            "skip_samples": [],
             "fetch_failure_counts": {},
             "fetch_failure_samples": [],
             "detail_links_discovered": 0,
@@ -1665,6 +1785,31 @@ class IndependentWebDiscoveryEngine:
         self.http_sessions: dict[str, requests.Session] = {}
         self.session_initialized_domains: set[str] = set()
         self.robots_policy_cache: dict[str, RobotsPolicy] = {}
+
+    def _emit_progress(self, stage: str, **extra: Any) -> None:
+        if self.progress_callback is None:
+            return
+        pending_frontier_count, _ = self._pending_frontier_summary()
+        snapshot = {
+            "stage": stage,
+            "seeds_processed": self.metrics.get("seeds_processed", 0),
+            "domains_visited": len(self.visited_domains),
+            "urls_queued": self.metrics.get("urls_queued", 0),
+            "pending_frontier_count": pending_frontier_count,
+            "pages_attempted": self.metrics.get("pages_attempted", 0),
+            "pages_fetched": self.metrics.get("pages_fetched", 0),
+            "listing_pages": self.metrics.get("listing_pages", 0),
+            "detail_pages": self.metrics.get("detail_pages", 0),
+            "unknown_pages": self.metrics.get("unknown_pages", 0),
+            "stale_or_error_pages": self.metrics.get("stale_or_error_pages", 0),
+            "opportunity_candidates": self.metrics.get("opportunity_candidates", 0),
+            "contacts_found": self.metrics.get("contacts_found", 0),
+            "errors": self.metrics.get("errors", 0),
+            "attachments_skipped": self.metrics.get("attachments_skipped", 0),
+            "oversized_html_skipped": self.metrics.get("oversized_html_skipped", 0),
+            **extra,
+        }
+        self.progress_callback(snapshot)
 
     def _session_for_domain(self, domain: str) -> requests.Session:
         session = self.http_sessions.get(domain)
@@ -1973,7 +2118,7 @@ class IndependentWebDiscoveryEngine:
     def _store_page(
         self,
         *,
-        frontier: BusinessDevelopmentWebFrontier,
+        frontier: CrawlPageContext | BusinessDevelopmentWebFrontier,
         domain_row: BusinessDevelopmentWebDomain,
         parsed: PageParseResult,
         content_hash: str | None,
@@ -2035,10 +2180,89 @@ class IndependentWebDiscoveryEngine:
         else:
             self.metrics["pages_unchanged"] += 1
 
+    def _process_fetched_page(
+        self,
+        *,
+        frontier: CrawlPageContext | BusinessDevelopmentWebFrontier,
+        domain_row: BusinessDevelopmentWebDomain,
+        seed: BusinessDevelopmentWebSeed | None,
+        fetch_result: dict[str, Any],
+        html: str,
+        discoveries: list[AugmisBusinessDiscoveredOpportunityCandidate],
+        discover_links: bool,
+    ) -> PageParseResult:
+        parsed = _extract_parsed_page(str(fetch_result.get("url") or frontier.canonical_url), html, self.policy)
+        if parsed.page_type in {"procurement_list"}:
+            self.metrics["listing_pages"] += 1
+            self.metrics["opportunity_like_pages"] += 1
+            self._emit_progress(
+                "FOLLOWING_LISTINGS",
+                stage_label="Following procurement listings",
+                current_domain=frontier.domain,
+                current_url=parsed.canonical_url,
+                current_depth=frontier.depth,
+            )
+        elif parsed.page_type in {"procurement_detail", "tender", "rfp", "rfq", "eoi"}:
+            self.metrics["detail_pages"] += 1
+            self.metrics["opportunity_like_pages"] += 1
+            self._emit_progress(
+                "EXTRACTING",
+                stage_label="Extracting opportunity signals",
+                current_domain=frontier.domain,
+                current_url=parsed.canonical_url,
+                current_depth=frontier.depth,
+            )
+        elif parsed.page_type in {"stale_session", "dynamic_content_only"}:
+            self.metrics["stale_or_error_pages"] += 1
+            if parsed.page_type == "dynamic_content_only":
+                self.metrics["dynamic_content_only_pages"] += 1
+        elif parsed.page_type == "unknown":
+            self.metrics["unknown_pages"] += 1
+        content_hash = _content_hash(parsed.text)
+        candidate, candidate_diagnostics = _build_candidate(parsed, search_profile=self.search_profile, seed=seed)
+        visibility_key = "eligible" if candidate_diagnostics.get("eligible") else "excluded"
+        self.metrics["candidate_visibility_counts"][visibility_key] = int(
+            self.metrics["candidate_visibility_counts"].get(visibility_key, 0)
+        ) + 1
+        if not candidate_diagnostics.get("eligible"):
+            for code in candidate_diagnostics.get("reason_codes") or []:
+                self.metrics["candidate_exclusion_reason_counts"][code] = int(
+                    self.metrics["candidate_exclusion_reason_counts"].get(code, 0)
+                ) + 1
+        if candidate:
+            discoveries.append(candidate)
+            domain_row.opportunities_found += 1
+            self.metrics["opportunity_candidates"] += 1
+            self.metrics["contacts_found"] += len(parsed.contact_routes)
+            self._emit_progress(
+                "VALIDATING",
+                stage_label="Validating candidates",
+                current_domain=frontier.domain,
+                current_url=parsed.canonical_url,
+                current_depth=frontier.depth,
+            )
+        domain_row.pages_indexed += 1
+        self.metrics["classification_counts"][parsed.page_type] = int(self.metrics["classification_counts"].get(parsed.page_type, 0)) + 1
+        self._store_page(
+            frontier=frontier,
+            domain_row=domain_row,
+            parsed=parsed,
+            content_hash=content_hash,
+            candidate=candidate,
+            candidate_diagnostics=candidate_diagnostics,
+        )
+        if discover_links:
+            self._discover_links(frontier=frontier, parsed=parsed, seed=seed)
+        if seed:
+            seed.last_crawled_at = _now()
+            seed.next_crawl_at = _now() + timedelta(hours=_seed_recheck_interval_hours(seed))
+        domain_row.next_crawl_at = _now() + timedelta(hours=_page_recheck_interval_hours(parsed.page_type))
+        return parsed
+
     def _discover_links(
         self,
         *,
-        frontier: BusinessDevelopmentWebFrontier,
+        frontier: CrawlPageContext | BusinessDevelopmentWebFrontier,
         parsed: PageParseResult,
         seed: BusinessDevelopmentWebSeed | None,
     ) -> None:
@@ -2128,6 +2352,7 @@ class IndependentWebDiscoveryEngine:
 
     def run(self) -> tuple[list[AugmisBusinessDiscoveredOpportunityCandidate], dict[str, Any]]:
         self.validate_config()
+        self._emit_progress("PREPARING", stage_label="Preparing scan")
         seeds = self._seed_rows()
         if not seeds:
             return [], {**self.metrics, "status": "no_seeds"}
@@ -2140,6 +2365,7 @@ class IndependentWebDiscoveryEngine:
             seeded_due_work = True
             self._seed_frontier(seed)
         self.db.flush()
+        self._emit_progress("ROBOTS_AND_FRONTIER", stage_label="Preparing robots and frontier")
         discoveries: list[AugmisBusinessDiscoveredOpportunityCandidate] = []
         stop_reason = "frontier_exhausted"
         try:
@@ -2162,6 +2388,13 @@ class IndependentWebDiscoveryEngine:
                 frontier = selection.frontier
                 seed = self.seed_by_id.get(frontier.seed_id) if frontier.seed_id else None
                 domain_row, robots = self._robots_policy_for_frontier(frontier=frontier, seed=seed)
+                self._emit_progress(
+                    "FETCHING",
+                    stage_label="Fetching pages",
+                    current_domain=frontier.domain,
+                    current_url=frontier.canonical_url,
+                    current_depth=frontier.depth,
+                )
                 if robots.parser and not robots.parser.can_fetch(settings.AUGMIS_WEB_DISCOVERY_USER_AGENT, frontier.canonical_url):
                     frontier.status = "robots_denied"
                     frontier.error_code = "ROBOTS_DENIED"
@@ -2223,63 +2456,35 @@ class IndependentWebDiscoveryEngine:
                     self.visited_domains.add(frontier.domain)
                     self.pages_fetched_by_domain[frontier.domain] = int(self.pages_fetched_by_domain.get(frontier.domain, 0)) + 1
                     self.metrics["pages_fetched"] += 1
-                    parsed = _extract_parsed_page(str(result.get("url") or frontier.canonical_url), html, self.policy)
-                    if parsed.page_type in {"procurement_list"}:
-                        self.metrics["listing_pages"] += 1
-                        self.metrics["opportunity_like_pages"] += 1
-                    elif parsed.page_type in {"procurement_detail", "tender", "rfp", "rfq", "eoi"}:
-                        self.metrics["detail_pages"] += 1
-                        self.metrics["opportunity_like_pages"] += 1
-                    elif parsed.page_type in {"stale_session", "dynamic_content_only"}:
-                        self.metrics["stale_or_error_pages"] += 1
-                        if parsed.page_type == "dynamic_content_only":
-                            self.metrics["dynamic_content_only_pages"] += 1
-                    elif parsed.page_type == "unknown":
-                        self.metrics["unknown_pages"] += 1
-                    content_hash = _content_hash(parsed.text)
-                    candidate, candidate_diagnostics = _build_candidate(parsed, search_profile=self.search_profile, seed=seed)
-                    visibility_key = "eligible" if candidate_diagnostics.get("eligible") else "excluded"
-                    self.metrics["candidate_visibility_counts"][visibility_key] = int(
-                        self.metrics["candidate_visibility_counts"].get(visibility_key, 0)
-                    ) + 1
-                    if not candidate_diagnostics.get("eligible"):
-                        for code in candidate_diagnostics.get("reason_codes") or []:
-                            self.metrics["candidate_exclusion_reason_counts"][code] = int(
-                                self.metrics["candidate_exclusion_reason_counts"].get(code, 0)
-                            ) + 1
-                    if candidate:
-                        discoveries.append(candidate)
-                        domain_row.opportunities_found += 1
-                        self.metrics["opportunity_candidates"] += 1
-                        self.metrics["contacts_found"] += len(parsed.contact_routes)
-                    domain_row.pages_indexed += 1
-                    self.metrics["classification_counts"][parsed.page_type] = int(self.metrics["classification_counts"].get(parsed.page_type, 0)) + 1
-                    self._store_page(
+                    self._process_fetched_page(
                         frontier=frontier,
                         domain_row=domain_row,
-                        parsed=parsed,
-                        content_hash=content_hash,
-                        candidate=candidate,
-                        candidate_diagnostics=candidate_diagnostics,
+                        seed=seed,
+                        fetch_result=result,
+                        html=html,
+                        discoveries=discoveries,
+                        discover_links=True,
                     )
-                    self._discover_links(frontier=frontier, parsed=parsed, seed=seed)
-                    if seed:
-                        seed.last_crawled_at = _now()
-                        seed.next_crawl_at = _now() + timedelta(hours=_seed_recheck_interval_hours(seed))
-                    domain_row.next_crawl_at = _now() + timedelta(hours=_page_recheck_interval_hours(parsed.page_type))
                 except SafeWebFetchError as exc:
                     diagnostic = exc.to_diagnostic()
+                    diagnostic.setdefault("engine", CRAWL_ENGINE_AUGMIS_NATIVE)
                     if diagnostic.get("error_code") == "SESSION_BOUND_URL":
                         diagnostic["session_bound_reasons"] = _session_bound_url_reasons(frontier.canonical_url)
-                    _apply_frontier_failure(
-                        frontier,
-                        diagnostic=diagnostic,
-                        domain_row=domain_row,
-                        metrics=self.metrics,
-                        detail_link_queued=detail_link_queued,
-                    )
-                    if frontier.error_code == "BODY_TOO_LARGE":
-                        self.metrics["pages_blocked"] += 1
+                    if diagnostic.get("error_code") in {"BODY_TOO_LARGE", "ATTACHMENT_SKIPPED"}:
+                        _apply_frontier_skip(
+                            frontier,
+                            diagnostic=diagnostic,
+                            domain_row=domain_row,
+                            metrics=self.metrics,
+                        )
+                    else:
+                        _apply_frontier_failure(
+                            frontier,
+                            diagnostic=diagnostic,
+                            domain_row=domain_row,
+                            metrics=self.metrics,
+                            detail_link_queued=detail_link_queued,
+                        )
                 except Exception as exc:
                     _apply_frontier_failure(
                         frontier,
@@ -2308,6 +2513,540 @@ class IndependentWebDiscoveryEngine:
                 "duration_seconds": int((_now() - self.started_at).total_seconds()),
                 "status": self._resolve_run_status(stop_reason=stop_reason, seeded_due_work=seeded_due_work),
             }
+            self._emit_progress("FINALIZING", stage_label="Finalizing run", **metrics)
             return discoveries, metrics
         finally:
             self._close_sessions()
+
+
+def run_scrapy_independent_scan(
+    *,
+    tenant_id: str,
+    connector_id: str,
+    run_id: str,
+    stop_file: str | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    from scrapy import Request, signals
+    from scrapy.crawler import CrawlerProcess
+    from scrapy.exceptions import CloseSpider, StopDownload
+    from scrapy.http import Response
+    from scrapy.spiders import Spider
+
+    from app.services import augmis_business_listener_service as listener_service
+
+    def _scrapy_header_value(headers: Any, key: bytes) -> str | None:
+        raw = headers.get(key)
+        if raw is None:
+            return None
+        if isinstance(raw, bytes):
+            return raw.decode("utf-8", "ignore")
+        return str(raw)
+
+    class IndependentWebScrapySpider(Spider):
+        name = "independent_web_discovery"
+        custom_settings = {"LOG_ENABLED": False}
+
+        @classmethod
+        def from_crawler(cls, crawler, *args: Any, **kwargs: Any):
+            spider = super().from_crawler(crawler, *args, **kwargs)
+            crawler.signals.connect(spider._on_headers_received, signal=signals.headers_received)
+            crawler.signals.connect(spider._on_bytes_received, signal=signals.bytes_received)
+            return spider
+
+        def __init__(
+            self,
+            *,
+            engine: IndependentWebDiscoveryEngine,
+            seeds: list[BusinessDevelopmentWebSeed],
+            search_profile: BusinessDevelopmentSearchProfile | None,
+            stop_file_path: str | None,
+            **kwargs: Any,
+        ) -> None:
+            super().__init__(**kwargs)
+            self.engine = engine
+            self.seeds = seeds
+            self.search_profile = search_profile
+            self.stop_file_path = stop_file_path
+            self.discoveries: list[AugmisBusinessDiscoveredOpportunityCandidate] = []
+            self.engine.scrapy_discoveries = self.discoveries  # type: ignore[attr-defined]
+            self.seed_by_id = {seed.id: seed for seed in seeds}
+            self.seen_urls: set[str] = set()
+            self.allowed_new_domains = engine._max_domains_per_run()
+            self.max_total_pages = engine._max_total_pages()
+            self.max_depth = engine._max_depth()
+            self.max_pages_per_domain = engine._max_pages_per_domain()
+            self.run_duration_limit = engine._run_duration_limit()
+
+        def _request_limit(self) -> int:
+            return int(self.engine.policy.max_fetch_bytes or settings.AUGMIS_WEB_DISCOVERY_DEFAULT_MAX_HTML_RESPONSE_BYTES)
+
+        def _on_headers_received(self, headers: Any, body_length: int, request: Request, spider: Spider) -> None:
+            if spider is not self:
+                return
+            content_type = _scrapy_header_value(headers, b"Content-Type")
+            content_length = content_length_from_headers({"Content-Length": _scrapy_header_value(headers, b"Content-Length") or ""})
+            if content_length is None and isinstance(body_length, int) and body_length >= 0:
+                content_length = body_length
+            resource_kind = classify_resource_content_type(content_type)
+            request.meta["augmis_content_type"] = content_type
+            request.meta["augmis_content_length"] = content_length
+            request.meta["augmis_resource_kind"] = resource_kind
+            limit_bytes = self._request_limit()
+            if resource_kind in {"pdf", "image", "attachment"}:
+                request.meta["augmis_stop_diagnostic"] = {
+                    "error_code": "ATTACHMENT_SKIPPED",
+                    "error_message": "Attachment skipped because it is not parsed as HTML in this phase.",
+                    "http_status": None,
+                    "content_type": content_type,
+                    "content_length": content_length,
+                    "response_bytes": 0,
+                    "limit_bytes": limit_bytes,
+                    "resource_kind": resource_kind,
+                    "engine": CRAWL_ENGINE_SCRAPY,
+                    "retryable": False,
+                }
+                raise StopDownload(fail=True)
+            if normalize_content_type(content_type) in {"text/html", "application/xhtml+xml"} and content_length is not None and content_length > limit_bytes:
+                request.meta["augmis_stop_diagnostic"] = {
+                    "error_code": "BODY_TOO_LARGE",
+                    "error_message": "Source page exceeded the configured HTML response size limit.",
+                    "http_status": None,
+                    "content_type": content_type,
+                    "content_length": content_length,
+                    "response_bytes": 0,
+                    "limit_bytes": limit_bytes,
+                    "resource_kind": resource_kind,
+                    "engine": CRAWL_ENGINE_SCRAPY,
+                    "retryable": False,
+                }
+                raise StopDownload(fail=True)
+
+        def _on_bytes_received(self, data: bytes, request: Request, spider: Spider) -> None:
+            if spider is not self or request.meta.get("augmis_stop_diagnostic"):
+                return
+            bytes_received = int(request.meta.get("augmis_bytes_received", 0) or 0) + len(data or b"")
+            request.meta["augmis_bytes_received"] = bytes_received
+            resource_kind = str(request.meta.get("augmis_resource_kind") or "unknown")
+            if resource_kind not in {"html", "unknown"}:
+                return
+            limit_bytes = self._request_limit()
+            if limit_bytes and bytes_received > limit_bytes:
+                request.meta["augmis_stop_diagnostic"] = {
+                    "error_code": "BODY_TOO_LARGE",
+                    "error_message": "Source page exceeded the configured HTML response size limit.",
+                    "http_status": None,
+                    "content_type": request.meta.get("augmis_content_type"),
+                    "content_length": request.meta.get("augmis_content_length"),
+                    "response_bytes": bytes_received,
+                    "limit_bytes": limit_bytes,
+                    "resource_kind": resource_kind,
+                    "engine": CRAWL_ENGINE_SCRAPY,
+                    "retryable": False,
+                }
+                raise StopDownload(fail=True)
+
+        def _check_stop(self) -> None:
+            if self.stop_file_path and Path(self.stop_file_path).exists():
+                raise CloseSpider("stopped")
+            run = (
+                self.engine.db.query(BusinessDevelopmentConnectorRun)
+                .filter(
+                    BusinessDevelopmentConnectorRun.tenant_id == tenant_id,
+                    BusinessDevelopmentConnectorRun.id == run_id,
+                )
+                .first()
+            )
+            if run is not None and run.status == "cancelled":
+                raise CloseSpider("stopped")
+            if (_now() - self.engine.started_at).total_seconds() >= self.run_duration_limit:
+                raise CloseSpider("run_duration_reached")
+
+        def start_requests(self):
+            self.engine._emit_progress("ROBOTS_AND_FRONTIER", stage_label="Preparing robots and frontier")
+            for seed in self.seeds:
+                canonical_url, domain = _as_public_url(seed.seed_url)
+                self.engine.seed_by_id[seed.id] = seed
+                _ensure_domain(
+                    self.engine.db,
+                    tenant_id=self.engine.connector.tenant_id,
+                    connector_id=self.engine.connector.id,
+                    seed=seed,
+                    domain=domain,
+                    source="seed",
+                    found_from_url=canonical_url,
+                    found_context=seed.name,
+                    default_approval="approved",
+                )
+                yield Request(
+                    canonical_url,
+                    callback=self.parse_page,
+                    errback=self.handle_error,
+                    dont_filter=True,
+                    priority=int(seed.priority),
+                    meta={
+                        "seed_id": seed.id,
+                        "parent_url": None,
+                        "crawl_depth": 0,
+                        "download_maxsize": self._request_limit(),
+                        "download_warnsize": self._request_limit(),
+                    },
+                )
+
+        def _followable_links(
+            self,
+            *,
+            parsed: PageParseResult,
+            seed: BusinessDevelopmentWebSeed | None,
+            parent_domain: str,
+            parent_depth: int,
+        ) -> list[dict[str, Any]]:
+            follow_links: list[dict[str, Any]] = []
+            processed = 0
+            for link in parsed.links:
+                href = str(link.get("href") or "").strip()
+                if not href or href.startswith("#") or href.lower().startswith(("mailto:", "tel:", "javascript:", "data:")):
+                    continue
+                absolute = urljoin(parsed.canonical_url, href)
+                try:
+                    canonical_url, target_domain = _as_public_url(absolute)
+                except Exception:
+                    continue
+                if canonical_url in self.seen_urls:
+                    continue
+                detail_link = parsed.page_type == "procurement_list" and _is_likely_detail_link(
+                    canonical_url,
+                    str(link.get("text") or ""),
+                    parsed.title,
+                )
+                if detail_link and canonical_url not in self.engine.listing_detail_links_discovered:
+                    self.engine.listing_detail_links_discovered.add(canonical_url)
+                    self.engine.metrics["detail_links_discovered"] += 1
+                if parent_depth + 1 > min(self.max_depth, seed.max_depth if seed else self.max_depth):
+                    if detail_link:
+                        self.engine.metrics["detail_links_skipped_depth"] += 1
+                    continue
+                same_domain = target_domain == parent_domain
+                if not same_domain:
+                    allowed = False
+                    if seed and seed.crawl_scope == "cross_domain_trusted":
+                        lowered = f"{canonical_url} {link.get('text') or ''}".lower()
+                        allowed = any(term in lowered for term in TRUSTED_PORTAL_TERMS)
+                    if not allowed:
+                        existing_domain = _ensure_domain(
+                            self.engine.db,
+                            tenant_id=self.engine.connector.tenant_id,
+                            connector_id=self.engine.connector.id,
+                            seed=seed,
+                            domain=target_domain,
+                            source="crawl",
+                            found_from_url=parsed.canonical_url,
+                            found_context=link.get("text"),
+                            default_approval="pending_review",
+                        )
+                        if existing_domain.approval_status == "pending_review":
+                            self.engine.metrics["new_discovered_domains"] += 1
+                        if detail_link:
+                            self.engine.metrics["detail_links_skipped_domain_policy"] += 1
+                        continue
+                if not same_domain and target_domain not in self.engine.run_domains and len(self.engine.run_domains) >= self.allowed_new_domains:
+                    continue
+                follow_links.append(
+                    {
+                        "url": canonical_url,
+                        "domain": target_domain,
+                        "depth": parent_depth + 1,
+                        "anchor_text": str(link.get("text") or ""),
+                        "priority": int(
+                            _priority_for_url(
+                                canonical_url,
+                                anchor_text=str(link.get("text") or ""),
+                                context=parsed.title,
+                                seed_priority=seed.priority if seed else 50,
+                                search_profile=self.search_profile,
+                            )
+                        ),
+                        "detail_link": detail_link,
+                    }
+                )
+                processed += 1
+                if processed >= self.engine._max_links_for_page(parsed.page_type):
+                    break
+            return follow_links
+
+        def parse_page(self, response: Response):
+            self._check_stop()
+            final_url = str(response.url)
+            validate_public_http_url(final_url)
+            seed = self.seed_by_id.get(str(response.meta.get("seed_id") or ""))
+            canonical_url, domain = _as_public_url(final_url)
+            depth = int(response.meta.get("crawl_depth") or 0)
+            parent_url = response.meta.get("parent_url")
+            self.engine._emit_progress(
+                "FETCHING",
+                stage_label="Fetching pages",
+                current_domain=domain,
+                current_url=canonical_url,
+                current_depth=depth,
+            )
+            self.engine.metrics["pages_attempted"] += 1
+            self.engine.run_domains.add(domain)
+            self.engine.visited_domains.add(domain)
+            self.engine.pages_attempted_by_domain[domain] = int(self.engine.pages_attempted_by_domain.get(domain, 0)) + 1
+            self.engine.pages_fetched_by_domain[domain] = int(self.engine.pages_fetched_by_domain.get(domain, 0)) + 1
+            self.engine.metrics["pages_fetched"] += 1
+            self.seen_urls.add(canonical_url)
+            domain_row = _ensure_domain(
+                self.engine.db,
+                tenant_id=self.engine.connector.tenant_id,
+                connector_id=self.engine.connector.id,
+                seed=seed,
+                domain=domain,
+                source="seed" if depth == 0 else "crawl",
+                found_from_url=parent_url or canonical_url,
+                found_context=seed.name if seed and depth == 0 else None,
+                default_approval="approved" if depth == 0 else "pending_review",
+            )
+            context = CrawlPageContext(
+                url=canonical_url,
+                canonical_url=canonical_url,
+                domain=domain,
+                parent_url=str(parent_url) if parent_url else None,
+                depth=depth,
+                seed_id=seed.id if seed else None,
+                status="fetched",
+                http_status=int(response.status),
+            )
+            parsed = self.engine._process_fetched_page(
+                frontier=context,
+                domain_row=domain_row,
+                seed=seed,
+                fetch_result={
+                    "url": canonical_url,
+                    "final_url": final_url,
+                    "status_code": int(response.status),
+                    "content_type": response.headers.get("Content-Type", b"").decode("utf-8", "ignore"),
+                    "response_bytes": len(response.body or b""),
+                    "redirect_chain": [str(item) for item in list(response.request.meta.get("redirect_urls") or [])[:8]],
+                    "redirect_count": len(response.request.meta.get("redirect_urls") or []),
+                },
+                html=response.text.replace("\x00", ""),
+                discoveries=self.discoveries,
+                discover_links=False,
+            )
+            self.engine.db.flush()
+            if self.engine.metrics["pages_fetched"] >= self.max_total_pages:
+                raise CloseSpider("batch_limit_reached")
+            for link in self._followable_links(parsed=parsed, seed=seed, parent_domain=domain, parent_depth=depth):
+                if self.engine.pages_attempted_by_domain.get(link["domain"], 0) >= self.max_pages_per_domain:
+                    continue
+                if link["detail_link"] and link["url"] not in self.engine.listing_detail_links_queued:
+                    self.engine.listing_detail_links_queued.add(link["url"])
+                    self.engine.metrics["detail_links_queued"] += 1
+                self.engine.metrics["urls_queued"] += 1
+                yield Request(
+                    link["url"],
+                    callback=self.parse_page,
+                    errback=self.handle_error,
+                    dont_filter=True,
+                    priority=int(link["priority"]),
+                    meta={
+                        "seed_id": seed.id if seed else None,
+                        "parent_url": canonical_url,
+                        "crawl_depth": int(link["depth"]),
+                        "download_maxsize": self._request_limit(),
+                        "download_warnsize": self._request_limit(),
+                    },
+                )
+
+        def handle_error(self, failure):
+            self._check_stop()
+            request = failure.request
+            url = str(getattr(request, "url", "") or "")
+            try:
+                canonical_url, domain = _as_public_url(url)
+            except Exception:
+                return
+            seed = self.seed_by_id.get(str(request.meta.get("seed_id") or ""))
+            domain_row = _ensure_domain(
+                self.engine.db,
+                tenant_id=self.engine.connector.tenant_id,
+                connector_id=self.engine.connector.id,
+                seed=seed,
+                domain=domain,
+                source="seed" if int(request.meta.get("crawl_depth") or 0) == 0 else "crawl",
+                found_from_url=str(request.meta.get("parent_url") or canonical_url),
+                found_context=seed.name if seed else None,
+                default_approval="approved" if int(request.meta.get("crawl_depth") or 0) == 0 else "pending_review",
+            )
+            failure_value = getattr(failure, "value", failure)
+            response = getattr(failure_value, "response", None)
+            diagnostic = dict(request.meta.get("augmis_stop_diagnostic") or {})
+            if diagnostic:
+                diagnostic.update(
+                    {
+                        "http_status": int(getattr(response, "status", 0) or 0) or diagnostic.get("http_status"),
+                        "final_url": canonical_url,
+                        "redirect_count": len(getattr(request.meta, "get", lambda *_: [])("redirect_urls", []) or []),
+                        "content_type": diagnostic.get("content_type") or (response.headers.get("Content-Type", b"").decode("utf-8", "ignore") if response is not None else None),
+                        "response_bytes": diagnostic.get("response_bytes") or int(request.meta.get("augmis_bytes_received", 0) or 0),
+                        "exception_class": type(failure_value).__name__,
+                        "attempted_at": _now().isoformat(),
+                        "retryable": False,
+                        "server": None,
+                        "retry_after": None,
+                    }
+                )
+            elif "maxsize" in str(failure_value).lower() or "received response size larger than download max size" in str(failure_value).lower():
+                diagnostic = {
+                    "error_code": "BODY_TOO_LARGE",
+                    "error_message": "Source page exceeded the configured HTML response size limit.",
+                    "http_status": None,
+                    "final_url": canonical_url,
+                    "redirect_count": 0,
+                    "content_type": request.meta.get("augmis_content_type"),
+                    "content_length": request.meta.get("augmis_content_length"),
+                    "response_bytes": int(request.meta.get("augmis_bytes_received", 0) or 0),
+                    "limit_bytes": self._request_limit(),
+                    "resource_kind": request.meta.get("augmis_resource_kind"),
+                    "engine": CRAWL_ENGINE_SCRAPY,
+                    "exception_class": type(failure_value).__name__,
+                    "attempted_at": _now().isoformat(),
+                    "retryable": False,
+                    "server": None,
+                    "retry_after": None,
+                }
+            else:
+                diagnostic = {
+                    "error_code": "SCRAPY_REQUEST_FAILED",
+                    "error_message": str(failure_value),
+                    "http_status": None,
+                    "final_url": canonical_url,
+                    "redirect_count": 0,
+                    "content_type": request.meta.get("augmis_content_type"),
+                    "response_bytes": int(request.meta.get("augmis_bytes_received", 0) or 0) or None,
+                    "exception_class": type(failure_value).__name__,
+                    "attempted_at": _now().isoformat(),
+                    "retryable": False,
+                    "server": None,
+                    "retry_after": None,
+                    "engine": CRAWL_ENGINE_SCRAPY,
+                }
+            frontier = BusinessDevelopmentWebFrontier(
+                tenant_id=self.engine.connector.tenant_id,
+                connector_id=self.engine.connector.id,
+                seed_id=seed.id if seed else None,
+                url=canonical_url,
+                canonical_url=canonical_url,
+                domain=domain,
+                parent_url=str(request.meta.get("parent_url") or "") or None,
+                depth=int(request.meta.get("crawl_depth") or 0),
+                status="failed",
+            )
+            if diagnostic.get("error_code") in {"ATTACHMENT_SKIPPED", "BODY_TOO_LARGE"}:
+                _apply_frontier_skip(
+                    frontier,
+                    diagnostic=diagnostic,
+                    domain_row=domain_row,
+                    metrics=self.engine.metrics,
+                )
+            else:
+                _apply_frontier_failure(
+                    frontier,
+                    diagnostic=diagnostic,
+                    domain_row=domain_row,
+                    metrics=self.engine.metrics,
+                    detail_link_queued=canonical_url in self.engine.listing_detail_links_queued,
+                )
+            self.engine.db.flush()
+
+    db = SessionLocal()
+    try:
+        connector = _require_connector(db, tenant_id, connector_id)
+        if connector.connector_type != INDEPENDENT_WEB_CONNECTOR_TYPE:
+            raise HTTPException(status_code=400, detail="Connector is not the independent web discovery engine.")
+        search_profile = (
+            db.query(BusinessDevelopmentSearchProfile)
+            .filter(
+                BusinessDevelopmentSearchProfile.tenant_id == tenant_id,
+                BusinessDevelopmentSearchProfile.id == connector.search_profile_id,
+            )
+            .first()
+        )
+
+        def progress_callback(snapshot: dict[str, Any]) -> None:
+            listener_service._persist_connector_run_progress(
+                tenant_id=tenant_id,
+                connector_id=connector.id,
+                run_id=run_id,
+                stage=str(snapshot.get("stage") or "FETCHING").upper(),
+                extra={
+                    **snapshot,
+                    "crawl_engine": CRAWL_ENGINE_SCRAPY,
+                    "crawl_engine_display": crawl_engine_display(CRAWL_ENGINE_SCRAPY),
+                },
+            )
+
+        engine = IndependentWebDiscoveryEngine(
+            db,
+            connector,
+            search_profile,
+            progress_callback=progress_callback,
+        )
+        engine.validate_config()
+        engine._emit_progress(
+            "PREPARING",
+            stage_label="Preparing scan",
+            crawl_engine=CRAWL_ENGINE_SCRAPY,
+            crawl_engine_display=crawl_engine_display(CRAWL_ENGINE_SCRAPY),
+        )
+        all_seeds = engine._seed_rows()
+        if not all_seeds:
+            return [], {"status": "no_seeds", "crawl_engine": CRAWL_ENGINE_SCRAPY, "crawl_engine_display": crawl_engine_display(CRAWL_ENGINE_SCRAPY)}
+        max_seeds = _clamp(int(engine.config.get("maximum_seeds_per_run", 5) or 5), 1, len(all_seeds))
+        due_seeds = []
+        for seed in all_seeds[:max_seeds]:
+            next_crawl_at = _as_utc(seed.next_crawl_at)
+            if next_crawl_at and next_crawl_at > _now():
+                continue
+            due_seeds.append(seed)
+        if not due_seeds:
+            return [], {"status": "no_due_work", "crawl_engine": CRAWL_ENGINE_SCRAPY, "crawl_engine_display": crawl_engine_display(CRAWL_ENGINE_SCRAPY)}
+        process = CrawlerProcess(
+            settings={
+                "LOG_ENABLED": False,
+                "ROBOTSTXT_OBEY": True,
+                "COOKIES_ENABLED": True,
+                "CONCURRENT_REQUESTS_PER_DOMAIN": 1,
+                "DOWNLOAD_DELAY": int(engine.config.get("per_domain_delay_seconds", 2) or 2),
+                "DOWNLOAD_TIMEOUT": int(engine.config.get("request_timeout_seconds", 15) or 15),
+                "DOWNLOAD_MAXSIZE": int(engine.policy.max_fetch_bytes or settings.AUGMIS_WEB_DISCOVERY_DEFAULT_MAX_HTML_RESPONSE_BYTES),
+                "DOWNLOAD_WARNSIZE": int(engine.policy.max_fetch_bytes or settings.AUGMIS_WEB_DISCOVERY_DEFAULT_MAX_HTML_RESPONSE_BYTES),
+                "DEPTH_LIMIT": int(engine.config.get("maximum_depth", 2) or 2),
+                "RETRY_ENABLED": True,
+                "RETRY_TIMES": 2,
+                "USER_AGENT": settings.AUGMIS_WEB_DISCOVERY_USER_AGENT,
+            }
+        )
+        process.crawl(
+            IndependentWebScrapySpider,
+            engine=engine,
+            seeds=due_seeds,
+            search_profile=search_profile,
+            stop_file_path=stop_file,
+        )
+        process.start(stop_after_crawl=True)
+        metrics = {
+            **engine.metrics,
+            "provider": "augmis_internal",
+            "domains_visited": len(engine.visited_domains),
+            "duration_seconds": int((_now() - engine.started_at).total_seconds()),
+            "status": "completed",
+            "crawl_engine": CRAWL_ENGINE_SCRAPY,
+            "crawl_engine_display": crawl_engine_display(CRAWL_ENGINE_SCRAPY),
+        }
+        progress_callback({**metrics, "stage": "FINALIZING", "stage_label": "Finalizing run"})
+        db.commit()
+        discoveries = list(getattr(engine, "scrapy_discoveries", []))
+        return [candidate.model_dump(mode="json") for candidate in discoveries], metrics
+    finally:
+        db.close()

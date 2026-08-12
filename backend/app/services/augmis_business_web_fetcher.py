@@ -20,6 +20,7 @@ BLOCKED_HOSTS = {"localhost", "127.0.0.1", "::1"}
 BLOCKED_IPS = {
     ipaddress.ip_address("169.254.169.254"),
 }
+NUL_CHARACTER = "\x00"
 
 
 class SafeWebFetchError(Exception):
@@ -40,6 +41,10 @@ class SafeWebFetchError(Exception):
         server: str | None = None,
         retry_after: str | None = None,
         dns_result: list[str] | None = None,
+        content_length: int | None = None,
+        limit_bytes: int | None = None,
+        resource_kind: str | None = None,
+        engine: str | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
@@ -55,6 +60,10 @@ class SafeWebFetchError(Exception):
         self.server = server
         self.retry_after = retry_after
         self.dns_result = dns_result or []
+        self.content_length = content_length
+        self.limit_bytes = limit_bytes
+        self.resource_kind = resource_kind
+        self.engine = engine
 
     def to_diagnostic(self) -> dict[str, str | int | bool | list[dict[str, str | int | None]] | list[str] | None]:
         return {
@@ -72,6 +81,10 @@ class SafeWebFetchError(Exception):
             "server": self.server,
             "retry_after": self.retry_after,
             "dns_result": self.dns_result[:8],
+            "content_length": self.content_length,
+            "limit_bytes": self.limit_bytes,
+            "resource_kind": self.resource_kind,
+            "engine": self.engine,
         }
 
 
@@ -84,6 +97,28 @@ class WebFetchRuntimePolicy:
     max_redirects: int = 3
     user_agent: str = "AUGMIS-Web-Listener/1.0"
     accept_language: str = "en-US,en;q=0.8"
+
+
+HTML_CONTENT_TYPES = {"text/html", "application/xhtml+xml"}
+ATTACHMENT_CONTENT_TYPES = {
+    "application/pdf",
+    "application/zip",
+    "application/x-zip-compressed",
+    "application/octet-stream",
+    "application/msword",
+    "application/vnd.ms-excel",
+    "application/vnd.ms-powerpoint",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "application/vnd.oasis.opendocument.text",
+    "application/vnd.oasis.opendocument.spreadsheet",
+}
+ATTACHMENT_CONTENT_TYPE_PREFIXES = (
+    "image/",
+    "audio/",
+    "video/",
+)
 
 
 def _is_public_ip(address: str) -> bool:
@@ -169,9 +204,50 @@ def _safe_header_value(value: str | None, *, limit: int = 200) -> str | None:
     return cleaned[:limit]
 
 
+def _strip_nul_characters(value: str | None) -> str | None:
+    if value is None:
+        return None
+    return value.replace(NUL_CHARACTER, "")
+
+
 def _content_type_allowed(content_type: str | None, allowed_content_types: tuple[str, ...]) -> bool:
     normalized = (content_type or "").split(";", 1)[0].strip().lower()
     return any(normalized == allowed for allowed in allowed_content_types)
+
+
+def normalize_content_type(content_type: str | None) -> str | None:
+    normalized = (content_type or "").split(";", 1)[0].strip().lower()
+    return normalized or None
+
+
+def classify_resource_content_type(content_type: str | None) -> str:
+    normalized = normalize_content_type(content_type)
+    if normalized in HTML_CONTENT_TYPES:
+        return "html"
+    if normalized == "application/pdf":
+        return "pdf"
+    if normalized and normalized.startswith("image/"):
+        return "image"
+    if normalized in ATTACHMENT_CONTENT_TYPES:
+        return "attachment"
+    if normalized and any(normalized.startswith(prefix) for prefix in ATTACHMENT_CONTENT_TYPE_PREFIXES):
+        return "attachment"
+    if normalized in {"text/plain", "application/xml", "text/xml"}:
+        return "text"
+    if normalized:
+        return "binary"
+    return "unknown"
+
+
+def content_length_from_headers(headers: requests.structures.CaseInsensitiveDict[str] | dict[str, str]) -> int | None:
+    raw = str(headers.get("Content-Length") or "").strip()
+    if not raw.isdigit():
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    return value if value >= 0 else None
 
 
 def _classify_connection_error(exc: requests.ConnectionError) -> tuple[str, str, bool]:
@@ -286,6 +362,9 @@ def _fetch_public_text_resource(
             server = _safe_header_value(response.headers.get("Server"), limit=120)
             retry_after = _safe_header_value(response.headers.get("Retry-After"), limit=80)
             content_type = _safe_header_value(response.headers.get("Content-Type"))
+            normalized_content_type = normalize_content_type(content_type)
+            resource_kind = classify_resource_content_type(content_type)
+            content_length = content_length_from_headers(response.headers)
 
             if 300 <= response.status_code < 400:
                 location = response.headers.get("Location")
@@ -379,9 +458,25 @@ def _fetch_public_text_resource(
                     server=server,
                     retry_after=retry_after,
                     dns_result=dns_result,
-                )
+                    )
 
             if not _content_type_allowed(content_type, allowed_content_types):
+                if resource_kind in {"pdf", "image", "attachment"}:
+                    raise SafeWebFetchError(
+                        "Attachment skipped because this response is not parsed as HTML in this phase.",
+                        code="ATTACHMENT_SKIPPED",
+                        http_status=response.status_code,
+                        final_url=current_url,
+                        redirect_count=len(redirect_chain),
+                        redirect_chain=redirect_chain,
+                        content_type=content_type,
+                        content_length=content_length,
+                        attempted_at=attempted_at,
+                        server=server,
+                        retry_after=retry_after,
+                        dns_result=dns_result,
+                        resource_kind=resource_kind,
+                    )
                 raise SafeWebFetchError(
                     "Unsupported source content type.",
                     code="CONTENT_TYPE_REJECTED",
@@ -390,10 +485,31 @@ def _fetch_public_text_resource(
                     redirect_count=len(redirect_chain),
                     redirect_chain=redirect_chain,
                     content_type=content_type,
+                    content_length=content_length,
                     attempted_at=attempted_at,
                     server=server,
                     retry_after=retry_after,
                     dns_result=dns_result,
+                    resource_kind=resource_kind,
+                )
+
+            if normalized_content_type in HTML_CONTENT_TYPES and content_length is not None and content_length > max_bytes:
+                raise SafeWebFetchError(
+                    "Source page exceeded the configured HTML response size limit.",
+                    code="BODY_TOO_LARGE",
+                    http_status=response.status_code,
+                    final_url=current_url,
+                    redirect_count=len(redirect_chain),
+                    redirect_chain=redirect_chain,
+                    content_type=content_type,
+                    content_length=content_length,
+                    response_bytes=0,
+                    attempted_at=attempted_at,
+                    server=server,
+                    retry_after=retry_after,
+                    dns_result=dns_result,
+                    limit_bytes=max_bytes,
+                    resource_kind=resource_kind,
                 )
 
             chunks: list[bytes] = []
@@ -405,18 +521,21 @@ def _fetch_public_text_resource(
                     total += len(chunk)
                     if total > max_bytes:
                         raise SafeWebFetchError(
-                            "Source page exceeded the configured fetch size limit.",
+                            "Source page exceeded the configured HTML response size limit.",
                             code="BODY_TOO_LARGE",
                             http_status=response.status_code,
                             final_url=current_url,
                             redirect_count=len(redirect_chain),
                             redirect_chain=redirect_chain,
                             content_type=content_type,
+                            content_length=content_length,
                             response_bytes=total,
                             attempted_at=attempted_at,
                             server=server,
                             retry_after=retry_after,
                             dns_result=dns_result,
+                            limit_bytes=max_bytes,
+                            resource_kind=resource_kind,
                         )
                     chunks.append(chunk)
             except requests.exceptions.ContentDecodingError as exc:
@@ -436,7 +555,9 @@ def _fetch_public_text_resource(
                     retry_after=retry_after,
                     dns_result=dns_result,
                 ) from exc
-            raw = b"".join(chunks).decode(response.encoding or response.apparent_encoding or "utf-8", errors="replace")
+            raw = _strip_nul_characters(
+                b"".join(chunks).decode(response.encoding or response.apparent_encoding or "utf-8", errors="replace")
+            ) or ""
             if total == 0 or not raw.strip():
                 raise SafeWebFetchError(
                     "Source page returned an empty response body.",
@@ -517,8 +638,9 @@ def extract_text_from_webpage(
     *,
     max_chars: int | None = None,
 ) -> str:
-    without_scripts = SCRIPT_STYLE_PATTERN.sub(" ", html_text)
+    sanitized_html = _strip_nul_characters(html_text) or ""
+    without_scripts = SCRIPT_STYLE_PATTERN.sub(" ", sanitized_html)
     without_tags = TAG_PATTERN.sub(" ", without_scripts)
-    cleaned = WHITESPACE_PATTERN.sub(" ", unescape(without_tags)).strip()
+    cleaned = WHITESPACE_PATTERN.sub(" ", _strip_nul_characters(unescape(without_tags)) or "").strip()
     limit = max_chars if max_chars is not None else default_web_fetch_runtime_policy().max_extracted_text_chars
     return cleaned[:limit]

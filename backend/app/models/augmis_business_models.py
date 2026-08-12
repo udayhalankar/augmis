@@ -1857,6 +1857,7 @@ class AugmisBusinessConnectorRunResponse(BaseModel):
 
 class AugmisBusinessConnectorScanRequest(BaseModel):
     run_type: str = Field(default="manual", min_length=1, max_length=50)
+    crawl_engine: str | None = Field(default=None, max_length=50)
 
     @field_validator("run_type")
     @classmethod
@@ -1864,6 +1865,18 @@ class AugmisBusinessConnectorScanRequest(BaseModel):
         normalized = str(value or "manual").strip().lower()
         if normalized not in ALLOWED_CONNECTOR_RUN_TYPES:
             raise ValueError(f"Invalid run type: {value}")
+        return normalized
+
+    @field_validator("crawl_engine")
+    @classmethod
+    def validate_crawl_engine(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = str(value or "").strip().lower()
+        if not normalized:
+            return None
+        if normalized not in {"augmis_native", "scrapy"}:
+            raise ValueError(f"Invalid crawl engine: {value}")
         return normalized
 
 

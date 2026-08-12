@@ -77,11 +77,32 @@ class AugmisBusinessWebFetcherTest(unittest.TestCase):
         session = Mock()
         session.get.return_value = response
         mock_session_cls.return_value = session
-        with self.assertRaisesRegex(SafeWebFetchError, "configured fetch size limit"):
+        with self.assertRaisesRegex(SafeWebFetchError, "configured HTML response size limit"):
             fetch_public_webpage(
                 "https://example.com",
                 policy=WebFetchRuntimePolicy(max_fetch_bytes=25000, fetch_timeout_seconds=10, max_redirects=3),
             )
+
+    @patch("app.services.augmis_business_web_fetcher.requests.Session")
+    @patch("app.services.augmis_business_web_fetcher._resolve_public_http_url")
+    def test_content_length_oversized_html_is_rejected_before_streaming(self, mock_resolve: Mock, mock_session_cls: Mock):
+        mock_resolve.return_value = ("example.com", ["8.8.8.8"])
+        response = self._response(
+            status_code=200,
+            headers={"Content-Type": "text/html; charset=utf-8", "Content-Length": "1500000"},
+            chunks=[b"x" * 4096],
+        )
+        session = Mock()
+        session.get.return_value = response
+        mock_session_cls.return_value = session
+        with self.assertRaises(SafeWebFetchError) as ctx:
+            fetch_public_webpage(
+                "https://example.com/large",
+                policy=WebFetchRuntimePolicy(max_fetch_bytes=1000000, fetch_timeout_seconds=10, max_redirects=3),
+            )
+        self.assertEqual(ctx.exception.code, "BODY_TOO_LARGE")
+        self.assertEqual(ctx.exception.content_length, 1500000)
+        response.iter_content.assert_not_called()
 
     @patch("app.services.augmis_business_web_fetcher.requests.Session")
     @patch("app.services.augmis_business_web_fetcher._resolve_public_http_url")
@@ -158,7 +179,8 @@ class AugmisBusinessWebFetcherTest(unittest.TestCase):
         mock_session_cls.return_value = session
         with self.assertRaises(SafeWebFetchError) as ctx:
             fetch_public_webpage("https://example.com/file.pdf")
-        self.assertEqual(ctx.exception.code, "CONTENT_TYPE_REJECTED")
+        self.assertEqual(ctx.exception.code, "ATTACHMENT_SKIPPED")
+        self.assertEqual(ctx.exception.resource_kind, "pdf")
 
     def test_extract_text_respects_custom_limit(self):
         extracted = extract_text_from_webpage("<html><body>Hello world example</body></html>", max_chars=5)

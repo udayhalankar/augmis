@@ -34,6 +34,7 @@ import {
   Drawer,
   IconButton,
   InputAdornment,
+  LinearProgress,
   MenuItem,
   Paper,
   Stack,
@@ -76,6 +77,7 @@ import {
   deleteAugmisBusinessConnectorCredential,
   deleteAugmisBusinessSearchProvider,
   getAugmisBusinessConnectorCredential,
+  getAugmisBusinessConnectorRun,
   getAugmisBusinessDiscovery,
   getAugmisBusinessDiscoveryCommercialIntelligence,
   getAugmisBusinessDiscoveryDeepAssessment,
@@ -97,6 +99,7 @@ import {
   saveAugmisBusinessConnectorCredential,
   setAugmisBusinessConnectorSearchProvider,
   shortlistAugmisBusinessDiscovery,
+  stopAugmisBusinessConnectorRun,
   testAugmisBusinessWebFetchUrl,
   testAugmisBusinessConnectorCredential,
   testAugmisBusinessConnector,
@@ -261,6 +264,9 @@ type DiscoveryRawContent = {
 };
 
 type ConnectorRunMetadata = {
+  crawl_engine?: "augmis_native" | "scrapy";
+  crawl_engine_display?: string;
+  max_html_response_bytes?: number;
   provider?: string;
   queries_executed?: string[];
   query_count?: number;
@@ -314,6 +320,8 @@ type ConnectorRunMetadata = {
   pages_changed?: number;
   robots_denied?: number;
   pages_blocked?: number;
+  attachments_skipped?: number;
+  oversized_html_skipped?: number;
   opportunity_like_pages?: number;
   detail_pages?: number;
   listing_pages?: number;
@@ -329,6 +337,7 @@ type ConnectorRunMetadata = {
   errors?: number;
   duration_seconds?: number;
   outcome_message?: string;
+  skip_summary?: string | null;
   classification_counts?: Record<string, number>;
   candidate_visibility_counts?: Record<string, number>;
   candidate_exclusion_reason_counts?: Record<string, number>;
@@ -339,6 +348,22 @@ type ConnectorRunMetadata = {
   detail_links_skipped_domain_policy?: number;
   detail_links_fetch_failed?: number;
   detail_links_robots_denied?: number;
+  skip_reason_counts?: Record<string, number>;
+  skip_samples?: Array<{
+    error_code?: string;
+    url?: string;
+    domain?: string;
+    depth?: number;
+    parent_url?: string | null;
+    http_status?: number | null;
+    message?: string;
+    content_type?: string | null;
+    content_length?: number | null;
+    response_bytes?: number | null;
+    limit_bytes?: number | null;
+    resource_kind?: string | null;
+    engine?: string | null;
+  }>;
   fetch_failure_counts?: Record<string, number>;
   fetch_failure_samples?: Array<{
     error_code?: string;
@@ -349,6 +374,12 @@ type ConnectorRunMetadata = {
     retryable?: boolean;
     http_status?: number | null;
     message?: string;
+    content_type?: string | null;
+    content_length?: number | null;
+    response_bytes?: number | null;
+    limit_bytes?: number | null;
+    resource_kind?: string | null;
+    engine?: string | null;
   }>;
   candidate_outcomes?: Array<{
     title?: string;
@@ -358,6 +389,23 @@ type ConnectorRunMetadata = {
     relevance_score?: number;
     reason_codes?: string[];
   }>;
+  stage?: string;
+  stage_label?: string;
+  current_domain?: string | null;
+  current_url?: string | null;
+  current_depth?: number | null;
+  elapsed_seconds?: number;
+  pending_frontier_count?: number;
+  progress_percent?: number;
+  batch_progress_current?: number;
+  batch_progress_total?: number;
+  current_batch_label?: string;
+  batch_outcome?: string;
+  outcome_title?: string;
+  failure_message?: string;
+  filtered?: number;
+  candidate_ingestion_current?: number;
+  candidate_ingestion_total?: number;
 };
 
 type IndependentCandidateVisibility = {
@@ -424,6 +472,29 @@ function normalizeOptionalNumber(value: string) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function formatElapsed(seconds: number | null | undefined) {
+  const safe = Math.max(0, Math.floor(seconds || 0));
+  const minutes = Math.floor(safe / 60);
+  const remainder = safe % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`;
+}
+
+function isConnectorRunActive(status: string | null | undefined) {
+  return status === "queued" || status === "running" || status === "retrying";
+}
+
+function upsertRunEntry(
+  runs: AugmisBusinessConnectorRun[],
+  run: AugmisBusinessConnectorRun
+): AugmisBusinessConnectorRun[] {
+  const next = [run, ...runs.filter((entry) => entry.id !== run.id)];
+  return next.sort((left, right) => {
+    const leftTime = left.started_at ? new Date(left.started_at).getTime() : 0;
+    const rightTime = right.started_at ? new Date(right.started_at).getTime() : 0;
+    return rightTime - leftTime;
+  });
+}
+
 function formatBytes(value: number | null | undefined) {
   if (value == null || !Number.isFinite(value)) return "Not available";
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value % 1_000_000 === 0 ? 0 : 1)} MB`;
@@ -461,8 +532,29 @@ function connectorBooleanConfig(connector: AugmisBusinessConnector | null, key: 
   return typeof raw === "boolean" ? raw : fallback;
 }
 
+function connectorCrawlEngine(connector: AugmisBusinessConnector | null) {
+  const raw = connector?.configuration_json?.crawl_engine;
+  return raw === "scrapy" ? "scrapy" : "augmis_native";
+}
+
+function crawlEngineDisplay(value: string | null | undefined) {
+  return value === "scrapy" ? "Scrapy" : "AUGMIS Native";
+}
+
 function getBackendErrorMessage(error: unknown, fallback: string) {
   return parseApiValidationError(error, fallback).message;
+}
+
+function getBackendErrorStatus(error: unknown): number | null {
+  if (typeof error !== "object" || error === null) {
+    return null;
+  }
+  const response = "response" in error ? (error as { response?: unknown }).response : null;
+  if (typeof response !== "object" || response === null) {
+    return null;
+  }
+  const status = "status" in response ? (response as { status?: unknown }).status : null;
+  return typeof status === "number" ? status : null;
 }
 
 function connectorStatusChip(status: string) {
@@ -1291,9 +1383,13 @@ export default function AugmisBusinessConnectorsPage() {
     useState<ToastSeverity>("info");
   const [clearCredentialDialogOpen, setClearCredentialDialogOpen] = useState(false);
   const [seedDialogOpen, setSeedDialogOpen] = useState(false);
+  const [manualScanDialogOpen, setManualScanDialogOpen] = useState(false);
+  const [manualScanConnector, setManualScanConnector] = useState<AugmisBusinessConnector | null>(null);
+  const [manualScanEngine, setManualScanEngine] = useState<"augmis_native" | "scrapy">("augmis_native");
   const [seedForm, setSeedForm] = useState<WebSeedForm>(buildWebSeedForm());
   const [editingSeed, setEditingSeed] = useState<AugmisBusinessWebSeed | null>(null);
   const [webFetchTestResult, setWebFetchTestResult] = useState<AugmisBusinessWebFetchDiagnostic | null>(null);
+  const [activeScan, setActiveScan] = useState<{ connectorId: string; runId: string } | null>(null);
   const [toastOpen, setToastOpen] = useState(false);
   const [toastSeverity, setToastSeverity] = useState<ToastSeverity>("info");
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -1372,6 +1468,59 @@ export default function AugmisBusinessConnectorsPage() {
   }, []);
 
   useEffect(() => {
+    if (!activeScan) return;
+    let cancelled = false;
+    let timerId: number | null = null;
+    const poll = async () => {
+      try {
+        const result = await getAugmisBusinessConnectorRun(activeScan.connectorId, activeScan.runId);
+        if (cancelled) return;
+        const run = result.data;
+        setRuns((current) => upsertRunEntry(current, run));
+        if (!isConnectorRunActive(run.status)) {
+          setActiveScan((current) =>
+            current?.connectorId === activeScan.connectorId && current?.runId === activeScan.runId ? null : current
+          );
+          await Promise.all([loadConnectors(), loadDiscoveries()]);
+          if (selectedConnector?.id === activeScan.connectorId && selectedConnector.connector_type === "independent_web_discovery") {
+            await loadIndependentConnectorData(activeScan.connectorId);
+          }
+          const metadata = extractRunMetadata(run);
+          showToast(
+            metadata.outcome_message || run.error_summary || (run.status === "failed" ? "Scan failed." : "Scan completed."),
+            run.status === "failed" ? "error" : "success"
+          );
+          return;
+        }
+      } catch (error) {
+        if (!cancelled) {
+          if (getBackendErrorStatus(error) === 404) {
+            await Promise.all([loadConnectors(), loadDiscoveries()]);
+            if (selectedConnector?.id === activeScan.connectorId && selectedConnector.connector_type === "independent_web_discovery") {
+              await loadIndependentConnectorData(activeScan.connectorId);
+            }
+            showToast("Active connector run could not be found. Connector state was refreshed.", "warning");
+          } else {
+            showToast(getBackendErrorMessage(error, "Unable to refresh scan progress."), "error");
+          }
+          setActiveScan(null);
+        }
+        return;
+      }
+      if (!cancelled) {
+        timerId = window.setTimeout(poll, 2000);
+      }
+    };
+    timerId = window.setTimeout(poll, 2000);
+    return () => {
+      cancelled = true;
+      if (timerId !== null) {
+        window.clearTimeout(timerId);
+      }
+    };
+  }, [activeScan, loadConnectors, loadDiscoveries, loadIndependentConnectorData, selectedConnector]);
+
+  useEffect(() => {
     if (!canRead) return;
     async function bootstrap() {
       setLoading(true);
@@ -1448,6 +1597,12 @@ export default function AugmisBusinessConnectorsPage() {
       const tasks: Promise<unknown>[] = [
         listAugmisBusinessConnectorRuns(connector.id, { page: 1, page_size: 10 }).then((result) => {
           setRuns(result.data);
+          const activeRun = result.data.find((run) => isConnectorRunActive(run.status));
+          if (connector.active_run_id) {
+            setActiveScan({ connectorId: connector.id, runId: connector.active_run_id });
+          } else if (activeRun) {
+            setActiveScan({ connectorId: connector.id, runId: activeRun.id });
+          }
         }),
       ];
       if (connectorUsesCredential(connector)) {
@@ -1607,18 +1762,66 @@ export default function AugmisBusinessConnectorsPage() {
   }
 
   async function handleScan(connector: AugmisBusinessConnector) {
+    if (connector.connector_type === "independent_web_discovery") {
+      setManualScanConnector(connector);
+      setManualScanEngine(connectorCrawlEngine(connector));
+      setManualScanDialogOpen(true);
+      return;
+    }
+    await runConnectorScan(connector);
+  }
+
+  async function runConnectorScan(
+    connector: AugmisBusinessConnector,
+    crawlEngine?: "augmis_native" | "scrapy"
+  ) {
     setBusy(true);
     setActiveActionLabel(`Scanning ${connector.name}`);
     try {
-      await scanAugmisBusinessConnector(connector.id, { run_type: "manual" });
+      const result = await scanAugmisBusinessConnector(connector.id, {
+        run_type: "manual",
+        ...(crawlEngine ? { crawl_engine: crawlEngine } : {}),
+      });
+      const startedRun = result.data.run;
+      const startedConnector = result.data.connector;
+      setRuns((current) => upsertRunEntry(current, startedRun));
+      setActiveScan({ connectorId: connector.id, runId: startedRun.id });
       await refreshWorkspace();
-      const refreshedConnector = connectorById.get(connector.id) ?? connector;
-      if (selectedConnector?.id === connector.id) {
-        await openConnectorDrawer(refreshedConnector);
-      }
-      showToast("Connector scan completed.", "success");
+      await openConnectorDrawer((connectorById.get(connector.id) as AugmisBusinessConnector | undefined) ?? startedConnector);
+      showToast(
+        startedRun.status === "queued" || startedRun.status === "running"
+          ? "Scan started. Live progress is now available."
+          : extractRunMetadata(startedRun).outcome_message || "Connector scan completed.",
+        "info"
+      );
     } catch (error) {
       showToast(getBackendErrorMessage(error, "Unable to run connector scan."), "error");
+    } finally {
+      setBusy(false);
+      setActiveActionLabel(null);
+    }
+  }
+
+  async function handleStartManualIndependentScan() {
+    if (!manualScanConnector) return;
+    setManualScanDialogOpen(false);
+    await runConnectorScan(manualScanConnector, manualScanEngine);
+  }
+
+  async function handleStopScan(connector: AugmisBusinessConnector, run: AugmisBusinessConnectorRun | null) {
+    if (!run) return;
+    setBusy(true);
+    setActiveActionLabel(`Stopping ${connector.name}`);
+    try {
+      const result = await stopAugmisBusinessConnectorRun(connector.id, run.id);
+      setActiveScan(null);
+      setRuns((current) => upsertRunEntry(current, result.data.run));
+      await refreshWorkspace();
+      await openConnectorDrawer((connectorById.get(connector.id) as AugmisBusinessConnector | undefined) ?? result.data.connector);
+      const metadata = extractRunMetadata(result.data.run);
+      showToast(metadata.outcome_message || "Scan stopped.", "warning");
+    } catch (error) {
+      showToast(getBackendErrorMessage(error, "Unable to stop connector scan."), "error");
     } finally {
       setBusy(false);
       setActiveActionLabel(null);
@@ -2066,8 +2269,17 @@ export default function AugmisBusinessConnectorsPage() {
     );
   }
 
-  const selectedConnectorRun = runs[0] ?? null;
+  const selectedConnectorRun =
+    (selectedConnector?.active_run_id
+      ? runs.find((run) => run.id === selectedConnector.active_run_id)
+      : null) ??
+    (activeScan && selectedConnector?.id === activeScan.connectorId
+      ? runs.find((run) => run.id === activeScan.runId)
+      : null) ??
+    runs[0] ??
+    null;
   const selectedRunMetadata = selectedConnectorRun ? extractRunMetadata(selectedConnectorRun) : null;
+  const selectedConnectorRunActive = isConnectorRunActive(selectedConnectorRun?.status);
   const selectedCredentialStatus = credentialStatuses[selectedProvider] || null;
   const selectedDiscoverySourceMetadata = selectedDiscovery
     ? extractDiscoverySourceMetadata(selectedDiscovery)
@@ -3115,13 +3327,25 @@ export default function AugmisBusinessConnectorsPage() {
                   <Button
                     variant="contained"
                     size="small"
-                    startIcon={<PlayCircleOutlineRoundedIcon />}
+                    startIcon={selectedConnectorRunActive ? <CircularProgress size={16} color="inherit" /> : <PlayCircleOutlineRoundedIcon />}
                     onClick={() => void handleScan(selectedConnector)}
-                    disabled={!canScan || busy || selectedConnector.status === "running"}
+                    disabled={!canScan || busy || selectedConnector.status === "running" || Boolean(selectedConnector.active_run_id)}
                     sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700, bgcolor: "#2563EB" }}
                   >
-                    Scan Now
+                    {selectedConnectorRunActive ? "Scanning..." : "Scan Now"}
                   </Button>
+                  {selectedConnector.connector_type === "independent_web_discovery" && selectedConnectorRunActive ? (
+                    <Button
+                      variant="outlined"
+                      size="small"
+                      color="error"
+                      onClick={() => void handleStopScan(selectedConnector, selectedConnectorRun)}
+                      disabled={!canScan || busy || !selectedConnectorRun}
+                      sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700 }}
+                    >
+                      Stop Scan
+                    </Button>
+                  ) : null}
                 </Stack>
               </Stack>
 
@@ -3555,6 +3779,28 @@ export default function AugmisBusinessConnectorsPage() {
                       <TextField
                         select
                         size="small"
+                        label="Default Crawl Engine"
+                        value={connectorCrawlEngine(selectedConnector)}
+                        onChange={(event) =>
+                          setSelectedConnector((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  configuration_json: {
+                                    ...current.configuration_json,
+                                    crawl_engine: event.target.value,
+                                  },
+                                }
+                              : current
+                          )
+                        }
+                      >
+                        <MenuItem value="augmis_native">AUGMIS Native</MenuItem>
+                        <MenuItem value="scrapy">Scrapy</MenuItem>
+                      </TextField>
+                      <TextField
+                        select
+                        size="small"
                         label="Allowed Domain Mode"
                         value={String(selectedConnector.configuration_json.allowed_domain_mode || "approved_only")}
                         onChange={(event) =>
@@ -3674,6 +3920,25 @@ export default function AugmisBusinessConnectorsPage() {
                         <MenuItem value="15">15 sec</MenuItem>
                         <MenuItem value="20">20 sec</MenuItem>
                         <MenuItem value="30">30 sec</MenuItem>
+                      </TextField>
+                      <TextField
+                        select
+                        size="small"
+                        label="Maximum HTML Page Size"
+                        value={String(connectorNumberConfig(selectedConnector, "max_html_response_bytes", 2000000))}
+                        onChange={(event) =>
+                          setSelectedConnector((current) =>
+                            current
+                              ? { ...current, configuration_json: { ...current.configuration_json, max_html_response_bytes: Number(event.target.value) } }
+                              : current
+                          )
+                        }
+                        helperText="Applies to both AUGMIS Native and Scrapy. Attachments are skipped separately."
+                      >
+                        <MenuItem value="500000">500 KB</MenuItem>
+                        <MenuItem value="1000000">1 MB</MenuItem>
+                        <MenuItem value="2000000">2 MB</MenuItem>
+                        <MenuItem value="5000000">5 MB</MenuItem>
                       </TextField>
                     </Box>
                   </Paper>
@@ -4632,6 +4897,70 @@ export default function AugmisBusinessConnectorsPage() {
                 </Typography>
               </Paper>
 
+              {selectedConnector?.connector_type === "independent_web_discovery" && selectedRunMetadata && selectedConnectorRunActive ? (
+                <Paper elevation={0} sx={{ p: 1.5, borderRadius: "8px", border: "1px solid #BFDBFE", bgcolor: "#F8FBFF" }}>
+                  <Stack direction="row" spacing={1} sx={{ alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" }}>
+                    <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+                      <CircularProgress size={18} />
+                      <Box>
+                        <Typography sx={{ fontWeight: 700, color: "#0F172A" }}>Scan Progress</Typography>
+                        <Typography sx={{ color: "#475569", fontSize: 13 }}>
+                          {selectedRunMetadata.stage_label || "Scanning"} · {selectedRunMetadata.crawl_engine_display || crawlEngineDisplay(selectedRunMetadata.crawl_engine)} · Elapsed {formatElapsed(selectedRunMetadata.elapsed_seconds)}
+                        </Typography>
+                      </Box>
+                    </Stack>
+                    <Chip label={selectedConnectorRun?.status || "running"} size="small" sx={{ textTransform: "capitalize" }} />
+                  </Stack>
+                  <Stack direction="row" spacing={1} sx={{ mt: 1.1, justifyContent: "flex-end" }}>
+                    <Button
+                      variant="outlined"
+                      size="small"
+                      color="error"
+                      onClick={() => void handleStopScan(selectedConnector, selectedConnectorRun)}
+                      disabled={!canScan || busy || !selectedConnectorRun}
+                      sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700 }}
+                    >
+                      Stop Scan
+                    </Button>
+                  </Stack>
+                  <Box sx={{ mt: 1.2 }}>
+                    <Typography sx={{ fontSize: 12, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: ".04em" }}>
+                      {selectedRunMetadata.current_batch_label || "Current Batch"}
+                    </Typography>
+                    <LinearProgress
+                      variant="determinate"
+                      value={selectedRunMetadata.progress_percent ?? 0}
+                      sx={{ mt: 0.7, height: 8, borderRadius: 999, bgcolor: "#DBEAFE" }}
+                    />
+                    <Typography sx={{ mt: 0.55, color: "#475569", fontSize: 13 }}>
+                      {(selectedRunMetadata.batch_progress_current ?? selectedRunMetadata.pages_fetched ?? 0)} / {(selectedRunMetadata.batch_progress_total ?? connectorNumberConfig(selectedConnector, "maximum_total_pages_per_run", 100))} pages
+                    </Typography>
+                  </Box>
+                  <Box
+                    sx={{
+                      mt: 1.2,
+                      display: "grid",
+                      gap: 1,
+                      gridTemplateColumns: { xs: "repeat(2, minmax(0, 1fr))", md: "repeat(4, minmax(0, 1fr))" },
+                    }}
+                  >
+                    <MetadataMetric label="Stage" value={selectedRunMetadata.stage_label || selectedRunMetadata.stage || "Running"} />
+                    <MetadataMetric label="Current Domain" value={selectedRunMetadata.current_domain || "Not available"} />
+                    <MetadataMetric label="Pending Frontier" value={selectedRunMetadata.pending_frontier_count ?? 0} />
+                    <MetadataMetric label="Depth" value={selectedRunMetadata.current_depth ?? 0} />
+                    <MetadataMetric label="Attempted" value={selectedRunMetadata.pages_attempted ?? 0} />
+                    <MetadataMetric label="Fetched" value={selectedRunMetadata.pages_fetched ?? 0} />
+                    <MetadataMetric label="Candidates" value={selectedRunMetadata.candidates_created ?? selectedRunMetadata.opportunity_candidates ?? 0} />
+                    <MetadataMetric label="New" value={selectedConnectorRun?.items_new ?? 0} />
+                  </Box>
+                  {selectedRunMetadata.current_url ? (
+                    <Typography sx={{ mt: 1, color: "#475569", fontSize: 12 }}>
+                      Current URL: {selectedRunMetadata.current_url}
+                    </Typography>
+                  ) : null}
+                </Paper>
+              ) : null}
+
               {selectedRunMetadata ? (
                 <Paper elevation={0} sx={{ p: 1.5, borderRadius: "8px", border: "1px solid #E2E8F0" }}>
                   <Typography sx={{ fontWeight: 700, color: "#0F172A" }}>Latest Run Summary</Typography>
@@ -4660,6 +4989,8 @@ export default function AugmisBusinessConnectorsPage() {
                         <MetadataMetric label="Filtered" value={selectedConnectorRun?.items_filtered ?? 0} />
                         <MetadataMetric label="Duplicates" value={selectedConnectorRun?.items_duplicate ?? 0} />
                         <MetadataMetric label="New Discoveries" value={selectedConnectorRun?.items_new ?? 0} />
+                        <MetadataMetric label="Attachments Skipped" value={selectedRunMetadata.attachments_skipped ?? 0} />
+                        <MetadataMetric label="Oversized HTML" value={selectedRunMetadata.oversized_html_skipped ?? 0} />
                         <MetadataMetric label="Stale / Error" value={selectedRunMetadata.stale_or_error_pages ?? 0} />
                         <MetadataMetric label="Unknown Pages" value={selectedRunMetadata.unknown_pages ?? 0} />
                         <MetadataMetric label="Contacts" value={selectedRunMetadata.contacts_found ?? 0} />
@@ -4685,12 +5016,17 @@ export default function AugmisBusinessConnectorsPage() {
                   </Box>
                   <Typography sx={{ mt: 1.1, color: "#64748B", fontSize: 12 }}>
                     {selectedConnector?.connector_type === "independent_web_discovery"
-                      ? `Effective limits: ${connectorNumberConfig(selectedConnector, "maximum_domains_per_run", 5)} domains/run, ${connectorNumberConfig(selectedConnector, "maximum_pages_per_domain", 25)} pages/domain, ${connectorNumberConfig(selectedConnector, "maximum_total_pages_per_run", 100)} pages/run, depth ${connectorNumberConfig(selectedConnector, "maximum_depth", 2)}, delay ${connectorNumberConfig(selectedConnector, "per_domain_delay_seconds", 2)}s, timeout ${connectorNumberConfig(selectedConnector, "request_timeout_seconds", 15)}s`
+                      ? `Effective limits: ${connectorNumberConfig(selectedConnector, "maximum_domains_per_run", 5)} domains/run, ${connectorNumberConfig(selectedConnector, "maximum_pages_per_domain", 25)} pages/domain, ${connectorNumberConfig(selectedConnector, "maximum_total_pages_per_run", 100)} pages/run, depth ${connectorNumberConfig(selectedConnector, "maximum_depth", 2)}, delay ${connectorNumberConfig(selectedConnector, "per_domain_delay_seconds", 2)}s, timeout ${connectorNumberConfig(selectedConnector, "request_timeout_seconds", 15)}s, max HTML ${formatBytes(selectedRunMetadata.max_html_response_bytes ?? connectorNumberConfig(selectedConnector, "max_html_response_bytes", 2000000))}`
                       : `Effective limits: ${selectedRunMetadata.maximum_queries_per_scan ?? 0} queries, ${selectedRunMetadata.results_per_query ?? 0} results/query, ${selectedRunMetadata.max_source_fetches_per_scan ?? 0} source fetches, ${formatBytes(selectedRunMetadata.max_fetch_bytes)}`}
                   </Typography>
                   {selectedConnector?.connector_type === "independent_web_discovery" && selectedRunMetadata.outcome_message ? (
                     <Alert severity="info" sx={{ mt: 1.2, borderRadius: "8px" }}>
                       {selectedRunMetadata.outcome_message}
+                    </Alert>
+                  ) : null}
+                  {selectedConnector?.connector_type === "independent_web_discovery" && selectedRunMetadata.skip_summary ? (
+                    <Alert severity="warning" sx={{ mt: 1.2, borderRadius: "8px" }}>
+                      {selectedRunMetadata.skip_summary}
                     </Alert>
                   ) : null}
                   {selectedConnector?.connector_type === "independent_web_discovery" && canAdmin ? (
@@ -4735,6 +5071,54 @@ export default function AugmisBusinessConnectorsPage() {
                             <Chip size="small" label={`Robots Denied ${selectedRunMetadata.detail_links_robots_denied ?? 0}`} sx={{ bgcolor: "#FEF2F2", color: "#991B1B", borderRadius: "8px" }} />
                           </Stack>
                         </Box>
+                        {recordEntriesDescending(selectedRunMetadata.skip_reason_counts).length ? (
+                          <Box>
+                            <Typography sx={{ fontWeight: 700, color: "#0F172A", fontSize: 12 }}>Skipped Pages</Typography>
+                            <Stack direction="row" spacing={0.75} sx={{ mt: 0.8, flexWrap: "wrap", rowGap: 0.75 }}>
+                              {recordEntriesDescending(selectedRunMetadata.skip_reason_counts).map(([code, count]) => (
+                                <Chip key={`skip-${code}`} size="small" label={`${formatDiagnosticCode(code)} · ${count}`} sx={{ bgcolor: "#FFF7ED", color: "#B45309", borderRadius: "8px" }} />
+                              ))}
+                            </Stack>
+                          </Box>
+                        ) : null}
+                        {selectedRunMetadata.skip_samples?.length ? (
+                          <Stack spacing={1}>
+                            {selectedRunMetadata.skip_samples.slice(0, 5).map((sample, index) => (
+                              <Paper key={`${selectedConnectorRun?.id}-skip-sample-${index}`} elevation={0} sx={{ p: 1, borderRadius: "8px", border: "1px solid #E2E8F0" }}>
+                                <Typography sx={{ fontWeight: 700, color: "#0F172A", fontSize: 13 }}>
+                                  {formatDiagnosticCode(sample.error_code || "SKIPPED")}
+                                </Typography>
+                                <Typography sx={{ mt: 0.35, color: "#475569", fontSize: 12, overflowWrap: "anywhere" }}>
+                                  {sample.url || "No URL recorded"}
+                                </Typography>
+                                <Typography sx={{ mt: 0.35, color: "#64748B", fontSize: 12 }}>
+                                  {(sample.engine ? `${crawlEngineDisplay(sample.engine as "augmis_native" | "scrapy")} · ` : "")}
+                                  {(sample.resource_kind ? `${formatDiagnosticCode(sample.resource_kind)} · ` : "")}
+                                  Domain: {sample.domain || "n/a"} · Depth: {sample.depth ?? 0}
+                                  {sample.http_status != null ? ` · HTTP ${sample.http_status}` : ""}
+                                </Typography>
+                                {(sample.content_length != null || sample.response_bytes != null || sample.limit_bytes != null) ? (
+                                  <Typography sx={{ mt: 0.35, color: "#64748B", fontSize: 12 }}>
+                                    {(sample.content_type || "Unknown type")}
+                                    {sample.content_length != null ? ` · Declared ${formatBytes(sample.content_length)}` : ""}
+                                    {sample.response_bytes != null ? ` · Read ${formatBytes(sample.response_bytes)}` : ""}
+                                    {sample.limit_bytes != null ? ` · Limit ${formatBytes(sample.limit_bytes)}` : ""}
+                                  </Typography>
+                                ) : null}
+                                {sample.parent_url ? (
+                                  <Typography sx={{ mt: 0.35, color: "#64748B", fontSize: 12, overflowWrap: "anywhere" }}>
+                                    Parent: {sample.parent_url}
+                                  </Typography>
+                                ) : null}
+                                {sample.message ? (
+                                  <Typography sx={{ mt: 0.35, color: "#64748B", fontSize: 12 }}>
+                                    {sample.message}
+                                  </Typography>
+                                ) : null}
+                              </Paper>
+                            ))}
+                          </Stack>
+                        ) : null}
                         {recordEntriesDescending(selectedRunMetadata.fetch_failure_counts).length ? (
                           <Box>
                             <Typography sx={{ fontWeight: 700, color: "#0F172A", fontSize: 12 }}>Fetch Failures</Typography>
@@ -4756,9 +5140,18 @@ export default function AugmisBusinessConnectorsPage() {
                                   {sample.url || "No URL recorded"}
                                 </Typography>
                                 <Typography sx={{ mt: 0.35, color: "#64748B", fontSize: 12 }}>
+                                  {(sample.engine ? `${crawlEngineDisplay(sample.engine as "augmis_native" | "scrapy")} · ` : "")}
                                   Domain: {sample.domain || "n/a"} · Depth: {sample.depth ?? 0} · Retryable: {sample.retryable ? "Yes" : "No"}
                                   {sample.http_status != null ? ` · HTTP ${sample.http_status}` : ""}
                                 </Typography>
+                                {(sample.content_length != null || sample.response_bytes != null || sample.limit_bytes != null) ? (
+                                  <Typography sx={{ mt: 0.35, color: "#64748B", fontSize: 12 }}>
+                                    {(sample.content_type || "Unknown type")}
+                                    {sample.content_length != null ? ` · Declared ${formatBytes(sample.content_length)}` : ""}
+                                    {sample.response_bytes != null ? ` · Read ${formatBytes(sample.response_bytes)}` : ""}
+                                    {sample.limit_bytes != null ? ` · Limit ${formatBytes(sample.limit_bytes)}` : ""}
+                                  </Typography>
+                                ) : null}
                                 {sample.parent_url ? (
                                   <Typography sx={{ mt: 0.35, color: "#64748B", fontSize: 12, overflowWrap: "anywhere" }}>
                                     Parent: {sample.parent_url}
@@ -4893,7 +5286,11 @@ export default function AugmisBusinessConnectorsPage() {
                             <Typography sx={{ fontWeight: 700, color: "#0F172A" }}>
                               {run.run_type} scan
                             </Typography>
-                            <Chip label={run.status} size="small" sx={{ textTransform: "capitalize" }} />
+                            <Chip
+                              label={isConnectorRunActive(run.status) ? `${run.status} · ${metadata.stage_label || metadata.stage || "Scanning"}` : run.status}
+                              size="small"
+                              sx={{ textTransform: "capitalize" }}
+                            />
                           </Stack>
                           <Typography sx={{ mt: 0.7, color: "#475569", fontSize: 13 }}>
                             {formatDate(run.started_at)} · Found {run.items_found} · New {run.items_new} · Duplicate {run.items_duplicate} · Filtered {run.items_filtered} · Failed {run.items_failed}
@@ -4902,6 +5299,11 @@ export default function AugmisBusinessConnectorsPage() {
                             Attempt {run.attempt_number} of {run.max_attempts}
                             {run.next_retry_at ? ` · Retry scheduled ${formatDate(run.next_retry_at)}` : ""}
                           </Typography>
+                          {selectedConnector?.connector_type === "independent_web_discovery" ? (
+                            <Typography sx={{ mt: 0.45, color: "#64748B", fontSize: 12 }}>
+                              Engine: {metadata.crawl_engine_display || crawlEngineDisplay(metadata.crawl_engine)}
+                            </Typography>
+                          ) : null}
                           {metadata.query_count != null || metadata.api_result_count != null ? (
                           <Typography sx={{ mt: 0.6, color: "#64748B", fontSize: 12 }}>
                               Provider {metadata.provider || "n/a"} · Queries {metadata.query_count ?? 0} · API results {metadata.api_result_count ?? 0} · Attempted {metadata.source_pages_attempted ?? 0} · Fetched {metadata.source_pages_fetched ?? 0} · Skipped {metadata.source_pages_skipped_due_limit ?? 0}
@@ -4911,6 +5313,18 @@ export default function AugmisBusinessConnectorsPage() {
                             <Typography sx={{ mt: 0.6, color: "#475569", fontSize: 12 }}>
                               {metadata.outcome_message}
                             </Typography>
+                          ) : null}
+                          {selectedConnector?.connector_type === "independent_web_discovery" && metadata.skip_summary ? (
+                            <Typography sx={{ mt: 0.45, color: "#B45309", fontSize: 12 }}>
+                              {metadata.skip_summary}
+                            </Typography>
+                          ) : null}
+                          {selectedConnector?.connector_type === "independent_web_discovery" && recordEntriesDescending(metadata.skip_reason_counts).length ? (
+                            <Stack direction="row" spacing={0.6} sx={{ mt: 0.8, flexWrap: "wrap", rowGap: 0.6 }}>
+                              {recordEntriesDescending(metadata.skip_reason_counts).slice(0, 4).map(([code, count]) => (
+                                <Chip key={`${run.id}-skip-${code}`} size="small" label={`${formatDiagnosticCode(code)} · ${count}`} sx={{ bgcolor: "#FFF7ED", color: "#B45309", borderRadius: "8px" }} />
+                              ))}
+                            </Stack>
                           ) : null}
                           {selectedConnector?.connector_type === "independent_web_discovery" && recordEntriesDescending(metadata.fetch_failure_counts).length ? (
                             <Stack direction="row" spacing={0.6} sx={{ mt: 0.8, flexWrap: "wrap", rowGap: 0.6 }}>
@@ -6102,6 +6516,51 @@ export default function AugmisBusinessConnectorsPage() {
             }
           />
         </Box>
+      </AdminFormDialog>
+
+      <AdminFormDialog
+        open={manualScanDialogOpen}
+        onClose={() => {
+          setManualScanDialogOpen(false);
+          setManualScanConnector(null);
+        }}
+        title="Start Manual Scan"
+        maxWidth={420}
+        actions={
+          <>
+            <Button
+              onClick={() => {
+                setManualScanDialogOpen(false);
+                setManualScanConnector(null);
+              }}
+              sx={{ textTransform: "none" }}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="contained"
+              onClick={() => void handleStartManualIndependentScan()}
+              disabled={!manualScanConnector || busy}
+              sx={{ textTransform: "none" }}
+            >
+              Start Scan
+            </Button>
+          </>
+        }
+      >
+        <Stack spacing={1.2}>
+          <TextField
+            select
+            size="small"
+            label="Crawl Engine"
+            value={manualScanEngine}
+            onChange={(event) => setManualScanEngine(event.target.value as "augmis_native" | "scrapy")}
+          >
+            <MenuItem value="augmis_native">AUGMIS Native</MenuItem>
+            <MenuItem value="scrapy">Scrapy</MenuItem>
+          </TextField>
+          <TextField size="small" label="Scope" value="Existing/current behavior" disabled />
+        </Stack>
       </AdminFormDialog>
 
       <AdminFormDialog

@@ -959,6 +959,165 @@ class AugmisBusinessIndependentDiscoveryServiceTest(unittest.TestCase):
         self.assertEqual(frontier.diagnostic_json["http_status"], 403)
         self.assertEqual(result["run"]["run_metadata_json"]["fetch_failure_counts"]["HTTP_403"], 1)
 
+    @patch("app.services.augmis_business_independent_discovery_service.validate_public_http_url")
+    @patch("app.services.augmis_business_independent_discovery_service.fetch_public_webpage")
+    @patch("app.services.augmis_business_independent_discovery_service.fetch_public_text_resource")
+    def test_attachment_skips_are_recorded_separately_from_failures(
+        self,
+        mock_fetch_text,
+        mock_fetch_page,
+        mock_validate_url,
+    ):
+        del mock_validate_url
+        mock_fetch_text.return_value = self._allow_all_robots("buyer.example")
+        mock_fetch_page.side_effect = SafeWebFetchError(
+            "Attachment skipped because it is not parsed as HTML in this phase.",
+            code="ATTACHMENT_SKIPPED",
+            retryable=False,
+            http_status=200,
+            final_url="https://buyer.example/file.pdf",
+            content_type="application/pdf",
+            content_length=680000,
+            resource_kind="pdf",
+        )
+        connector = listener_service.ensure_independent_web_connector(self.db, "TENANT-1", self.current_user)
+        discovery_service.create_web_seed(
+            self.db,
+            "TENANT-1",
+            connector.id,
+            self.current_user,
+            AugmisBusinessWebSeedCreateRequest(
+                name="Attachment Seed",
+                seed_url="https://buyer.example/file.pdf",
+                seed_type="url",
+                crawl_scope="same_domain",
+                max_depth=1,
+                max_pages=10,
+                crawl_frequency="weekly",
+                priority=50,
+            ),
+        )
+
+        result = listener_service.run_connector_scan(
+            self.db,
+            "TENANT-1",
+            connector.id,
+            self.current_user,
+            AugmisBusinessConnectorScanRequest(run_type="manual"),
+        )["data"]
+        frontier = self.db.query(BusinessDevelopmentWebFrontier).first()
+        assert frontier is not None
+        self.assertEqual(frontier.status, "skipped")
+        self.assertEqual(frontier.error_code, "ATTACHMENT_SKIPPED")
+        self.assertEqual(result["run"]["run_metadata_json"]["attachments_skipped"], 1)
+        self.assertEqual(result["run"]["run_metadata_json"]["skip_reason_counts"]["ATTACHMENT_SKIPPED"], 1)
+        self.assertEqual(result["run"]["run_metadata_json"]["errors"], 0)
+
+    @patch("app.services.augmis_business_independent_discovery_service.validate_public_http_url")
+    @patch("app.services.augmis_business_independent_discovery_service.fetch_public_webpage")
+    @patch("app.services.augmis_business_independent_discovery_service.fetch_public_text_resource")
+    def test_body_too_large_skips_include_limit_details(
+        self,
+        mock_fetch_text,
+        mock_fetch_page,
+        mock_validate_url,
+    ):
+        del mock_validate_url
+        mock_fetch_text.return_value = self._allow_all_robots("buyer.example")
+        mock_fetch_page.side_effect = SafeWebFetchError(
+            "Source page exceeded the configured HTML response size limit.",
+            code="BODY_TOO_LARGE",
+            retryable=False,
+            http_status=200,
+            final_url="https://buyer.example/large",
+            content_type="text/html",
+            content_length=1500000,
+            response_bytes=1500000,
+            limit_bytes=1000000,
+            resource_kind="html",
+        )
+        connector = self._create_connector(max_html_response_bytes=1_000_000)
+        self._create_seed(connector, name="Large Seed", seed_url="https://buyer.example/large")
+
+        result = self._run_scan(connector)
+        frontier = self.db.query(BusinessDevelopmentWebFrontier).first()
+        assert frontier is not None
+        self.assertEqual(frontier.status, "skipped")
+        self.assertEqual(result["run"]["run_metadata_json"]["oversized_html_skipped"], 1)
+        self.assertEqual(result["run"]["run_metadata_json"]["skip_reason_counts"]["BODY_TOO_LARGE"], 1)
+        self.assertEqual(result["run"]["run_metadata_json"]["skip_samples"][0]["limit_bytes"], 1000000)
+
+    @patch("app.services.augmis_business_independent_discovery_service.validate_public_http_url")
+    @patch("app.services.augmis_business_independent_discovery_service.fetch_public_text_resource")
+    @patch("scrapy.crawler.CrawlerProcess")
+    @patch("app.services.augmis_business_independent_discovery_service.SessionLocal")
+    def test_scrapy_uses_shared_html_limit_and_skip_diagnostics(
+        self,
+        mock_session_local,
+        mock_crawler_process,
+        mock_fetch_text,
+        mock_validate_url,
+    ):
+        del mock_validate_url
+        mock_fetch_text.return_value = self._allow_all_robots("buyer.example")
+        connector = self._create_connector(max_html_response_bytes=1_000_000)
+        self._create_seed(connector, name="Scrapy Seed", seed_url="https://buyer.example/root")
+        captured: dict[str, Any] = {}
+
+        parent_test = self
+
+        class FakeCrawlerProcess:
+            def __init__(self, settings=None):
+                captured["settings"] = settings or {}
+
+            def crawl(self, spider_cls, **kwargs):
+                from scrapy import Request
+                from scrapy.exceptions import StopDownload
+                from scrapy.http import Headers
+
+                spider = spider_cls(**kwargs)
+                attachment_request = Request("https://buyer.example/file.pdf")
+                with parent_test.assertRaises(StopDownload):
+                    spider._on_headers_received(Headers({b"Content-Type": [b"application/pdf"], b"Content-Length": [b"680000"]}), 680000, attachment_request, spider)
+                captured["attachment_diagnostic"] = dict(attachment_request.meta.get("augmis_stop_diagnostic") or {})
+
+                html_request = Request("https://buyer.example/large")
+                with parent_test.assertRaises(StopDownload):
+                    spider._on_headers_received(Headers({b"Content-Type": [b"text/html"], b"Content-Length": [b"1500000"]}), 1500000, html_request, spider)
+                captured["html_diagnostic"] = dict(html_request.meta.get("augmis_stop_diagnostic") or {})
+
+            def start(self, stop_after_crawl=True):
+                return None
+
+        mock_crawler_process.side_effect = FakeCrawlerProcess
+        mock_session_local.side_effect = self.Session
+        run = BusinessDevelopmentConnectorRun(
+            id="BD-RUN-SCRAPY-LIMIT",
+            tenant_id="TENANT-1",
+            connector_id=connector.id,
+            run_type="manual",
+            status="running",
+            started_at=self.fixed_now,
+            run_metadata_json={"crawl_engine": "scrapy"},
+        )
+        self.db.add(run)
+        self.db.commit()
+
+        discoveries, metadata = discovery_service.run_scrapy_independent_scan(
+            tenant_id="TENANT-1",
+            connector_id=connector.id,
+            run_id=run.id,
+        )
+
+        self.assertEqual(discoveries, [])
+        self.assertEqual(captured["settings"]["DOWNLOAD_MAXSIZE"], 1_000_000)
+        self.assertEqual(captured["settings"]["DOWNLOAD_WARNSIZE"], 1_000_000)
+        self.assertEqual(captured["attachment_diagnostic"]["error_code"], "ATTACHMENT_SKIPPED")
+        self.assertEqual(captured["attachment_diagnostic"]["resource_kind"], "pdf")
+        self.assertEqual(captured["html_diagnostic"]["error_code"], "BODY_TOO_LARGE")
+        self.assertEqual(captured["html_diagnostic"]["limit_bytes"], 1_000_000)
+        self.assertEqual(metadata["crawl_engine"], "scrapy")
+
     @patch("app.services.augmis_business_independent_discovery_service._sleep")
     @patch("app.services.augmis_business_independent_discovery_service.validate_public_http_url")
     @patch("app.services.augmis_business_independent_discovery_service.fetch_public_webpage")
@@ -1299,6 +1458,83 @@ class AugmisBusinessIndependentDiscoveryServiceTest(unittest.TestCase):
         assert page_two is not None
         self.assertEqual(second["run"]["run_metadata_json"]["pages_fetched"], 1)
         self.assertEqual(page_two.status, "fetched")
+
+    @patch("app.services.augmis_business_independent_discovery_service.validate_public_http_url")
+    @patch("app.services.augmis_business_independent_discovery_service.fetch_public_webpage")
+    @patch("app.services.augmis_business_independent_discovery_service.fetch_public_text_resource")
+    def test_progress_callback_emits_bounded_live_scan_stages(
+        self,
+        mock_fetch_text,
+        mock_fetch_page,
+        mock_validate_url,
+    ):
+        del mock_validate_url
+        domain = "progress.example"
+        mock_fetch_text.return_value = self._allow_all_robots(domain)
+        mock_fetch_page.return_value = {
+            "url": "https://progress.example/root",
+            "status_code": 200,
+            "content_type": "text/html",
+            "body": "<html><head><title>Workflow Tender</title></head><body>Request for proposal for workflow automation.</body></html>",
+            "bytes_read": 120,
+        }
+        connector = self._create_connector(
+            maximum_domains_per_run=1,
+            maximum_pages_per_domain=2,
+            maximum_total_pages_per_run=2,
+            maximum_run_duration_seconds=60,
+        )
+        self._create_seed(connector, name="Progress Seed", seed_url="https://progress.example/root")
+        snapshots: list[dict[str, object]] = []
+
+        engine = discovery_service.IndependentWebDiscoveryEngine(
+            self.db,
+            connector,
+            None,
+            progress_callback=lambda snapshot: snapshots.append(dict(snapshot)),
+        )
+        engine.run()
+
+        stages = {str(snapshot.get("stage")) for snapshot in snapshots}
+        self.assertIn("PREPARING", stages)
+        self.assertIn("ROBOTS_AND_FRONTIER", stages)
+        self.assertIn("FETCHING", stages)
+        self.assertIn("FINALIZING", stages)
+
+    @patch("app.services.augmis_business_independent_discovery_service.validate_public_http_url")
+    @patch("app.services.augmis_business_independent_discovery_service.fetch_public_webpage")
+    @patch("app.services.augmis_business_independent_discovery_service.fetch_public_text_resource")
+    def test_nul_bytes_in_fetched_html_are_sanitized_before_persistence(
+        self,
+        mock_fetch_text,
+        mock_fetch_page,
+        mock_validate_url,
+    ):
+        del mock_validate_url
+        mock_fetch_text.return_value = self._allow_all_robots("nul.example")
+        mock_fetch_page.return_value = {
+            "url": "https://nul.example/root",
+            "status_code": 200,
+            "content_type": "text/html",
+            "body": "<html><head><title>Workflow\x00 Tender</title></head><body>Request for proposal\x00 for workflow automation.</body></html>",
+            "bytes_read": 128,
+        }
+        connector = self._create_connector(
+            maximum_domains_per_run=1,
+            maximum_pages_per_domain=2,
+            maximum_total_pages_per_run=2,
+            maximum_run_duration_seconds=60,
+        )
+        self._create_seed(connector, name="NUL Seed", seed_url="https://nul.example/root")
+
+        result = self._run_scan(connector)
+
+        self.assertEqual(result["run"]["status"], "completed")
+        page_row = self.db.query(BusinessDevelopmentWebPage).filter(BusinessDevelopmentWebPage.connector_id == connector.id).first()
+        self.assertIsNotNone(page_row)
+        assert page_row is not None
+        self.assertNotIn("\x00", page_row.plain_text or "")
+        self.assertNotIn("\x00", page_row.safe_html or "")
 
     @patch("app.services.augmis_business_independent_discovery_service.validate_public_http_url")
     @patch("app.services.augmis_business_independent_discovery_service.fetch_public_webpage")

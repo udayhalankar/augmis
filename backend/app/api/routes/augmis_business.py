@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -54,7 +54,9 @@ from app.services.augmis_business_discovery_translation_service import (
 from app.services.augmis_business_listener_service import (
     create_connector,
     create_search_profile,
+    execute_connector_scan_in_background,
     get_connector,
+    get_connector_run,
     get_discovery,
     import_discovery_as_opportunity,
     list_connector_runs,
@@ -66,6 +68,8 @@ from app.services.augmis_business_listener_service import (
     reject_discovery,
     reprocess_discovery_content,
     run_connector_scan,
+    start_connector_scan,
+    stop_connector_run,
     set_connector_provider,
     shortlist_discovery,
     test_connector,
@@ -561,12 +565,25 @@ def test_augmis_business_connector_credential_route(
 def run_augmis_business_connector_scan(
     connector_id: str,
     payload: AugmisBusinessConnectorScanRequest,
+    background_tasks: BackgroundTasks,
     current_user: dict = Depends(
         require_saas_access("augmis_business", "business_development:scan")
     ),
     db: Session = Depends(get_db),
 ):
-    return run_connector_scan(db, current_user["tenant_id"], connector_id, current_user, payload)
+    result = start_connector_scan(db, current_user["tenant_id"], connector_id, current_user, payload)
+    run = result["data"]["run"]
+    connector = result["data"]["connector"]
+    if connector.get("connector_type") == "independent_web_discovery" and run.get("status") == "queued":
+        background_tasks.add_task(
+            execute_connector_scan_in_background,
+            current_user["tenant_id"],
+            connector_id,
+            current_user,
+            payload,
+            run["id"],
+        )
+    return result
 
 
 @router.get("/connectors/{connector_id}/runs")
@@ -580,6 +597,30 @@ def get_augmis_business_connector_runs(
     db: Session = Depends(get_db),
 ):
     return list_connector_runs(db, current_user["tenant_id"], connector_id, page, page_size)
+
+
+@router.get("/connectors/{connector_id}/runs/{run_id}")
+def get_augmis_business_connector_run(
+    connector_id: str,
+    run_id: str,
+    current_user: dict = Depends(
+        require_saas_access("augmis_business", "business_development:read")
+    ),
+    db: Session = Depends(get_db),
+):
+    return get_connector_run(db, current_user["tenant_id"], connector_id, run_id)
+
+
+@router.post("/connectors/{connector_id}/runs/{run_id}/stop")
+def stop_augmis_business_connector_run(
+    connector_id: str,
+    run_id: str,
+    current_user: dict = Depends(
+        require_saas_access("augmis_business", "business_development:scan")
+    ),
+    db: Session = Depends(get_db),
+):
+    return stop_connector_run(db, current_user["tenant_id"], connector_id, run_id, current_user)
 
 
 @router.get("/discoveries")

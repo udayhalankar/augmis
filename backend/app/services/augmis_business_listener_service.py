@@ -3,9 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
+import json
 from math import ceil
+from pathlib import Path
 import re
-from typing import Any
+import subprocess
+import tempfile
+from typing import Any, Callable
 from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -16,6 +20,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, object_session
 
 from app.core.config import settings
+from app.core.database import SessionLocal
 from app.db_models import (
     BusinessDevelopmentConnector,
     BusinessDevelopmentConnectorRun,
@@ -102,10 +107,14 @@ from app.services.augmis_business_source_content_service import (
     build_normalized_discovery_content,
 )
 from app.services.augmis_business_independent_discovery_service import (
+    CRAWL_ENGINE_AUGMIS_NATIVE,
+    CRAWL_ENGINE_SCRAPY,
     INDEPENDENT_WEB_CONNECTOR_NAME,
     INDEPENDENT_WEB_CONNECTOR_TYPE,
     INDEPENDENT_WEB_SOURCE_NAME,
     IndependentWebDiscoveryEngine,
+    connector_crawl_engine,
+    crawl_engine_display,
 )
 
 
@@ -118,6 +127,19 @@ TED_CONNECTOR_TYPE = "ted_procurement"
 TED_CONNECTOR_NAME = "TED European Procurement"
 FREELANCER_CONNECTOR_TYPE = "freelancer_marketplace"
 FREELANCER_CONNECTOR_NAME = "Freelancer Marketplace"
+ACTIVE_CONNECTOR_RUN_STATUSES = {"queued", "running", "retrying"}
+RUN_STAGE_LABELS = {
+    "PREPARING": "Preparing scan",
+    "ROBOTS_AND_FRONTIER": "Preparing robots and frontier",
+    "FETCHING": "Fetching pages",
+    "FOLLOWING_LISTINGS": "Following procurement listings",
+    "EXTRACTING": "Extracting opportunity signals",
+    "VALIDATING": "Validating candidates",
+    "INGESTING": "Ingesting discoveries",
+    "FINALIZING": "Finalizing run",
+    "COMPLETED": "Completed",
+    "FAILED": "Failed",
+}
 REMOTEOK_CONNECTOR_TYPE = "remote_job_feed"
 REMOTEOK_CONNECTOR_NAME = "Remote OK"
 ARBEITNOW_CONNECTOR_TYPE = "job_board_api"
@@ -382,6 +404,8 @@ FREELANCER_NEGATIVE_SIGNAL_RULES: tuple[dict[str, Any], ...] = (
 )
 SCHEDULE_RETRY_DELAYS_MINUTES = (5, 15)
 SCHEDULE_STALE_RUN_THRESHOLD_MINUTES = 120
+SCRAPY_STOP_GRACE_SECONDS = 8
+SCRAPY_STOP_KILL_TIMEOUT_SECONDS = 5
 SCHEDULE_LABELS = {
     "manual": "Manual",
     "hourly_interval": "Every {hours} hour{suffix}",
@@ -421,7 +445,7 @@ def _now() -> datetime:
 def _clean_text(value: str | None) -> str | None:
     if value is None:
         return None
-    cleaned = WHITESPACE_PATTERN.sub(" ", value).strip()
+    cleaned = WHITESPACE_PATTERN.sub(" ", value.replace("\x00", "")).strip()
     return cleaned or None
 
 
@@ -710,6 +734,45 @@ def _as_utc(value: datetime | None) -> datetime | None:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def _independent_run_crawl_engine(
+    *,
+    connector: BusinessDevelopmentConnector,
+    payload: AugmisBusinessConnectorScanRequest | None = None,
+    run: BusinessDevelopmentConnectorRun | None = None,
+) -> str:
+    if run is not None:
+        metadata_engine = str((run.run_metadata_json or {}).get("crawl_engine") or "").strip().lower()
+        if metadata_engine:
+            return connector_crawl_engine(connector.configuration_json or {}, metadata_engine)
+    if payload is not None and payload.crawl_engine:
+        return connector_crawl_engine(connector.configuration_json or {}, payload.crawl_engine)
+    return connector_crawl_engine(connector.configuration_json or {})
+
+
+def _scrapy_subprocess_python() -> Path:
+    return Path(__file__).resolve().parents[2] / ".venv" / "Scripts" / "python.exe"
+
+
+def _scrapy_stop_file(run_id: str) -> Path:
+    return Path(tempfile.gettempdir()) / f"augmis_scrapy_stop_{run_id}.signal"
+
+
+def _is_connector_run_cancelled(tenant_id: str, run_id: str) -> bool:
+    check_db = SessionLocal()
+    try:
+        run = (
+            check_db.query(BusinessDevelopmentConnectorRun)
+            .filter(
+                BusinessDevelopmentConnectorRun.tenant_id == tenant_id,
+                BusinessDevelopmentConnectorRun.id == run_id,
+            )
+            .first()
+        )
+        return bool(run and run.status == "cancelled")
+    finally:
+        check_db.close()
 
 
 def _schedule_timezone_name(
@@ -1168,7 +1231,7 @@ def _connector_metadata_for_type(connector_type: str) -> AugmisBusinessConnector
                     "per_domain_delay_seconds": {"type": "integer", "default": 2},
                     "recrawl_interval_hours": {"type": "integer", "default": 168},
                     "allowed_domain_mode": {"type": "string", "default": "approved_only"},
-                    "max_fetch_bytes": {"type": "integer", "default": 300000},
+                    "max_html_response_bytes": {"type": "integer", "default": 2000000},
                     "max_extracted_text_chars": {"type": "integer", "default": 40000},
                     "maximum_links_per_page": {"type": "integer", "default": 40},
                     "maximum_run_duration_seconds": {"type": "integer", "default": 180},
@@ -1191,6 +1254,10 @@ class IngestionOutcome:
     row: BusinessDevelopmentDiscoveredOpportunity | None
     outcome: str
     duplicate_of_id: str | None = None
+
+
+class ConnectorRunCancelledError(Exception):
+    pass
 
 
 class BaseOpportunityConnector:
@@ -2539,6 +2606,13 @@ class IndependentWebDiscoveryConnector(BaseOpportunityConnector):
         maximum_depth = int(config.get("maximum_depth", 2) or 2)
         request_timeout_seconds = int(config.get("request_timeout_seconds", 15) or 15)
         per_domain_delay_seconds = int(config.get("per_domain_delay_seconds", 2) or 2)
+        max_html_response_bytes = int(
+            config.get(
+                "max_html_response_bytes",
+                settings.AUGMIS_WEB_DISCOVERY_DEFAULT_MAX_HTML_RESPONSE_BYTES,
+            )
+            or settings.AUGMIS_WEB_DISCOVERY_DEFAULT_MAX_HTML_RESPONSE_BYTES
+        )
         if maximum_domains_per_run < 1 or maximum_domains_per_run > settings.AUGMIS_WEB_DISCOVERY_MAX_DOMAINS_PER_RUN:
             raise HTTPException(status_code=400, detail="maximum_domains_per_run is out of bounds.")
         if maximum_pages_per_domain < 1 or maximum_pages_per_domain > settings.AUGMIS_WEB_DISCOVERY_MAX_PAGES_PER_DOMAIN:
@@ -2551,6 +2625,8 @@ class IndependentWebDiscoveryConnector(BaseOpportunityConnector):
             raise HTTPException(status_code=400, detail="request_timeout_seconds is out of bounds.")
         if per_domain_delay_seconds < settings.AUGMIS_WEB_DISCOVERY_MIN_DOMAIN_DELAY_SECONDS or per_domain_delay_seconds > settings.AUGMIS_WEB_DISCOVERY_MAX_DOMAIN_DELAY_SECONDS:
             raise HTTPException(status_code=400, detail="per_domain_delay_seconds is out of bounds.")
+        if max_html_response_bytes < 500_000 or max_html_response_bytes > settings.AUGMIS_WEB_DISCOVERY_MAX_HTML_RESPONSE_BYTES:
+            raise HTTPException(status_code=400, detail="max_html_response_bytes must be between 500000 and 5000000.")
 
     def discover(
         self,
@@ -2558,12 +2634,18 @@ class IndependentWebDiscoveryConnector(BaseOpportunityConnector):
         connector: BusinessDevelopmentConnector,
         search_profile: BusinessDevelopmentSearchProfile | None,
         credential: ResolvedProviderCredential | None = None,
+        progress_callback: Callable[[dict[str, Any]], None] | None = None,
     ) -> list[AugmisBusinessDiscoveredOpportunityCandidate]:
         del credential
         session = object_session(connector)
         if session is None:
             raise HTTPException(status_code=500, detail="Connector session is unavailable.")
-        engine = IndependentWebDiscoveryEngine(session, connector, search_profile)
+        engine = IndependentWebDiscoveryEngine(
+            session,
+            connector,
+            search_profile,
+            progress_callback=progress_callback,
+        )
         candidates, metadata = engine.run()
         self.last_run_metadata = metadata
         return candidates
@@ -3424,6 +3506,7 @@ def ensure_independent_web_connector(
         schedule_type="manual",
         schedule_timezone=_schedule_timezone_name(None),
         configuration_json={
+            "crawl_engine": CRAWL_ENGINE_AUGMIS_NATIVE,
             "maximum_seeds_per_run": 5,
             "maximum_domains_per_run": 5,
             "maximum_pages_per_domain": 25,
@@ -3433,7 +3516,7 @@ def ensure_independent_web_connector(
             "per_domain_delay_seconds": 2,
             "recrawl_interval_hours": 168,
             "allowed_domain_mode": "approved_only",
-            "max_fetch_bytes": settings.AUGMIS_WEB_FETCH_MAX_BYTES,
+            "max_html_response_bytes": settings.AUGMIS_WEB_DISCOVERY_DEFAULT_MAX_HTML_RESPONSE_BYTES,
             "max_extracted_text_chars": 40000,
             "maximum_links_per_page": 40,
             "maximum_run_duration_seconds": 180,
@@ -3847,6 +3930,74 @@ def list_connector_runs(
             "total_pages": ceil(total / page_size) if total else 1,
         },
     }
+
+
+def get_connector_run(
+    db: Session,
+    tenant_id: str,
+    connector_id: str,
+    run_id: str,
+) -> dict[str, Any]:
+    _require_connector(db, tenant_id, connector_id)
+    row = (
+        db.query(BusinessDevelopmentConnectorRun)
+        .filter(
+            BusinessDevelopmentConnectorRun.tenant_id == tenant_id,
+            BusinessDevelopmentConnectorRun.connector_id == connector_id,
+            BusinessDevelopmentConnectorRun.id == run_id,
+        )
+        .first()
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Connector run not found.")
+    return {"success": True, "data": _serialize_connector_run(row)}
+
+
+def stop_connector_run(
+    db: Session,
+    tenant_id: str,
+    connector_id: str,
+    run_id: str,
+    current_user: dict,
+) -> dict[str, Any]:
+    connector = _require_connector(db, tenant_id, connector_id)
+    run = (
+        db.query(BusinessDevelopmentConnectorRun)
+        .filter(
+            BusinessDevelopmentConnectorRun.tenant_id == tenant_id,
+            BusinessDevelopmentConnectorRun.connector_id == connector_id,
+            BusinessDevelopmentConnectorRun.id == run_id,
+        )
+        .first()
+    )
+    if run is None:
+        raise HTTPException(status_code=404, detail="Connector run not found.")
+    if run.status not in ACTIVE_CONNECTOR_RUN_STATUSES:
+        raise HTTPException(status_code=409, detail=f"Connector run is already {run.status}.")
+    message = "Connector scan was stopped by operator."
+    run.status = "cancelled"
+    run.completed_at = _now()
+    run.error_summary = message
+    run.run_metadata_json = _run_stop_metadata(connector=connector, run=run, message=message)
+    if connector.active_run_id == run.id:
+        connector.active_run_id = None
+    connector.status = "ready" if connector.enabled else "disabled"
+    connector.last_error_message = None
+    db.commit()
+    db.refresh(run)
+    db.refresh(connector)
+    create_audit_log(
+        db=db,
+        tenant_id=tenant_id,
+        user_id=current_user["user_id"],
+        event_type="RUN",
+        event_category="AUGMIS_BUSINESS",
+        description=f"Stopped connector scan for {connector.name}",
+        resource_type="bd_connector_run",
+        resource_id=run.id,
+        metadata={"connector_id": connector.id, "status": run.status},
+    )
+    return {"success": True, "data": {"connector": _serialize_connector(connector), "run": _serialize_connector_run(run)}}
 
 
 def _find_duplicate(
@@ -4616,13 +4767,227 @@ def ingest_discovered_opportunity(
     return IngestionOutcome(row=row, outcome=outcome, duplicate_of_id=duplicate_of_id)
 
 
-def run_connector_scan(
+def _independent_run_progress_snapshot(
+    *,
+    connector: BusinessDevelopmentConnector,
+    run: BusinessDevelopmentConnectorRun,
+    stage: str,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    snapshot = dict(run.run_metadata_json or {})
+    snapshot.update(extra or {})
+    crawl_engine = _independent_run_crawl_engine(connector=connector, payload=None, run=run)
+    snapshot["connector_type"] = connector.connector_type
+    snapshot["crawl_engine"] = crawl_engine
+    snapshot["crawl_engine_display"] = crawl_engine_display(crawl_engine)
+    snapshot["stage"] = stage
+    snapshot["stage_label"] = str(snapshot.get("stage_label") or RUN_STAGE_LABELS.get(stage, stage.replace("_", " ").title()))
+    snapshot["elapsed_seconds"] = max(0, int((_now() - (_as_utc(run.started_at) or _now())).total_seconds()))
+    max_total_pages = int((connector.configuration_json or {}).get("maximum_total_pages_per_run", 100) or 100)
+    pages_fetched = int(snapshot.get("pages_fetched", 0) or 0)
+    snapshot["current_batch_label"] = "Current Batch"
+    snapshot["batch_progress_current"] = pages_fetched
+    snapshot["batch_progress_total"] = max_total_pages
+    snapshot["max_html_response_bytes"] = int(
+        (connector.configuration_json or {}).get(
+            "max_html_response_bytes",
+            settings.AUGMIS_WEB_DISCOVERY_DEFAULT_MAX_HTML_RESPONSE_BYTES,
+        )
+        or settings.AUGMIS_WEB_DISCOVERY_DEFAULT_MAX_HTML_RESPONSE_BYTES
+    )
+    snapshot["progress_percent"] = 100 if stage in {"COMPLETED", "FAILED"} else min(99, int((pages_fetched / max(1, max_total_pages)) * 100))
+    current_url = str(snapshot.get("current_url") or "").strip()
+    snapshot["current_url"] = current_url[:240] if current_url else None
+    return snapshot
+
+
+def _persist_connector_run_progress(
+    *,
+    tenant_id: str,
+    connector_id: str,
+    run_id: str,
+    stage: str,
+    extra: dict[str, Any] | None = None,
+) -> None:
+    progress_db = SessionLocal()
+    try:
+        run = (
+            progress_db.query(BusinessDevelopmentConnectorRun)
+            .filter(
+                BusinessDevelopmentConnectorRun.tenant_id == tenant_id,
+                BusinessDevelopmentConnectorRun.connector_id == connector_id,
+                BusinessDevelopmentConnectorRun.id == run_id,
+            )
+            .first()
+        )
+        if run is None:
+            return
+        if run.status == "cancelled":
+            raise ConnectorRunCancelledError("Connector scan was stopped by operator.")
+        connector = _require_connector(progress_db, tenant_id, connector_id)
+        run.run_metadata_json = _independent_run_progress_snapshot(
+            connector=connector,
+            run=run,
+            stage=stage,
+            extra=extra,
+        )
+        if run.status == "queued" and stage not in {"FAILED", "COMPLETED"}:
+            run.status = "running"
+        if stage == "FAILED":
+            run.status = "failed"
+        progress_db.commit()
+    finally:
+        progress_db.close()
+
+
+def _build_independent_progress_callback(
+    *,
+    tenant_id: str,
+    connector_id: str,
+    run_id: str,
+) -> Callable[[dict[str, Any]], None]:
+    def callback(snapshot: dict[str, Any]) -> None:
+        _persist_connector_run_progress(
+            tenant_id=tenant_id,
+            connector_id=connector_id,
+            run_id=run_id,
+            stage=str(snapshot.get("stage") or "FETCHING").upper(),
+            extra=snapshot,
+        )
+
+    return callback
+
+
+def _execute_scrapy_independent_scan(
+    *,
+    db: Session,
+    tenant_id: str,
+    connector: BusinessDevelopmentConnector,
+    run: BusinessDevelopmentConnectorRun,
+    current_user: dict,
+) -> tuple[list[AugmisBusinessDiscoveredOpportunityCandidate], dict[str, Any]]:
+    del db, current_user
+    stop_file = _scrapy_stop_file(run.id)
+    try:
+        stop_file.unlink(missing_ok=True)
+        python_executable = _scrapy_subprocess_python()
+        if not python_executable.exists():
+            raise HTTPException(status_code=500, detail=f"Scrapy worker interpreter was not found at {python_executable}.")
+        process = subprocess.Popen(
+            [
+                str(python_executable),
+                "-m",
+                "app.scrapy_augmis.runner",
+                "--tenant-id",
+                tenant_id,
+                "--connector-id",
+                connector.id,
+                "--run-id",
+                run.id,
+                "--stop-file",
+                str(stop_file),
+            ],
+            cwd=str(python_executable.parent.parent.parent),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+        )
+        cancelled = False
+        while True:
+            try:
+                process.wait(timeout=1)
+                break
+            except subprocess.TimeoutExpired:
+                if not _is_connector_run_cancelled(tenant_id, run.id):
+                    continue
+                cancelled = True
+                stop_file.touch(exist_ok=True)
+                try:
+                    process.wait(timeout=SCRAPY_STOP_GRACE_SECONDS)
+                except subprocess.TimeoutExpired:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=SCRAPY_STOP_KILL_TIMEOUT_SECONDS)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait(timeout=SCRAPY_STOP_KILL_TIMEOUT_SECONDS)
+                break
+        stdout, stderr = process.communicate()
+        if cancelled:
+            raise ConnectorRunCancelledError("Connector scan was stopped by operator.")
+        if process.returncode != 0:
+            error_output = (stderr or stdout or "").strip().splitlines()
+            summary = error_output[-1] if error_output else "Scrapy crawl worker failed."
+            raise HTTPException(status_code=500, detail=summary)
+        payload = json.loads((stdout or "").strip().splitlines()[-1])
+        candidates = [
+            AugmisBusinessDiscoveredOpportunityCandidate.model_validate(item)
+            for item in list(payload.get("candidates") or [])
+        ]
+        metadata = dict(payload.get("metadata") or {})
+        metadata.setdefault("crawl_engine", CRAWL_ENGINE_SCRAPY)
+        metadata.setdefault("crawl_engine_display", crawl_engine_display(CRAWL_ENGINE_SCRAPY))
+        return candidates, metadata
+    finally:
+        stop_file.unlink(missing_ok=True)
+
+
+def _run_stop_metadata(
+    *,
+    connector: BusinessDevelopmentConnector,
+    run: BusinessDevelopmentConnectorRun,
+    message: str,
+) -> dict[str, Any]:
+    if connector.connector_type == INDEPENDENT_WEB_CONNECTOR_TYPE:
+        snapshot = _independent_run_progress_snapshot(
+            connector=connector,
+            run=run,
+            stage="FAILED",
+            extra={
+                **(run.run_metadata_json or {}),
+                "stage_label": "Stopped",
+                "failure_message": message,
+                "outcome_message": f"Stopped — {message}",
+            },
+        )
+        snapshot["stage"] = "STOPPED"
+        return snapshot
+    return {**(run.run_metadata_json or {})}
+
+
+def _raise_if_connector_run_cancelled(
+    *,
+    tenant_id: str,
+    connector_id: str,
+    run_id: str,
+) -> None:
+    check_db = SessionLocal()
+    try:
+        run = (
+            check_db.query(BusinessDevelopmentConnectorRun)
+            .filter(
+                BusinessDevelopmentConnectorRun.tenant_id == tenant_id,
+                BusinessDevelopmentConnectorRun.connector_id == connector_id,
+                BusinessDevelopmentConnectorRun.id == run_id,
+            )
+            .first()
+        )
+        if run is not None and run.status == "cancelled":
+            raise ConnectorRunCancelledError("Connector scan was stopped by operator.")
+    finally:
+        check_db.close()
+
+
+def _create_connector_run(
     db: Session,
     tenant_id: str,
     connector_id: str,
     current_user: dict,
     payload: AugmisBusinessConnectorScanRequest | None = None,
-) -> dict[str, Any]:
+    *,
+    initial_status: str = "running",
+) -> tuple[BusinessDevelopmentConnector, BusinessDevelopmentConnectorRun]:
     connector = _require_connector(db, tenant_id, connector_id)
     if not connector.enabled:
         raise HTTPException(status_code=400, detail="Connector is disabled")
@@ -4631,13 +4996,18 @@ def run_connector_scan(
         .filter(
             BusinessDevelopmentConnectorRun.tenant_id == tenant_id,
             BusinessDevelopmentConnectorRun.connector_id == connector.id,
-            BusinessDevelopmentConnectorRun.status == "running",
+            BusinessDevelopmentConnectorRun.status.in_(ACTIVE_CONNECTOR_RUN_STATUSES),
         )
         .first()
     )
     if overlapping:
         raise HTTPException(status_code=409, detail="A scan is already in progress for this connector.")
-    run_type = (payload.run_type if payload else "manual")
+    run_type = payload.run_type if payload else "manual"
+    crawl_engine = (
+        _independent_run_crawl_engine(connector=connector, payload=payload)
+        if connector.connector_type == INDEPENDENT_WEB_CONNECTOR_TYPE
+        else None
+    )
     started_at = _now()
     due_reference = _as_utc(connector.next_run_at) if run_type in {"scheduled", "retry"} else None
     attempt_number = 1
@@ -4654,11 +5024,32 @@ def run_connector_scan(
         attempt_number=attempt_number,
         max_attempts=max_attempts,
         retry_of_run_id=retry_of_run_id,
-        status="running",
+        status=initial_status,
         started_at=started_at,
         initiated_by=current_user["user_id"],
-        run_metadata_json={"connector_type": connector.connector_type},
+        run_metadata_json={
+            "connector_type": connector.connector_type,
+            **(
+                {
+                    "crawl_engine": crawl_engine,
+                    "crawl_engine_display": crawl_engine_display(crawl_engine),
+                }
+                if crawl_engine
+                else {}
+            ),
+        },
     )
+    if connector.connector_type == INDEPENDENT_WEB_CONNECTOR_TYPE:
+        run.run_metadata_json = _independent_run_progress_snapshot(
+            connector=connector,
+            run=run,
+            stage="PREPARING",
+            extra={
+                "stage_label": RUN_STAGE_LABELS["PREPARING"],
+                "crawl_engine": crawl_engine,
+                "crawl_engine_display": crawl_engine_display(crawl_engine),
+            },
+        )
     if not _claim_connector_run(
         db,
         connector=connector,
@@ -4683,12 +5074,52 @@ def run_connector_scan(
         resource_id=run.id,
         metadata={"connector_id": connector.id, "run_type": run_type, "attempt_number": run.attempt_number, "action": _run_audit_action(run_type)},
     )
+    return connector, run
+
+
+def _execute_connector_scan(
+    db: Session,
+    tenant_id: str,
+    connector_id: str,
+    current_user: dict,
+    payload: AugmisBusinessConnectorScanRequest | None = None,
+    *,
+    run_id: str | None = None,
+) -> dict[str, Any]:
+    connector = _require_connector(db, tenant_id, connector_id)
+    run = (
+        db.query(BusinessDevelopmentConnectorRun)
+        .filter(
+            BusinessDevelopmentConnectorRun.tenant_id == tenant_id,
+            BusinessDevelopmentConnectorRun.connector_id == connector.id,
+            BusinessDevelopmentConnectorRun.id == run_id,
+        )
+        .first()
+        if run_id
+        else None
+    )
+    if run is None:
+        connector, run = _create_connector_run(db, tenant_id, connector_id, current_user, payload)
+    elif run.status == "cancelled":
+        return {"success": True, "data": {"connector": _serialize_connector(connector), "run": _serialize_connector_run(run), "discoveries": []}}
+    _raise_if_connector_run_cancelled(tenant_id=tenant_id, connector_id=connector.id, run_id=run.id)
+    run_type = run.run_type or (payload.run_type if payload else "manual")
     search_profile = (
         _require_search_profile(db, tenant_id, connector.search_profile_id)
         if connector.search_profile_id
         else ensure_default_search_profile(db, tenant_id, current_user)
     )
     implementation = _get_connector_implementation(connector.connector_type)
+    crawl_engine = (
+        _independent_run_crawl_engine(connector=connector, payload=payload, run=run)
+        if connector.connector_type == INDEPENDENT_WEB_CONNECTOR_TYPE
+        else None
+    )
+    progress_callback = (
+        _build_independent_progress_callback(tenant_id=tenant_id, connector_id=connector.id, run_id=run.id)
+        if connector.connector_type == INDEPENDENT_WEB_CONNECTOR_TYPE
+        else None
+    )
     try:
         credential = (
             resolve_provider_credential(
@@ -4699,18 +5130,61 @@ def run_connector_scan(
             if connector.connector_type in {WEB_SEARCH_CONNECTOR_TYPE, FREELANCER_CONNECTOR_TYPE, ADZUNA_CONNECTOR_TYPE}
             else None
         )
-        candidates = implementation.discover(
-            connector=connector,
-            search_profile=search_profile,
-            credential=credential,
-        )
+        if connector.connector_type == INDEPENDENT_WEB_CONNECTOR_TYPE and crawl_engine == CRAWL_ENGINE_SCRAPY:
+            candidates, scrapy_metadata = _execute_scrapy_independent_scan(
+                db=db,
+                tenant_id=tenant_id,
+                connector=connector,
+                run=run,
+                current_user=current_user,
+            )
+            implementation.last_run_metadata = scrapy_metadata
+        else:
+            candidates = (
+                implementation.discover(
+                    connector=connector,
+                    search_profile=search_profile,
+                    credential=credential,
+                    progress_callback=progress_callback,
+                )
+                if connector.connector_type == INDEPENDENT_WEB_CONNECTOR_TYPE
+                else implementation.discover(
+                    connector=connector,
+                    search_profile=search_profile,
+                    credential=credential,
+                )
+            )
         run.run_metadata_json = {
             **(run.run_metadata_json or {}),
             **(implementation.last_run_metadata or {}),
         }
         run.items_filtered += int((implementation.last_run_metadata or {}).get("filtered_candidates", 0) or 0)
+        if connector.connector_type == INDEPENDENT_WEB_CONNECTOR_TYPE:
+            run.run_metadata_json = _independent_run_progress_snapshot(
+                connector=connector,
+                run=run,
+                stage="INGESTING",
+                extra={**(run.run_metadata_json or {}), "stage_label": RUN_STAGE_LABELS["INGESTING"]},
+            )
+            db.commit()
+            db.refresh(run)
         ingested_rows = []
-        for candidate in candidates:
+        for index, candidate in enumerate(candidates, start=1):
+            _raise_if_connector_run_cancelled(tenant_id=tenant_id, connector_id=connector.id, run_id=run.id)
+            if connector.connector_type == INDEPENDENT_WEB_CONNECTOR_TYPE:
+                run.run_metadata_json = _independent_run_progress_snapshot(
+                    connector=connector,
+                    run=run,
+                    stage="INGESTING",
+                    extra={
+                        **(run.run_metadata_json or {}),
+                        "stage_label": RUN_STAGE_LABELS["INGESTING"],
+                        "candidate_ingestion_current": index,
+                        "candidate_ingestion_total": len(candidates),
+                    },
+                )
+                db.commit()
+                db.refresh(run)
             try:
                 with db.begin_nested():
                     outcome = ingest_discovered_opportunity(
@@ -4728,42 +5202,62 @@ def run_connector_scan(
                 messages = list((run.run_metadata_json or {}).get("item_errors", []))
                 messages.append(str(exc))
                 run.run_metadata_json = {**(run.run_metadata_json or {}), "item_errors": messages[-10:]}
+        _raise_if_connector_run_cancelled(tenant_id=tenant_id, connector_id=connector.id, run_id=run.id)
         if connector.connector_type == INDEPENDENT_WEB_CONNECTOR_TYPE:
             run_metadata = dict(run.run_metadata_json or {})
             candidates_created = int(run_metadata.get("opportunity_candidates", 0) or 0)
-            candidates_accepted = max(0, int(run.items_found or 0) - int(run.items_filtered or 0))
+            pending_frontier_count = int(run_metadata.get("pending_frontier_count", 0) or 0)
             run_metadata["candidates_created"] = candidates_created
-            run_metadata["candidates_accepted"] = candidates_accepted
+            run_metadata["candidates_accepted"] = max(0, int(run.items_found or 0) - int(run.items_filtered or 0))
             run_metadata["new_discoveries"] = int(run.items_new or 0)
             run_metadata["duplicates"] = int(run.items_duplicate or 0)
-            if candidates_created == 0 and int(run_metadata.get("detail_pages", 0) or 0) == 0:
+            run_metadata["filtered"] = int(run.items_filtered or 0)
+            summary_fragments: list[str] = []
+            if int(run_metadata.get("attachments_skipped", 0) or 0):
+                summary_fragments.append(f"Attachments skipped: {int(run_metadata.get('attachments_skipped', 0) or 0)}")
+            if int(run_metadata.get("oversized_html_skipped", 0) or 0):
+                summary_fragments.append(f"Oversized HTML: {int(run_metadata.get('oversized_html_skipped', 0) or 0)}")
+            run_metadata["skip_summary"] = " · ".join(summary_fragments) if summary_fragments else None
+            if pending_frontier_count > 0:
+                run_metadata["batch_outcome"] = "BATCH_COMPLETE_MORE_PENDING"
+                run_metadata["outcome_title"] = "Batch Complete"
                 run_metadata["outcome_message"] = (
-                    f"Completed — {int(run_metadata.get('pages_fetched', 0) or 0)} pages fetched, "
-                    f"no detail opportunity pages found."
+                    f"Batch Complete — {int(run_metadata.get('pages_fetched', 0) or 0)} pages fetched, "
+                    f"{pending_frontier_count} URLs still pending, {int(run.items_new or 0)} new opportunities."
                 )
-            elif int(run.items_new or 0) == 0 and int(run.items_duplicate or 0) > 0:
+            elif candidates_created == 0 and int(run_metadata.get("detail_pages", 0) or 0) == 0:
+                run_metadata["batch_outcome"] = "CRAWL_COMPLETE"
+                run_metadata["outcome_title"] = "Completed"
                 run_metadata["outcome_message"] = (
-                    f"Completed — {int(run_metadata.get('pages_fetched', 0) or 0)} pages fetched, "
-                    f"{candidates_created} candidates, {int(run.items_duplicate or 0)} duplicates, "
-                    f"{int(run.items_new or 0)} new discoveries."
+                    f"Completed — {int(run_metadata.get('pages_fetched', 0) or 0)} pages fetched, no valid opportunities found."
                 )
             else:
+                run_metadata["batch_outcome"] = "CRAWL_COMPLETE"
+                run_metadata["outcome_title"] = "Crawl Complete"
                 run_metadata["outcome_message"] = (
-                    f"Completed — {int(run_metadata.get('pages_fetched', 0) or 0)} pages fetched, "
-                    f"{int(run_metadata.get('detail_pages', 0) or 0)} detail pages, "
-                    f"{candidates_created} candidates, {int(run.items_filtered or 0)} filtered, "
-                    f"{int(run.items_new or 0)} new discoveries."
+                    f"Crawl Complete — {int(run_metadata.get('pages_fetched', 0) or 0)} pages fetched, "
+                    f"{candidates_created} candidates, {int(run.items_new or 0)} new opportunities."
                 )
-            run.run_metadata_json = run_metadata
+            run.run_metadata_json = _independent_run_progress_snapshot(
+                connector=connector,
+                run=run,
+                stage="FINALIZING",
+                extra={**run_metadata, "stage_label": RUN_STAGE_LABELS["FINALIZING"]},
+            )
         run.completed_at = _now()
         run.status = "partial" if run.items_failed else "completed"
+        if connector.connector_type == INDEPENDENT_WEB_CONNECTOR_TYPE:
+            run.run_metadata_json = _independent_run_progress_snapshot(
+                connector=connector,
+                run=run,
+                stage="COMPLETED",
+                extra={**(run.run_metadata_json or {}), "stage_label": RUN_STAGE_LABELS["COMPLETED"]},
+            )
         connector.active_run_id = None
         connector.status = "ready" if connector.enabled else "disabled"
         connector.last_success_at = run.completed_at if run.status in {"completed", "partial"} else connector.last_success_at
         connector.last_error_at = run.completed_at if run.items_failed else None
-        connector.last_error_message = (
-            "Some discovery items failed ingestion." if run.items_failed else None
-        )
+        connector.last_error_message = "Some discovery items failed ingestion." if run.items_failed else None
         if run_type in {"scheduled", "retry"} and connector.schedule_enabled:
             connector.schedule_retry_count = 0
             connector.schedule_retry_run_id = None
@@ -4774,7 +5268,7 @@ def run_connector_scan(
                 schedule_time_local=connector.schedule_time_local,
                 schedule_timezone=connector.schedule_timezone,
                 after_utc=run.completed_at,
-                anchor_utc=connector.last_scheduled_run_at or due_reference or run.started_at,
+                anchor_utc=connector.last_scheduled_run_at or _as_utc(connector.next_run_at) or run.started_at,
             )
         db.commit()
         db.refresh(run)
@@ -4785,49 +5279,67 @@ def run_connector_scan(
             user_id=current_user["user_id"],
             event_type="RUN",
             event_category="AUGMIS_BUSINESS",
-            description=f"Initiated connector scan for {connector.name}",
+            description=f"Completed connector scan for {connector.name}",
             resource_type="bd_connector_run",
             resource_id=run.id,
             metadata={"connector_id": connector.id, "status": run.status},
         )
-        return {
-            "success": True,
-            "data": {
-                "connector": _serialize_connector(connector),
-                "run": _serialize_connector_run(run),
-                "discoveries": ingested_rows,
-            },
-        }
+        return {"success": True, "data": {"connector": _serialize_connector(connector), "run": _serialize_connector_run(run), "discoveries": ingested_rows}}
+    except ConnectorRunCancelledError as exc:
+        db.rollback()
+        run = (
+            db.query(BusinessDevelopmentConnectorRun)
+            .filter(BusinessDevelopmentConnectorRun.id == run.id, BusinessDevelopmentConnectorRun.tenant_id == tenant_id)
+            .first()
+        )
+        connector = _require_connector(db, tenant_id, connector.id)
+        message = str(exc) or "Connector scan was stopped by operator."
+        if run:
+            run.status = "cancelled"
+            run.completed_at = run.completed_at or _now()
+            run.error_summary = message
+            run.run_metadata_json = _run_stop_metadata(connector=connector, run=run, message=message)
+        if connector.active_run_id == run.id:
+            connector.active_run_id = None
+        connector.status = "ready" if connector.enabled else "disabled"
+        connector.last_error_message = None
+        db.commit()
+        db.refresh(run)
+        db.refresh(connector)
+        return {"success": True, "data": {"connector": _serialize_connector(connector), "run": _serialize_connector_run(run), "discoveries": []}}
     except Exception as exc:
         db.rollback()
         run = (
             db.query(BusinessDevelopmentConnectorRun)
-            .filter(
-                BusinessDevelopmentConnectorRun.id == run.id,
-                BusinessDevelopmentConnectorRun.tenant_id == tenant_id,
-            )
+            .filter(BusinessDevelopmentConnectorRun.id == run.id, BusinessDevelopmentConnectorRun.tenant_id == tenant_id)
             .first()
         )
         connector = _require_connector(db, tenant_id, connector.id)
-        error_summary = str(exc) or "Connector scan failed"
-        if isinstance(exc, TedApiError):
-            diagnostic = exc.to_diagnostic()
-            error_summary = _ted_error_summary(exc)
-            run_metadata = dict(run.run_metadata_json or {}) if run else {}
-            run_metadata["provider_error"] = diagnostic
-            if run:
-                run.run_metadata_json = run_metadata
+        error_summary = _ted_error_summary(exc) if isinstance(exc, TedApiError) else (str(exc) or "Connector scan failed")
+        if isinstance(exc, TedApiError) and run:
+            run_metadata = dict(run.run_metadata_json or {})
+            run_metadata["provider_error"] = exc.to_diagnostic()
+            run.run_metadata_json = run_metadata
         if run:
             run.status = "failed"
             run.completed_at = _now()
             run.error_summary = error_summary
+            if connector.connector_type == INDEPENDENT_WEB_CONNECTOR_TYPE:
+                run.run_metadata_json = _independent_run_progress_snapshot(
+                    connector=connector,
+                    run=run,
+                    stage="FAILED",
+                    extra={
+                        **(run.run_metadata_json or {}),
+                        "stage_label": RUN_STAGE_LABELS["FAILED"],
+                        "failure_message": error_summary,
+                        "outcome_message": f"Failed — {int((run.run_metadata_json or {}).get('pages_fetched', 0) or 0)} pages fetched before failure. {error_summary}",
+                    },
+                )
         connector.active_run_id = None
         connector.last_error_at = _now()
         connector.last_error_message = error_summary
-        if connector.enabled:
-            connector.status = "attention"
-        else:
-            connector.status = "disabled"
+        connector.status = "attention" if connector.enabled else "disabled"
         if run and run_type in {"scheduled", "retry"} and connector.schedule_enabled:
             retry_allowed = _is_retryable_scan_error(error_summary) and run.attempt_number < run.max_attempts
             if retry_allowed:
@@ -4847,12 +5359,60 @@ def run_connector_scan(
                     schedule_time_local=connector.schedule_time_local,
                     schedule_timezone=connector.schedule_timezone,
                     after_utc=_now(),
-                    anchor_utc=connector.last_scheduled_run_at or due_reference or run.started_at,
+                    anchor_utc=connector.last_scheduled_run_at or run.started_at,
                 )
         db.commit()
         if isinstance(exc, TedApiError):
             raise HTTPException(status_code=502, detail=error_summary) from exc
         raise HTTPException(status_code=500, detail=error_summary) from exc
+
+
+def execute_connector_scan_in_background(
+    tenant_id: str,
+    connector_id: str,
+    current_user: dict,
+    payload: AugmisBusinessConnectorScanRequest | None,
+    run_id: str,
+) -> None:
+    db = SessionLocal()
+    try:
+        _execute_connector_scan(db, tenant_id, connector_id, current_user, payload, run_id=run_id)
+    except Exception:
+        pass
+    finally:
+        db.close()
+
+
+def start_connector_scan(
+    db: Session,
+    tenant_id: str,
+    connector_id: str,
+    current_user: dict,
+    payload: AugmisBusinessConnectorScanRequest | None = None,
+) -> dict[str, Any]:
+    connector = _require_connector(db, tenant_id, connector_id)
+    run_type = payload.run_type if payload else "manual"
+    if connector.connector_type == INDEPENDENT_WEB_CONNECTOR_TYPE and run_type == "manual":
+        connector, run = _create_connector_run(
+            db,
+            tenant_id,
+            connector_id,
+            current_user,
+            payload,
+            initial_status="queued",
+        )
+        return {"success": True, "data": {"connector": _serialize_connector(connector), "run": _serialize_connector_run(run), "discoveries": []}}
+    return _execute_connector_scan(db, tenant_id, connector_id, current_user, payload)
+
+
+def run_connector_scan(
+    db: Session,
+    tenant_id: str,
+    connector_id: str,
+    current_user: dict,
+    payload: AugmisBusinessConnectorScanRequest | None = None,
+) -> dict[str, Any]:
+    return _execute_connector_scan(db, tenant_id, connector_id, current_user, payload)
 
 
 def list_discoveries(
