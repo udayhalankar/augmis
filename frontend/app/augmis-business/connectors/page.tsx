@@ -266,6 +266,7 @@ type DiscoveryRawContent = {
 type ConnectorRunMetadata = {
   crawl_engine?: "augmis_native" | "scrapy";
   crawl_engine_display?: string;
+  run_type?: string;
   max_html_response_bytes?: number;
   provider?: string;
   queries_executed?: string[];
@@ -312,8 +313,15 @@ type ConnectorRunMetadata = {
     error?: string;
   }>;
   seeds_processed?: number;
+  seeds_available?: number;
+  seeds_selected?: number;
+  seeds_skipped_not_due?: number;
   domains_visited?: number;
   urls_queued?: number;
+  requests_scheduled?: number;
+  requests_attempted?: number;
+  responses_received?: number;
+  pages_parsed?: number;
   pages_attempted?: number;
   pages_fetched?: number;
   pages_unchanged?: number;
@@ -402,6 +410,7 @@ type ConnectorRunMetadata = {
   current_batch_label?: string;
   batch_outcome?: string;
   outcome_title?: string;
+  execution_anomaly?: string;
   failure_message?: string;
   filtered?: number;
   candidate_ingestion_current?: number;
@@ -4946,10 +4955,14 @@ export default function AugmisBusinessConnectorsPage() {
                   >
                     <MetadataMetric label="Stage" value={selectedRunMetadata.stage_label || selectedRunMetadata.stage || "Running"} />
                     <MetadataMetric label="Current Domain" value={selectedRunMetadata.current_domain || "Not available"} />
+                    <MetadataMetric label="Seeds Selected" value={selectedRunMetadata.seeds_selected ?? selectedRunMetadata.seeds_processed ?? 0} />
+                    <MetadataMetric label="Skipped Not Due" value={selectedRunMetadata.seeds_skipped_not_due ?? 0} />
+                    <MetadataMetric label="Requests Scheduled" value={selectedRunMetadata.requests_scheduled ?? selectedRunMetadata.urls_queued ?? 0} />
+                    <MetadataMetric label="Requests Attempted" value={selectedRunMetadata.requests_attempted ?? selectedRunMetadata.pages_attempted ?? 0} />
+                    <MetadataMetric label="Responses Received" value={selectedRunMetadata.responses_received ?? selectedRunMetadata.pages_fetched ?? 0} />
+                    <MetadataMetric label="Pages Parsed" value={selectedRunMetadata.pages_parsed ?? selectedRunMetadata.pages_fetched ?? 0} />
                     <MetadataMetric label="Pending Frontier" value={selectedRunMetadata.pending_frontier_count ?? 0} />
                     <MetadataMetric label="Depth" value={selectedRunMetadata.current_depth ?? 0} />
-                    <MetadataMetric label="Attempted" value={selectedRunMetadata.pages_attempted ?? 0} />
-                    <MetadataMetric label="Fetched" value={selectedRunMetadata.pages_fetched ?? 0} />
                     <MetadataMetric label="Candidates" value={selectedRunMetadata.candidates_created ?? selectedRunMetadata.opportunity_candidates ?? 0} />
                     <MetadataMetric label="New" value={selectedConnectorRun?.items_new ?? 0} />
                   </Box>
@@ -4975,9 +4988,15 @@ export default function AugmisBusinessConnectorsPage() {
                     {selectedConnector?.connector_type === "independent_web_discovery" ? (
                       <>
                         <MetadataMetric label="Provider" value={selectedRunMetadata.provider || "AUGMIS Internal"} />
-                        <MetadataMetric label="Seeds" value={selectedRunMetadata.seeds_processed ?? 0} />
+                        <MetadataMetric label="Seeds Available" value={selectedRunMetadata.seeds_available ?? 0} />
+                        <MetadataMetric label="Seeds Selected" value={selectedRunMetadata.seeds_selected ?? selectedRunMetadata.seeds_processed ?? 0} />
+                        <MetadataMetric label="Skipped Not Due" value={selectedRunMetadata.seeds_skipped_not_due ?? 0} />
                         <MetadataMetric label="Domains" value={selectedRunMetadata.domains_visited ?? 0} />
                         <MetadataMetric label="Queued URLs" value={selectedRunMetadata.urls_queued ?? 0} />
+                        <MetadataMetric label="Requests Scheduled" value={selectedRunMetadata.requests_scheduled ?? selectedRunMetadata.urls_queued ?? 0} />
+                        <MetadataMetric label="Requests Attempted" value={selectedRunMetadata.requests_attempted ?? selectedRunMetadata.pages_attempted ?? 0} />
+                        <MetadataMetric label="Responses Received" value={selectedRunMetadata.responses_received ?? selectedRunMetadata.pages_fetched ?? 0} />
+                        <MetadataMetric label="Pages Parsed" value={selectedRunMetadata.pages_parsed ?? selectedRunMetadata.pages_fetched ?? 0} />
                         <MetadataMetric label="Pages Attempted" value={selectedRunMetadata.pages_attempted ?? 0} />
                         <MetadataMetric label="Pages Fetched" value={selectedRunMetadata.pages_fetched ?? 0} />
                         <MetadataMetric label="Pages Changed" value={selectedRunMetadata.pages_changed ?? 0} />

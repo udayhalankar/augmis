@@ -403,6 +403,41 @@ class AugmisBusinessListenerServiceTest(unittest.TestCase):
         self.assertEqual(result["run"]["items_found"], 1)
         self.assertEqual(len(result["discoveries"]), 1)
 
+    @patch("app.services.augmis_business_listener_service._execute_scrapy_independent_scan")
+    def test_scrapy_manual_no_requests_is_recorded_as_execution_anomaly(self, mock_execute_scrapy):
+        connector = service.ensure_independent_web_connector(self.db, "TENANT-1", self.current_user)
+        mock_execute_scrapy.return_value = (
+            [],
+            {
+                "provider": "augmis_internal",
+                "crawl_engine": "scrapy",
+                "crawl_engine_display": "Scrapy",
+                "run_type": "manual",
+                "status": "manual_scan_no_requests",
+                "seeds_available": 1,
+                "seeds_selected": 1,
+                "seeds_skipped_not_due": 0,
+                "requests_scheduled": 0,
+                "requests_attempted": 0,
+                "responses_received": 0,
+                "pages_parsed": 0,
+                "pages_fetched": 0,
+            },
+        )
+
+        result = service.run_connector_scan(
+            self.db,
+            "TENANT-1",
+            connector.id,
+            self.current_user,
+            AugmisBusinessConnectorScanRequest(run_type="manual", crawl_engine="scrapy"),
+        )["data"]
+
+        self.assertEqual(result["run"]["status"], "failed")
+        self.assertEqual(result["run"]["run_metadata_json"]["batch_outcome"], "MANUAL_SCAN_NO_REQUESTS")
+        self.assertEqual(result["run"]["run_metadata_json"]["execution_anomaly"], "MANUAL_SCAN_NO_REQUESTS")
+        self.assertIn("did not produce any crawl requests", result["run"]["run_metadata_json"]["outcome_message"])
+
     def test_import_discovery_creates_opportunity_and_blocks_repeat(self):
         connector = service.ensure_fixture_connector(self.db, "TENANT-1", self.current_user)
         service.run_connector_scan(

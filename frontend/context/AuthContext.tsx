@@ -4,6 +4,7 @@ import {
   createContext,
   useContext,
   useEffect,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -15,9 +16,13 @@ import {
   loginUser,
   logoutAllSessions as logoutAllSessionsRequest,
   logoutSession,
-  refreshLogin,
   registerWorkspace,
 } from "@/services/authService";
+import {
+  clearStoredSession,
+  refreshSessionTokens,
+  sessionRefreshEventName,
+} from "@/services/sessionRefresh";
 
 type AuthUser = {
   user_id: string;
@@ -63,12 +68,17 @@ type AuthContextType = {
 };
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
+const SESSION_KEEPALIVE_INTERVAL_MS = 60 * 1000;
+const SESSION_REFRESH_MIN_INTERVAL_MS = 15 * 60 * 1000;
+const SESSION_ACTIVITY_WINDOW_MS = 5 * 60 * 1000;
 
 export function AuthContextProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
   const [user, setUser] = useState<AuthUser | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const lastInteractionAtRef = useRef<number>(0);
+  const lastRefreshAtRef = useRef<number>(0);
 
   function establishSession(nextToken: string, nextUser: AuthUser, refreshToken?: string | null) {
     localStorage.setItem("infomentica_token", nextToken);
@@ -78,6 +88,7 @@ export function AuthContextProvider({ children }: { children: ReactNode }) {
     }
     setToken(nextToken);
     setUser(nextUser);
+    lastRefreshAtRef.current = Date.now();
   }
 
   useEffect(() => {
@@ -102,8 +113,8 @@ export function AuthContextProvider({ children }: { children: ReactNode }) {
 
         let activeToken = storedToken;
         if (!activeToken && storedRefreshToken) {
-          const refreshResult = await refreshLogin(storedRefreshToken);
-          establishSession(refreshResult.access_token, refreshResult.user, refreshResult.refresh_token);
+          const refreshResult = await refreshSessionTokens();
+          establishSession(refreshResult.access_token, refreshResult.user as AuthUser, refreshResult.refresh_token);
           activeToken = refreshResult.access_token;
         }
 
@@ -114,9 +125,7 @@ export function AuthContextProvider({ children }: { children: ReactNode }) {
           localStorage.setItem("infomentica_user", JSON.stringify(me.data));
         }
       } catch {
-        localStorage.removeItem("infomentica_token");
-        localStorage.removeItem("infomentica_refresh_token");
-        localStorage.removeItem("infomentica_user");
+        clearStoredSession();
         setUser(null);
         setToken(null);
       } finally {
@@ -126,6 +135,67 @@ export function AuthContextProvider({ children }: { children: ReactNode }) {
 
     bootstrapAuth();
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const recordActivity = () => {
+      lastInteractionAtRef.current = Date.now();
+    };
+
+    const syncRefreshedSession = (event: Event) => {
+      const detail = (event as CustomEvent).detail as
+        | { access_token?: string; user?: AuthUser; refresh_token?: string }
+        | undefined;
+      if (!detail?.access_token || !detail.user) {
+        return;
+      }
+      lastRefreshAtRef.current = Date.now();
+      setToken(detail.access_token);
+      setUser(detail.user);
+    };
+
+    const activityEvents: Array<keyof WindowEventMap> = ["pointerdown", "keydown", "mousemove", "scroll", "focus"];
+    recordActivity();
+    for (const eventName of activityEvents) {
+      window.addEventListener(eventName, recordActivity, { passive: true });
+    }
+    window.addEventListener(sessionRefreshEventName(), syncRefreshedSession as EventListener);
+
+    const interval = window.setInterval(async () => {
+      if (!document.hasFocus() || document.visibilityState !== "visible") {
+        return;
+      }
+      if (!localStorage.getItem("infomentica_token") || !localStorage.getItem("infomentica_refresh_token")) {
+        return;
+      }
+      const now = Date.now();
+      if (now - lastInteractionAtRef.current > SESSION_ACTIVITY_WINDOW_MS) {
+        return;
+      }
+      if (now - lastRefreshAtRef.current < SESSION_REFRESH_MIN_INTERVAL_MS) {
+        return;
+      }
+      try {
+        await refreshSessionTokens();
+      } catch {
+        clearStoredSession();
+        setUser(null);
+        setToken(null);
+        router.push("/login");
+      }
+    }, SESSION_KEEPALIVE_INTERVAL_MS);
+
+    return () => {
+      window.clearInterval(interval);
+      for (const eventName of activityEvents) {
+        window.removeEventListener(eventName, recordActivity);
+      }
+      window.removeEventListener(sessionRefreshEventName(), syncRefreshedSession as EventListener);
+    };
+  }, [router]);
 
   async function login(
     email: string,
@@ -193,9 +263,7 @@ export function AuthContextProvider({ children }: { children: ReactNode }) {
 
   function logout() {
     void logoutSession().catch(() => undefined);
-    localStorage.removeItem("infomentica_token");
-    localStorage.removeItem("infomentica_refresh_token");
-    localStorage.removeItem("infomentica_user");
+    clearStoredSession();
 
     setUser(null);
     setToken(null);
@@ -205,9 +273,7 @@ export function AuthContextProvider({ children }: { children: ReactNode }) {
 
   async function logoutAllSessions() {
     await logoutAllSessionsRequest();
-    localStorage.removeItem("infomentica_token");
-    localStorage.removeItem("infomentica_refresh_token");
-    localStorage.removeItem("infomentica_user");
+    clearStoredSession();
     setUser(null);
     setToken(null);
     router.push("/login");

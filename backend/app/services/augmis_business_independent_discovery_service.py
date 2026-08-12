@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import SessionLocal
+from app.scrapy_augmis.settings import build_scrapy_settings
 from app.db_models import (
     BusinessDevelopmentConnector,
     BusinessDevelopmentConnectorRun,
@@ -634,6 +635,14 @@ class FrontierSelection:
     frontier: BusinessDevelopmentWebFrontier | None
     wait_until: datetime | None
     reason: str
+
+
+@dataclass
+class SeedSelectionResult:
+    available_seeds: list[BusinessDevelopmentWebSeed]
+    selected_seeds: list[BusinessDevelopmentWebSeed]
+    skipped_not_due: int
+    status: str | None
 
 
 def _limited_codes(values: list[str], *, limit: int = 8) -> list[str]:
@@ -1729,19 +1738,28 @@ class IndependentWebDiscoveryEngine:
         connector: BusinessDevelopmentConnector,
         search_profile: BusinessDevelopmentSearchProfile | None,
         progress_callback: Callable[[dict[str, Any]], None] | None = None,
+        run_type: str = "manual",
     ) -> None:
         self.db = db
         self.connector = connector
         self.search_profile = search_profile
         self.progress_callback = progress_callback
+        self.run_type = str(run_type or "manual").strip().lower()
         self.config = dict(connector.configuration_json or {})
         self.policy = _runtime_policy(self.config)
         self.started_at = _now()
         self.metrics = {
             "provider": "augmis_internal",
+            "seeds_available": 0,
+            "seeds_selected": 0,
+            "seeds_skipped_not_due": 0,
             "seeds_processed": 0,
             "domains_visited": 0,
             "urls_queued": 0,
+            "requests_scheduled": 0,
+            "requests_attempted": 0,
+            "responses_received": 0,
+            "pages_parsed": 0,
             "pages_attempted": 0,
             "pages_fetched": 0,
             "pages_unchanged": 0,
@@ -1792,10 +1810,18 @@ class IndependentWebDiscoveryEngine:
         pending_frontier_count, _ = self._pending_frontier_summary()
         snapshot = {
             "stage": stage,
+            "run_type": self.run_type,
+            "seeds_available": self.metrics.get("seeds_available", 0),
+            "seeds_selected": self.metrics.get("seeds_selected", 0),
+            "seeds_skipped_not_due": self.metrics.get("seeds_skipped_not_due", 0),
             "seeds_processed": self.metrics.get("seeds_processed", 0),
             "domains_visited": len(self.visited_domains),
             "urls_queued": self.metrics.get("urls_queued", 0),
             "pending_frontier_count": pending_frontier_count,
+            "requests_scheduled": self.metrics.get("requests_scheduled", 0),
+            "requests_attempted": self.metrics.get("requests_attempted", 0),
+            "responses_received": self.metrics.get("responses_received", 0),
+            "pages_parsed": self.metrics.get("pages_parsed", 0),
             "pages_attempted": self.metrics.get("pages_attempted", 0),
             "pages_fetched": self.metrics.get("pages_fetched", 0),
             "listing_pages": self.metrics.get("listing_pages", 0),
@@ -1822,6 +1848,9 @@ class IndependentWebDiscoveryEngine:
         for session in self.http_sessions.values():
             session.close()
         self.http_sessions.clear()
+
+    def _scheduled_seed_eligibility_applies(self) -> bool:
+        return self.run_type in {"scheduled", "retry"}
 
     def validate_config(self) -> None:
         if int(self.config.get("maximum_domains_per_run", 5) or 5) < 1:
@@ -2005,6 +2034,35 @@ class IndependentWebDiscoveryEngine:
         self.seed_by_id = {row.id: row for row in rows}
         return rows
 
+    def _select_run_seeds(self) -> SeedSelectionResult:
+        seeds = self._seed_rows()
+        if not seeds:
+            self.metrics["seeds_available"] = 0
+            self.metrics["seeds_selected"] = 0
+            self.metrics["seeds_skipped_not_due"] = 0
+            self.metrics["seeds_processed"] = 0
+            return SeedSelectionResult([], [], 0, "no_enabled_seeds")
+        max_seeds = _clamp(int(self.config.get("maximum_seeds_per_run", 5) or 5), 1, len(seeds))
+        available_seeds = list(seeds[:max_seeds])
+        selected_seeds: list[BusinessDevelopmentWebSeed] = []
+        skipped_not_due = 0
+        scheduled_eligibility = self._scheduled_seed_eligibility_applies()
+        for seed in available_seeds:
+            next_crawl_at = _as_utc(seed.next_crawl_at)
+            if scheduled_eligibility and next_crawl_at and next_crawl_at > _now():
+                skipped_not_due += 1
+                continue
+            selected_seeds.append(seed)
+        self.metrics["seeds_available"] = len(available_seeds)
+        self.metrics["seeds_selected"] = len(selected_seeds)
+        self.metrics["seeds_skipped_not_due"] = skipped_not_due
+        self.metrics["seeds_processed"] = len(selected_seeds)
+        if selected_seeds:
+            return SeedSelectionResult(available_seeds, selected_seeds, skipped_not_due, None)
+        if scheduled_eligibility:
+            return SeedSelectionResult(available_seeds, selected_seeds, skipped_not_due, "no_due_work")
+        return SeedSelectionResult(available_seeds, selected_seeds, skipped_not_due, "no_enabled_seeds")
+
     def _seed_frontier(self, seed: BusinessDevelopmentWebSeed) -> None:
         canonical_url, domain = _as_public_url(seed.seed_url)
         domain_row = _ensure_domain(
@@ -2034,7 +2092,6 @@ class IndependentWebDiscoveryEngine:
         )
         if seed.seed_type == "sitemap" or canonical_url.endswith("sitemap.xml"):
             self._queue_sitemap(seed, domain_row, canonical_url)
-        self.metrics["seeds_processed"] += 1
 
     def _queue_sitemap(self, seed: BusinessDevelopmentWebSeed, domain_row: BusinessDevelopmentWebDomain, sitemap_url: str) -> None:
         try:
@@ -2353,16 +2410,16 @@ class IndependentWebDiscoveryEngine:
     def run(self) -> tuple[list[AugmisBusinessDiscoveredOpportunityCandidate], dict[str, Any]]:
         self.validate_config()
         self._emit_progress("PREPARING", stage_label="Preparing scan")
-        seeds = self._seed_rows()
-        if not seeds:
-            return [], {**self.metrics, "status": "no_seeds"}
-        max_seeds = _clamp(int(self.config.get("maximum_seeds_per_run", 5) or 5), 1, len(seeds))
-        seeded_due_work = False
-        for seed in seeds[:max_seeds]:
-            next_crawl_at = _as_utc(seed.next_crawl_at)
-            if next_crawl_at and next_crawl_at > _now():
-                continue
-            seeded_due_work = True
+        self._emit_progress("SELECTING_SEEDS", stage_label="Selecting seeds")
+        seed_selection = self._select_run_seeds()
+        if seed_selection.status is not None:
+            pending_frontier_count, _ = self._pending_frontier_summary()
+            if seed_selection.status != "no_due_work" or pending_frontier_count == 0:
+                metrics = {**self.metrics, "status": seed_selection.status}
+                self._emit_progress("FINALIZING", stage_label="Finalizing run", **metrics)
+                return [], metrics
+        seeded_due_work = bool(seed_selection.selected_seeds)
+        for seed in seed_selection.selected_seeds:
             self._seed_frontier(seed)
         self.db.flush()
         self._emit_progress("ROBOTS_AND_FRONTIER", stage_label="Preparing robots and frontier")
@@ -2422,6 +2479,7 @@ class IndependentWebDiscoveryEngine:
                     continue
                 frontier.status = "fetching"
                 frontier.last_attempted_at = _now()
+                self.metrics["requests_attempted"] += 1
                 self.metrics["pages_attempted"] += 1
                 self.run_domains.add(frontier.domain)
                 self.pages_attempted_by_domain[frontier.domain] = int(self.pages_attempted_by_domain.get(frontier.domain, 0)) + 1
@@ -2429,6 +2487,7 @@ class IndependentWebDiscoveryEngine:
                 try:
                     result = self._fetch_frontier_with_session(frontier=frontier)
                     html = str(result.get("body") or "")
+                    self.metrics["responses_received"] += 1
                     frontier.http_status = int(result.get("status_code") or 200)
                     frontier.last_fetched_at = _now()
                     frontier.status = "fetched"
@@ -2455,6 +2514,7 @@ class IndependentWebDiscoveryEngine:
                     domain_row.status = "ready"
                     self.visited_domains.add(frontier.domain)
                     self.pages_fetched_by_domain[frontier.domain] = int(self.pages_fetched_by_domain.get(frontier.domain, 0)) + 1
+                    self.metrics["pages_parsed"] += 1
                     self.metrics["pages_fetched"] += 1
                     self._process_fetched_page(
                         frontier=frontier,
@@ -2507,11 +2567,17 @@ class IndependentWebDiscoveryEngine:
                         detail_link_queued=detail_link_queued,
                     )
                 self.db.flush()
+            status = self._resolve_run_status(stop_reason=stop_reason, seeded_due_work=seeded_due_work)
+            if self.run_type == "manual" and int(self.metrics.get("seeds_selected", 0) or 0) > 0 and int(self.metrics.get("requests_attempted", 0) or 0) == 0:
+                status = "manual_scan_no_requests"
+            elif int(self.metrics.get("requests_attempted", 0) or 0) > 0 and int(self.metrics.get("responses_received", 0) or 0) == 0:
+                status = "fetch_failed"
             metrics = {
                 **self.metrics,
                 "domains_visited": len(self.visited_domains),
                 "duration_seconds": int((_now() - self.started_at).total_seconds()),
-                "status": self._resolve_run_status(stop_reason=stop_reason, seeded_due_work=seeded_due_work),
+                "run_type": self.run_type,
+                "status": status,
             }
             self._emit_progress("FINALIZING", stage_label="Finalizing run", **metrics)
             return discoveries, metrics
@@ -2645,6 +2711,39 @@ def run_scrapy_independent_scan(
                 }
                 raise StopDownload(fail=True)
 
+        def _mark_request_scheduled(self, request: Request) -> None:
+            if request.meta.get("augmis_request_scheduled"):
+                return
+            request.meta["augmis_request_scheduled"] = True
+            self.engine.metrics["requests_scheduled"] += 1
+
+        def _mark_request_attempted(self, request: Request, canonical_url: str) -> None:
+            if request.meta.get("augmis_request_attempted"):
+                return
+            request.meta["augmis_request_attempted"] = True
+            self.engine.metrics["requests_attempted"] += 1
+            self.engine.metrics["pages_attempted"] = self.engine.metrics["requests_attempted"]
+            self.engine._emit_progress(
+                "FETCHING",
+                stage_label="Fetching pages",
+                current_domain=urlsplit(canonical_url).hostname or None,
+                current_url=canonical_url or None,
+                current_depth=int(request.meta.get("crawl_depth") or 0),
+            )
+
+        def _mark_response_received(self, request: Request, canonical_url: str) -> None:
+            if request.meta.get("augmis_response_received"):
+                return
+            request.meta["augmis_response_received"] = True
+            self.engine.metrics["responses_received"] += 1
+            self.engine._emit_progress(
+                "PARSING",
+                stage_label="Parsing pages",
+                current_domain=urlsplit(canonical_url).hostname or None,
+                current_url=canonical_url or None,
+                current_depth=int(request.meta.get("crawl_depth") or 0),
+            )
+
         def _check_stop(self) -> None:
             if self.stop_file_path and Path(self.stop_file_path).exists():
                 raise CloseSpider("stopped")
@@ -2661,7 +2760,7 @@ def run_scrapy_independent_scan(
             if (_now() - self.engine.started_at).total_seconds() >= self.run_duration_limit:
                 raise CloseSpider("run_duration_reached")
 
-        def start_requests(self):
+        def _seed_requests(self):
             self.engine._emit_progress("ROBOTS_AND_FRONTIER", stage_label="Preparing robots and frontier")
             for seed in self.seeds:
                 canonical_url, domain = _as_public_url(seed.seed_url)
@@ -2677,7 +2776,7 @@ def run_scrapy_independent_scan(
                     found_context=seed.name,
                     default_approval="approved",
                 )
-                yield Request(
+                request = Request(
                     canonical_url,
                     callback=self.parse_page,
                     errback=self.handle_error,
@@ -2691,6 +2790,15 @@ def run_scrapy_independent_scan(
                         "download_warnsize": self._request_limit(),
                     },
                 )
+                self._mark_request_scheduled(request)
+                yield request
+
+        async def start(self):
+            for request in self._seed_requests():
+                yield request
+
+        def start_requests(self):
+            yield from self._seed_requests()
 
         def _followable_links(
             self,
@@ -2781,14 +2889,9 @@ def run_scrapy_independent_scan(
             canonical_url, domain = _as_public_url(final_url)
             depth = int(response.meta.get("crawl_depth") or 0)
             parent_url = response.meta.get("parent_url")
-            self.engine._emit_progress(
-                "FETCHING",
-                stage_label="Fetching pages",
-                current_domain=domain,
-                current_url=canonical_url,
-                current_depth=depth,
-            )
-            self.engine.metrics["pages_attempted"] += 1
+            self._mark_request_attempted(response.request, canonical_url)
+            self._mark_response_received(response.request, canonical_url)
+            self.engine.metrics["pages_parsed"] += 1
             self.engine.run_domains.add(domain)
             self.engine.visited_domains.add(domain)
             self.engine.pages_attempted_by_domain[domain] = int(self.engine.pages_attempted_by_domain.get(domain, 0)) + 1
@@ -2843,7 +2946,7 @@ def run_scrapy_independent_scan(
                     self.engine.listing_detail_links_queued.add(link["url"])
                     self.engine.metrics["detail_links_queued"] += 1
                 self.engine.metrics["urls_queued"] += 1
-                yield Request(
+                request = Request(
                     link["url"],
                     callback=self.parse_page,
                     errback=self.handle_error,
@@ -2857,6 +2960,8 @@ def run_scrapy_independent_scan(
                         "download_warnsize": self._request_limit(),
                     },
                 )
+                self._mark_request_scheduled(request)
+                yield request
 
         def handle_error(self, failure):
             self._check_stop()
@@ -2866,6 +2971,7 @@ def run_scrapy_independent_scan(
                 canonical_url, domain = _as_public_url(url)
             except Exception:
                 return
+            self._mark_request_attempted(request, canonical_url)
             seed = self.seed_by_id.get(str(request.meta.get("seed_id") or ""))
             domain_row = _ensure_domain(
                 self.engine.db,
@@ -2880,6 +2986,8 @@ def run_scrapy_independent_scan(
             )
             failure_value = getattr(failure, "value", failure)
             response = getattr(failure_value, "response", None)
+            if response is not None:
+                self._mark_response_received(request, canonical_url)
             diagnostic = dict(request.meta.get("augmis_stop_diagnostic") or {})
             if diagnostic:
                 diagnostic.update(
@@ -2964,6 +3072,15 @@ def run_scrapy_independent_scan(
         connector = _require_connector(db, tenant_id, connector_id)
         if connector.connector_type != INDEPENDENT_WEB_CONNECTOR_TYPE:
             raise HTTPException(status_code=400, detail="Connector is not the independent web discovery engine.")
+        run = (
+            db.query(BusinessDevelopmentConnectorRun)
+            .filter(
+                BusinessDevelopmentConnectorRun.tenant_id == tenant_id,
+                BusinessDevelopmentConnectorRun.id == run_id,
+            )
+            .first()
+        )
+        run_type = str(run.run_type or "manual").strip().lower() if run is not None else "manual"
         search_profile = (
             db.query(BusinessDevelopmentSearchProfile)
             .filter(
@@ -2991,6 +3108,7 @@ def run_scrapy_independent_scan(
             connector,
             search_profile,
             progress_callback=progress_callback,
+            run_type=run_type,
         )
         engine.validate_config()
         engine._emit_progress(
@@ -2999,48 +3117,44 @@ def run_scrapy_independent_scan(
             crawl_engine=CRAWL_ENGINE_SCRAPY,
             crawl_engine_display=crawl_engine_display(CRAWL_ENGINE_SCRAPY),
         )
-        all_seeds = engine._seed_rows()
-        if not all_seeds:
-            return [], {"status": "no_seeds", "crawl_engine": CRAWL_ENGINE_SCRAPY, "crawl_engine_display": crawl_engine_display(CRAWL_ENGINE_SCRAPY)}
-        max_seeds = _clamp(int(engine.config.get("maximum_seeds_per_run", 5) or 5), 1, len(all_seeds))
-        due_seeds = []
-        for seed in all_seeds[:max_seeds]:
-            next_crawl_at = _as_utc(seed.next_crawl_at)
-            if next_crawl_at and next_crawl_at > _now():
-                continue
-            due_seeds.append(seed)
-        if not due_seeds:
-            return [], {"status": "no_due_work", "crawl_engine": CRAWL_ENGINE_SCRAPY, "crawl_engine_display": crawl_engine_display(CRAWL_ENGINE_SCRAPY)}
-        process = CrawlerProcess(
-            settings={
-                "LOG_ENABLED": False,
-                "ROBOTSTXT_OBEY": True,
-                "COOKIES_ENABLED": True,
-                "CONCURRENT_REQUESTS_PER_DOMAIN": 1,
-                "DOWNLOAD_DELAY": int(engine.config.get("per_domain_delay_seconds", 2) or 2),
-                "DOWNLOAD_TIMEOUT": int(engine.config.get("request_timeout_seconds", 15) or 15),
-                "DOWNLOAD_MAXSIZE": int(engine.policy.max_fetch_bytes or settings.AUGMIS_WEB_DISCOVERY_DEFAULT_MAX_HTML_RESPONSE_BYTES),
-                "DOWNLOAD_WARNSIZE": int(engine.policy.max_fetch_bytes or settings.AUGMIS_WEB_DISCOVERY_DEFAULT_MAX_HTML_RESPONSE_BYTES),
-                "DEPTH_LIMIT": int(engine.config.get("maximum_depth", 2) or 2),
-                "RETRY_ENABLED": True,
-                "RETRY_TIMES": 2,
-                "USER_AGENT": settings.AUGMIS_WEB_DISCOVERY_USER_AGENT,
+        engine._emit_progress("SELECTING_SEEDS", stage_label="Selecting seeds")
+        seed_selection = engine._select_run_seeds()
+        if seed_selection.status is not None:
+            metrics = {
+                **engine.metrics,
+                "status": seed_selection.status,
+                "crawl_engine": CRAWL_ENGINE_SCRAPY,
+                "crawl_engine_display": crawl_engine_display(CRAWL_ENGINE_SCRAPY),
             }
+            progress_callback({**metrics, "stage": "FINALIZING", "stage_label": "Finalizing run"})
+            return [], metrics
+        process = CrawlerProcess(settings=build_scrapy_settings(engine.config, engine.policy.max_fetch_bytes))
+        engine._emit_progress(
+            "STARTING_SCRAPY",
+            stage_label="Starting Scrapy",
+            crawl_engine=CRAWL_ENGINE_SCRAPY,
+            crawl_engine_display=crawl_engine_display(CRAWL_ENGINE_SCRAPY),
         )
         process.crawl(
             IndependentWebScrapySpider,
             engine=engine,
-            seeds=due_seeds,
+            seeds=seed_selection.selected_seeds,
             search_profile=search_profile,
             stop_file_path=stop_file,
         )
         process.start(stop_after_crawl=True)
+        status = "completed"
+        if run_type == "manual" and int(engine.metrics.get("seeds_selected", 0) or 0) > 0 and int(engine.metrics.get("requests_attempted", 0) or 0) == 0:
+            status = "manual_scan_no_requests"
+        elif int(engine.metrics.get("requests_attempted", 0) or 0) > 0 and int(engine.metrics.get("responses_received", 0) or 0) == 0:
+            status = "fetch_failed"
         metrics = {
             **engine.metrics,
             "provider": "augmis_internal",
             "domains_visited": len(engine.visited_domains),
             "duration_seconds": int((_now() - engine.started_at).total_seconds()),
-            "status": "completed",
+            "status": status,
+            "run_type": run_type,
             "crawl_engine": CRAWL_ENGINE_SCRAPY,
             "crawl_engine_display": crawl_engine_display(CRAWL_ENGINE_SCRAPY),
         }

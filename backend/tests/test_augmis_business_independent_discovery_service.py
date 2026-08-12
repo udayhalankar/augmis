@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import unittest
 from datetime import datetime, timedelta, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import threading
+from typing import Any
 from unittest.mock import patch
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.core.database import Base
+from app.core.database import Base, SessionLocal
 from app.db_models import (
     AuditLog,
     BusinessDevelopmentConnector,
@@ -374,7 +377,7 @@ class AugmisBusinessIndependentDiscoveryServiceTest(unittest.TestCase):
             AugmisBusinessConnectorScanRequest(run_type="manual"),
         )["data"]
 
-        self.assertEqual(result["run"]["status"], "completed")
+        self.assertEqual(result["run"]["status"], "failed")
         self.assertEqual(result["run"]["items_new"], 0)
         self.assertEqual(result["run"]["run_metadata_json"]["robots_denied"], 1)
         mock_fetch_page.assert_not_called()
@@ -1118,6 +1121,186 @@ class AugmisBusinessIndependentDiscoveryServiceTest(unittest.TestCase):
         self.assertEqual(captured["html_diagnostic"]["limit_bytes"], 1_000_000)
         self.assertEqual(metadata["crawl_engine"], "scrapy")
 
+    @patch("app.services.augmis_business_independent_discovery_service.validate_public_http_url")
+    @patch("scrapy.crawler.CrawlerProcess")
+    @patch("app.services.augmis_business_independent_discovery_service.SessionLocal")
+    def test_scrapy_manual_scan_selects_future_seed_but_scheduled_skips_it(
+        self,
+        mock_session_local,
+        mock_crawler_process,
+        mock_validate_url,
+    ):
+        del mock_validate_url
+        connector = self._create_connector()
+        future_seed = self._create_seed(
+            connector,
+            name="Future Scrapy Seed",
+            seed_url="https://buyer.example/future-seed",
+            next_crawl_at=self.fixed_now + timedelta(days=1),
+        )
+        captured: dict[str, Any] = {"crawl_calls": []}
+
+        class FakeCrawlerProcess:
+            def __init__(self, settings=None):
+                captured["settings"] = settings or {}
+
+            def crawl(self, spider_cls, **kwargs):
+                captured["crawl_calls"].append([seed.id for seed in list(kwargs.get("seeds") or [])])
+
+            def start(self, stop_after_crawl=True):
+                return None
+
+        mock_crawler_process.side_effect = FakeCrawlerProcess
+        mock_session_local.side_effect = self.Session
+
+        manual_run = BusinessDevelopmentConnectorRun(
+            id="BD-RUN-SCRAPY-MANUAL-SEED",
+            tenant_id="TENANT-1",
+            connector_id=connector.id,
+            run_type="manual",
+            status="running",
+            started_at=self.fixed_now,
+            run_metadata_json={"crawl_engine": "scrapy"},
+        )
+        self.db.add(manual_run)
+        self.db.commit()
+
+        _, manual_metadata = discovery_service.run_scrapy_independent_scan(
+            tenant_id="TENANT-1",
+            connector_id=connector.id,
+            run_id=manual_run.id,
+        )
+
+        self.assertEqual(manual_metadata["status"], "manual_scan_no_requests")
+        self.assertEqual(manual_metadata["seeds_available"], 1)
+        self.assertEqual(manual_metadata["seeds_selected"], 1)
+        self.assertEqual(manual_metadata["seeds_skipped_not_due"], 0)
+        self.assertEqual(captured["crawl_calls"][0], [future_seed.id])
+
+        captured["crawl_calls"].clear()
+        scheduled_run = BusinessDevelopmentConnectorRun(
+            id="BD-RUN-SCRAPY-SCHEDULED-SEED",
+            tenant_id="TENANT-1",
+            connector_id=connector.id,
+            run_type="scheduled",
+            status="running",
+            started_at=self.fixed_now,
+            run_metadata_json={"crawl_engine": "scrapy"},
+        )
+        self.db.add(scheduled_run)
+        self.db.commit()
+
+        _, scheduled_metadata = discovery_service.run_scrapy_independent_scan(
+            tenant_id="TENANT-1",
+            connector_id=connector.id,
+            run_id=scheduled_run.id,
+        )
+
+        self.assertEqual(scheduled_metadata["status"], "no_due_work")
+        self.assertEqual(scheduled_metadata["seeds_available"], 1)
+        self.assertEqual(scheduled_metadata["seeds_selected"], 0)
+        self.assertEqual(scheduled_metadata["seeds_skipped_not_due"], 1)
+        self.assertEqual(captured["crawl_calls"], [])
+
+    @patch("app.services.augmis_business_independent_discovery_service.validate_public_http_url")
+    def test_scrapy_manual_scan_local_http_traversal_records_real_request_counters(
+        self,
+        mock_validate_url,
+    ):
+        del mock_validate_url
+
+        class LocalScrapyFixtureHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                if self.path == "/robots.txt":
+                    body = "User-agent: *\nAllow: /\n"
+                    content_type = "text/plain; charset=utf-8"
+                elif self.path == "/listing":
+                    body = """
+                        <html><head><title>Active Tenders</title></head><body>
+                        <h1>Current Tenders</h1>
+                        <p>Browse tenders and procurement notices.</p>
+                        <a href="/tender/123">Software Development Tender</a>
+                        </body></html>
+                    """
+                    content_type = "text/html; charset=utf-8"
+                elif self.path == "/tender/123":
+                    body = """
+                        <html><body>
+                        <h1>Software Development Tender</h1>
+                        <p>Request for proposal for development of a digital workflow system.</p>
+                        <p>Closing date: 30 September 2026</p>
+                        <p>Reference number: RFP-123</p>
+                        </body></html>
+                    """
+                    content_type = "text/html; charset=utf-8"
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                payload = body.encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, format, *args):
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), LocalScrapyFixtureHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        original_discovery_session_local = discovery_service.SessionLocal
+        original_listener_session_local = listener_service.SessionLocal
+        try:
+            connector = self._create_connector(
+                maximum_domains_per_run=1,
+                maximum_pages_per_domain=5,
+                maximum_total_pages_per_run=5,
+                maximum_run_duration_seconds=60,
+                per_domain_delay_seconds=0,
+            )
+            self._create_seed(
+                connector,
+                name="Local Scrapy Seed",
+                seed_url=f"http://127.0.0.1:{server.server_port}/listing",
+            )
+            run = BusinessDevelopmentConnectorRun(
+                id="BD-RUN-SCRAPY-LOCAL",
+                tenant_id="TENANT-1",
+                connector_id=connector.id,
+                run_type="manual",
+                status="running",
+                started_at=self.fixed_now,
+                run_metadata_json={"crawl_engine": "scrapy"},
+            )
+            self.db.add(run)
+            self.db.commit()
+
+            discovery_service.SessionLocal = self.Session
+            listener_service.SessionLocal = self.Session
+            _, metadata = discovery_service.run_scrapy_independent_scan(
+                tenant_id="TENANT-1",
+                connector_id=connector.id,
+                run_id=run.id,
+            )
+        finally:
+            discovery_service.SessionLocal = original_discovery_session_local
+            listener_service.SessionLocal = original_listener_session_local
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+        self.assertEqual(metadata["status"], "completed")
+        self.assertGreaterEqual(int(metadata["seeds_selected"]), 1)
+        self.assertGreaterEqual(int(metadata["requests_scheduled"]), 2)
+        self.assertGreaterEqual(int(metadata["requests_attempted"]), 2)
+        self.assertGreaterEqual(int(metadata["responses_received"]), 2)
+        self.assertGreaterEqual(int(metadata["pages_parsed"]), 2)
+        self.assertGreaterEqual(int(metadata["pages_fetched"]), 2)
+        self.assertGreaterEqual(int(metadata["detail_links_discovered"]), 1)
+        self.assertGreaterEqual(int(metadata["detail_links_queued"]), 1)
+
     @patch("app.services.augmis_business_independent_discovery_service._sleep")
     @patch("app.services.augmis_business_independent_discovery_service.validate_public_http_url")
     @patch("app.services.augmis_business_independent_discovery_service.fetch_public_webpage")
@@ -1396,7 +1579,7 @@ class AugmisBusinessIndependentDiscoveryServiceTest(unittest.TestCase):
 
         engine = discovery_service.IndependentWebDiscoveryEngine(self.db, connector, None)
         discoveries, metrics = engine.run()
-        self.assertEqual(metrics["pages_fetched"], 1)
+        self.assertEqual(metrics["pages_fetched"], 2)
         self.assertEqual(len(discoveries), 1)
 
     @patch("app.services.augmis_business_independent_discovery_service._sleep")
@@ -1456,8 +1639,70 @@ class AugmisBusinessIndependentDiscoveryServiceTest(unittest.TestCase):
             .first()
         )
         assert page_two is not None
-        self.assertEqual(second["run"]["run_metadata_json"]["pages_fetched"], 1)
+        self.assertEqual(second["run"]["run_metadata_json"]["pages_fetched"], 2)
         self.assertEqual(page_two.status, "fetched")
+
+    @patch("app.services.augmis_business_independent_discovery_service.validate_public_http_url")
+    @patch("app.services.augmis_business_independent_discovery_service.fetch_public_webpage")
+    @patch("app.services.augmis_business_independent_discovery_service.fetch_public_text_resource")
+    def test_native_manual_scan_selects_future_seed_while_scheduled_skips_it(
+        self,
+        mock_fetch_text,
+        mock_fetch_page,
+        mock_validate_url,
+    ):
+        del mock_validate_url
+        mock_fetch_text.return_value = self._allow_all_robots("native-manual.example")
+        mock_fetch_page.return_value = {
+            "url": "https://native-manual.example/root",
+            "status_code": 200,
+            "content_type": "text/html",
+            "body": "<html><head><title>Workflow Tender</title></head><body>Request for proposal for workflow automation.</body></html>",
+            "bytes_read": 120,
+        }
+        connector = self._create_connector(
+            maximum_domains_per_run=1,
+            maximum_pages_per_domain=2,
+            maximum_total_pages_per_run=2,
+            maximum_run_duration_seconds=60,
+        )
+        self._create_seed(
+            connector,
+            name="Future Native Seed",
+            seed_url="https://native-manual.example/root",
+            next_crawl_at=self.fixed_now + timedelta(days=1),
+        )
+
+        manual_result = self._run_scan(connector)
+        self.assertEqual(manual_result["run"]["status"], "completed")
+        self.assertEqual(manual_result["run"]["run_metadata_json"]["seeds_selected"], 1)
+        self.assertEqual(manual_result["run"]["run_metadata_json"]["seeds_skipped_not_due"], 0)
+        self.assertGreaterEqual(manual_result["run"]["run_metadata_json"]["requests_attempted"], 1)
+
+        scheduled_connector = self._create_isolated_connector(
+            name="Scheduled Native Seed",
+            maximum_domains_per_run=1,
+            maximum_pages_per_domain=2,
+            maximum_total_pages_per_run=2,
+            maximum_run_duration_seconds=60,
+        )
+        self._advance_now(1)
+        self._create_seed(
+            scheduled_connector,
+            name="Scheduled Future Native Seed",
+            seed_url="https://native-manual.example/scheduled-root",
+            next_crawl_at=self.fixed_now + timedelta(days=1),
+        )
+        scheduled_engine = discovery_service.IndependentWebDiscoveryEngine(
+            self.db,
+            scheduled_connector,
+            None,
+            run_type="scheduled",
+        )
+        _, scheduled_metrics = scheduled_engine.run()
+        self.assertEqual(scheduled_metrics["status"], "no_due_work")
+        self.assertEqual(scheduled_metrics["seeds_selected"], 0)
+        self.assertEqual(scheduled_metrics["seeds_skipped_not_due"], 1)
 
     @patch("app.services.augmis_business_independent_discovery_service.validate_public_http_url")
     @patch("app.services.augmis_business_independent_discovery_service.fetch_public_webpage")
@@ -1726,7 +1971,7 @@ class AugmisBusinessIndependentDiscoveryServiceTest(unittest.TestCase):
         assert waiting_frontier is not None
         waiting_frontier.next_fetch_at = self.fixed_now + timedelta(seconds=60)
         self.db.commit()
-        waiting_engine = discovery_service.IndependentWebDiscoveryEngine(self.db, waiting, None)
+        waiting_engine = discovery_service.IndependentWebDiscoveryEngine(self.db, waiting, None, run_type="scheduled")
         _, waiting_metrics = waiting_engine.run()
         self.assertEqual(waiting_metrics["status"], "frontier_waiting")
 
@@ -1743,7 +1988,7 @@ class AugmisBusinessIndependentDiscoveryServiceTest(unittest.TestCase):
             seed_url="https://status.example/no-due",
             next_crawl_at=self.fixed_now + timedelta(days=1),
         )
-        no_due_engine = discovery_service.IndependentWebDiscoveryEngine(self.db, no_due, None)
+        no_due_engine = discovery_service.IndependentWebDiscoveryEngine(self.db, no_due, None, run_type="scheduled")
         _, no_due_metrics = no_due_engine.run()
         self.assertEqual(no_due_metrics["status"], "no_due_work")
 

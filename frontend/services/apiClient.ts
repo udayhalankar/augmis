@@ -1,6 +1,7 @@
 import axios from "axios";
 import { API_BASE_URL } from "./apiBase";
 import { reportFrontendLog } from "./clientLogService";
+import { clearStoredSession, refreshSessionTokens } from "./sessionRefresh";
 
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
@@ -60,17 +61,10 @@ apiClient.interceptors.response.use(
       error.response.status === 401 &&
       !error.config?._retry
     ) {
-      const refreshToken = localStorage.getItem("infomentica_refresh_token");
-      if (refreshToken) {
+      if (localStorage.getItem("infomentica_refresh_token")) {
         try {
           error.config._retry = true;
-          const refreshResponse = await axios.post(`${API_BASE_URL}/api/auth/refresh`, {
-            refresh_token: refreshToken,
-          });
-          const refreshResult = refreshResponse.data;
-          localStorage.setItem("infomentica_token", refreshResult.access_token);
-          localStorage.setItem("infomentica_refresh_token", refreshResult.refresh_token);
-          localStorage.setItem("infomentica_user", JSON.stringify(refreshResult.user));
+          const refreshResult = await refreshSessionTokens();
           error.config.headers.Authorization = `Bearer ${refreshResult.access_token}`;
           return apiClient.request(error.config);
         } catch {
@@ -78,9 +72,7 @@ apiClient.interceptors.response.use(
         }
       }
 
-      localStorage.removeItem("infomentica_token");
-      localStorage.removeItem("infomentica_refresh_token");
-      localStorage.removeItem("infomentica_user");
+      clearStoredSession();
       window.location.href = "/login";
     }
 

@@ -130,8 +130,11 @@ FREELANCER_CONNECTOR_NAME = "Freelancer Marketplace"
 ACTIVE_CONNECTOR_RUN_STATUSES = {"queued", "running", "retrying"}
 RUN_STAGE_LABELS = {
     "PREPARING": "Preparing scan",
+    "SELECTING_SEEDS": "Selecting seeds",
+    "STARTING_SCRAPY": "Starting Scrapy",
     "ROBOTS_AND_FRONTIER": "Preparing robots and frontier",
     "FETCHING": "Fetching pages",
+    "PARSING": "Parsing pages",
     "FOLLOWING_LISTINGS": "Following procurement listings",
     "EXTRACTING": "Extracting opportunity signals",
     "VALIDATING": "Validating candidates",
@@ -2635,6 +2638,7 @@ class IndependentWebDiscoveryConnector(BaseOpportunityConnector):
         search_profile: BusinessDevelopmentSearchProfile | None,
         credential: ResolvedProviderCredential | None = None,
         progress_callback: Callable[[dict[str, Any]], None] | None = None,
+        run_type: str = "manual",
     ) -> list[AugmisBusinessDiscoveredOpportunityCandidate]:
         del credential
         session = object_session(connector)
@@ -2645,6 +2649,7 @@ class IndependentWebDiscoveryConnector(BaseOpportunityConnector):
             connector,
             search_profile,
             progress_callback=progress_callback,
+            run_type=run_type,
         )
         candidates, metadata = engine.run()
         self.last_run_metadata = metadata
@@ -4840,6 +4845,82 @@ def _persist_connector_run_progress(
         progress_db.close()
 
 
+def _independent_run_outcome_metadata(
+    *,
+    run: BusinessDevelopmentConnectorRun,
+    metadata: dict[str, Any],
+) -> tuple[dict[str, Any], str]:
+    run_type = str(metadata.get("run_type") or run.run_type or "manual").strip().lower()
+    raw_status = str(metadata.get("status") or "").strip().lower()
+    pages_fetched = int(metadata.get("pages_fetched", 0) or 0)
+    detail_pages = int(metadata.get("detail_pages", 0) or 0)
+    candidates_created = int(metadata.get("opportunity_candidates", 0) or 0)
+    pending_frontier_count = int(metadata.get("pending_frontier_count", 0) or 0)
+    seeds_selected = int(metadata.get("seeds_selected", 0) or 0)
+    requests_attempted = int(metadata.get("requests_attempted", metadata.get("pages_attempted", 0)) or 0)
+    responses_received = int(metadata.get("responses_received", metadata.get("pages_fetched", 0)) or 0)
+
+    metadata["candidates_created"] = candidates_created
+    metadata["candidates_accepted"] = max(0, int(run.items_found or 0) - int(run.items_filtered or 0))
+    metadata["new_discoveries"] = int(run.items_new or 0)
+    metadata["duplicates"] = int(run.items_duplicate or 0)
+    metadata["filtered"] = int(run.items_filtered or 0)
+
+    summary_fragments: list[str] = []
+    if int(metadata.get("attachments_skipped", 0) or 0):
+        summary_fragments.append(f"Attachments skipped: {int(metadata.get('attachments_skipped', 0) or 0)}")
+    if int(metadata.get("oversized_html_skipped", 0) or 0):
+        summary_fragments.append(f"Oversized HTML: {int(metadata.get('oversized_html_skipped', 0) or 0)}")
+    metadata["skip_summary"] = " · ".join(summary_fragments) if summary_fragments else None
+
+    if raw_status == "no_due_work":
+        metadata["batch_outcome"] = "NO_SCHEDULED_WORK"
+        metadata["outcome_title"] = "No Scheduled Work"
+        metadata["outcome_message"] = "No scan executed — no scheduled seeds are currently due."
+        return metadata, "completed"
+    if raw_status == "no_enabled_seeds":
+        metadata["batch_outcome"] = "NO_ENABLED_SEEDS"
+        metadata["outcome_title"] = "No Enabled Seeds"
+        metadata["outcome_message"] = (
+            "Manual scan did not run — no enabled seeds were available."
+            if run_type == "manual"
+            else "No scan executed — no enabled seeds were available."
+        )
+        return metadata, "failed" if run_type == "manual" else "completed"
+    if run_type == "manual" and seeds_selected > 0 and requests_attempted == 0:
+        metadata["batch_outcome"] = "MANUAL_SCAN_NO_REQUESTS"
+        metadata["execution_anomaly"] = "MANUAL_SCAN_NO_REQUESTS"
+        metadata["outcome_title"] = "Execution Anomaly"
+        metadata["outcome_message"] = "Manual scan did not run — selected seeds did not produce any crawl requests."
+        return metadata, "failed"
+    if requests_attempted > 0 and responses_received == 0:
+        metadata["batch_outcome"] = "FETCH_FAILED"
+        metadata["outcome_title"] = "Fetch Failed"
+        metadata["outcome_message"] = f"Scan attempted {requests_attempted} URLs, but no pages were successfully fetched."
+        return metadata, "failed"
+    if pending_frontier_count > 0:
+        metadata["batch_outcome"] = "BATCH_COMPLETE_MORE_PENDING"
+        metadata["outcome_title"] = "Batch Complete"
+        metadata["outcome_message"] = (
+            f"Batch Complete — {pages_fetched} pages fetched, "
+            f"{pending_frontier_count} URLs still pending, {int(run.items_new or 0)} new opportunities."
+        )
+        return metadata, "partial" if run.items_failed else "completed"
+    if candidates_created == 0 and detail_pages == 0:
+        metadata["batch_outcome"] = "CRAWL_COMPLETE"
+        metadata["outcome_title"] = "Completed"
+        metadata["outcome_message"] = f"Completed — {pages_fetched} pages fetched, no valid opportunities found."
+        return metadata, "partial" if run.items_failed else "completed"
+
+    metadata["batch_outcome"] = "CRAWL_COMPLETE"
+    metadata["outcome_title"] = "Crawl Complete"
+    metadata["outcome_message"] = (
+        f"Crawl Complete — {pages_fetched} pages fetched, "
+        f"{candidates_created} candidates, {int(run.items_new or 0)} new opportunities."
+    )
+    return metadata, "partial" if run.items_failed else "completed"
+
+
 def _build_independent_progress_callback(
     *,
     tenant_id: str,
@@ -5146,6 +5227,7 @@ def _execute_connector_scan(
                     search_profile=search_profile,
                     credential=credential,
                     progress_callback=progress_callback,
+                    run_type=run_type,
                 )
                 if connector.connector_type == INDEPENDENT_WEB_CONNECTOR_TYPE
                 else implementation.discover(
@@ -5205,39 +5287,7 @@ def _execute_connector_scan(
         _raise_if_connector_run_cancelled(tenant_id=tenant_id, connector_id=connector.id, run_id=run.id)
         if connector.connector_type == INDEPENDENT_WEB_CONNECTOR_TYPE:
             run_metadata = dict(run.run_metadata_json or {})
-            candidates_created = int(run_metadata.get("opportunity_candidates", 0) or 0)
-            pending_frontier_count = int(run_metadata.get("pending_frontier_count", 0) or 0)
-            run_metadata["candidates_created"] = candidates_created
-            run_metadata["candidates_accepted"] = max(0, int(run.items_found or 0) - int(run.items_filtered or 0))
-            run_metadata["new_discoveries"] = int(run.items_new or 0)
-            run_metadata["duplicates"] = int(run.items_duplicate or 0)
-            run_metadata["filtered"] = int(run.items_filtered or 0)
-            summary_fragments: list[str] = []
-            if int(run_metadata.get("attachments_skipped", 0) or 0):
-                summary_fragments.append(f"Attachments skipped: {int(run_metadata.get('attachments_skipped', 0) or 0)}")
-            if int(run_metadata.get("oversized_html_skipped", 0) or 0):
-                summary_fragments.append(f"Oversized HTML: {int(run_metadata.get('oversized_html_skipped', 0) or 0)}")
-            run_metadata["skip_summary"] = " · ".join(summary_fragments) if summary_fragments else None
-            if pending_frontier_count > 0:
-                run_metadata["batch_outcome"] = "BATCH_COMPLETE_MORE_PENDING"
-                run_metadata["outcome_title"] = "Batch Complete"
-                run_metadata["outcome_message"] = (
-                    f"Batch Complete — {int(run_metadata.get('pages_fetched', 0) or 0)} pages fetched, "
-                    f"{pending_frontier_count} URLs still pending, {int(run.items_new or 0)} new opportunities."
-                )
-            elif candidates_created == 0 and int(run_metadata.get("detail_pages", 0) or 0) == 0:
-                run_metadata["batch_outcome"] = "CRAWL_COMPLETE"
-                run_metadata["outcome_title"] = "Completed"
-                run_metadata["outcome_message"] = (
-                    f"Completed — {int(run_metadata.get('pages_fetched', 0) or 0)} pages fetched, no valid opportunities found."
-                )
-            else:
-                run_metadata["batch_outcome"] = "CRAWL_COMPLETE"
-                run_metadata["outcome_title"] = "Crawl Complete"
-                run_metadata["outcome_message"] = (
-                    f"Crawl Complete — {int(run_metadata.get('pages_fetched', 0) or 0)} pages fetched, "
-                    f"{candidates_created} candidates, {int(run.items_new or 0)} new opportunities."
-                )
+            run_metadata, final_run_status = _independent_run_outcome_metadata(run=run, metadata=run_metadata)
             run.run_metadata_json = _independent_run_progress_snapshot(
                 connector=connector,
                 run=run,
@@ -5245,19 +5295,24 @@ def _execute_connector_scan(
                 extra={**run_metadata, "stage_label": RUN_STAGE_LABELS["FINALIZING"]},
             )
         run.completed_at = _now()
-        run.status = "partial" if run.items_failed else "completed"
+        run.status = final_run_status if connector.connector_type == INDEPENDENT_WEB_CONNECTOR_TYPE else ("partial" if run.items_failed else "completed")
         if connector.connector_type == INDEPENDENT_WEB_CONNECTOR_TYPE:
+            completed_stage = "FAILED" if run.status == "failed" else "COMPLETED"
             run.run_metadata_json = _independent_run_progress_snapshot(
                 connector=connector,
                 run=run,
-                stage="COMPLETED",
-                extra={**(run.run_metadata_json or {}), "stage_label": RUN_STAGE_LABELS["COMPLETED"]},
+                stage=completed_stage,
+                extra={**(run.run_metadata_json or {}), "stage_label": RUN_STAGE_LABELS[completed_stage]},
             )
         connector.active_run_id = None
         connector.status = "ready" if connector.enabled else "disabled"
         connector.last_success_at = run.completed_at if run.status in {"completed", "partial"} else connector.last_success_at
-        connector.last_error_at = run.completed_at if run.items_failed else None
-        connector.last_error_message = "Some discovery items failed ingestion." if run.items_failed else None
+        connector.last_error_at = run.completed_at if run.status == "failed" or run.items_failed else None
+        connector.last_error_message = (
+            str((run.run_metadata_json or {}).get("outcome_message") or "Connector scan failed.")
+            if run.status == "failed"
+            else ("Some discovery items failed ingestion." if run.items_failed else None)
+        )
         if run_type in {"scheduled", "retry"} and connector.schedule_enabled:
             connector.schedule_retry_count = 0
             connector.schedule_retry_run_id = None
