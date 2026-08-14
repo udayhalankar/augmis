@@ -118,7 +118,15 @@ import {
   updateAugmisBusinessWebSeed,
   recrawlAugmisBusinessWebDomain,
 } from "@/services/augmisBusinessService";
+import BusinessDataTable, {
+  BUSINESS_TABLE_SINGLE_LINE_TEXT_SX,
+  type BusinessDataTableColumn,
+} from "../components/BusinessDataTable";
 import BusinessPageFrame from "../components/BusinessPageFrame";
+import BusinessTableHeaderToolbar from "../components/BusinessTableHeaderToolbar";
+import BusinessStatusCardStrip, {
+  type BusinessStatusCardItem,
+} from "../components/BusinessStatusCardStrip";
 import BusinessWorkspaceModal from "../components/BusinessWorkspaceModal";
 
 type ToastSeverity = "success" | "error" | "info" | "warning";
@@ -1273,56 +1281,6 @@ function SearchProfileArrayEditor({
   );
 }
 
-function MetricCard({
-  icon,
-  title,
-  value,
-  helper,
-  accent,
-}: {
-  icon: React.ReactNode;
-  title: string;
-  value: React.ReactNode;
-  helper: string;
-  accent: string;
-}) {
-  return (
-    <Paper elevation={0} sx={{ p: 2, borderRadius: "8px", border: "1px solid #E2E8F0" }}>
-      <Stack direction="row" spacing={1.3} sx={{ alignItems: "flex-start" }}>
-        <Box
-          sx={{
-            width: 42,
-            height: 42,
-            borderRadius: "10px",
-            display: "grid",
-            placeItems: "center",
-            bgcolor: accent,
-          }}
-        >
-          {icon}
-        </Box>
-        <Box sx={{ minWidth: 0 }}>
-          <Typography
-            sx={{
-              fontSize: 12,
-              fontWeight: 700,
-              color: "#64748B",
-              textTransform: "uppercase",
-              letterSpacing: ".05em",
-            }}
-          >
-            {title}
-          </Typography>
-          <Typography sx={{ mt: 0.65, fontSize: 26, fontWeight: 700, color: "#0F172A" }}>
-            {value}
-          </Typography>
-          <Typography sx={{ mt: 0.35, color: "#475569", fontSize: 13 }}>{helper}</Typography>
-        </Box>
-      </Stack>
-    </Paper>
-  );
-}
-
 function MetadataMetric({
   label,
   value,
@@ -1456,6 +1414,246 @@ function AugmisBusinessDiscoveryWorkspace() {
       ),
     [visibleConnectors]
   );
+  const discoveryStatusCards = useMemo<BusinessStatusCardItem[]>(
+    () => [
+      {
+        key: "active-connectors",
+        title: "Active Connectors",
+        value: summary.active_connectors,
+        description: "Configured and enabled connectors",
+        icon: <CableOutlinedIcon />,
+        gradient: "linear-gradient(135deg, #FFFFFF 0%, #EAF2FF 100%)",
+        iconTint: "#1D4ED8",
+        iconSurface: "#DBEAFE",
+      },
+      {
+        key: "discoveries-today",
+        title: "Discoveries Today",
+        value: summary.discoveries_today,
+        description: "Fresh opportunities staged today",
+        icon: <TravelExploreOutlinedIcon />,
+        gradient: "linear-gradient(135deg, #FFFFFF 0%, #E8FBF4 100%)",
+        iconTint: "#047857",
+        iconSurface: "#D1FAE5",
+      },
+      {
+        key: "new-discoveries",
+        title: "New Discoveries",
+        value: summary.new_discoveries,
+        description: "Awaiting operator review",
+        icon: <FindInPageOutlinedIcon />,
+        gradient: "linear-gradient(135deg, #FFFFFF 0%, #F2ECFF 100%)",
+        iconTint: "#7C3AED",
+        iconSurface: "#EDE9FE",
+      },
+      {
+        key: "failed-runs",
+        title: "Failed Runs",
+        value: summary.failed_runs,
+        description: "Runs that need attention",
+        icon: <ErrorOutlineRoundedIcon />,
+        gradient: "linear-gradient(135deg, #FFFFFF 0%, #FFF0F0 100%)",
+        iconTint: "#B42318",
+        iconSurface: "#FEE2E2",
+      },
+      {
+        key: "last-scan",
+        title: "Last Scan",
+        value: summary.last_scan ? new Date(summary.last_scan).toLocaleDateString() : "None",
+        description: summary.last_scan ? formatDate(summary.last_scan) : "No scans recorded yet",
+        icon: <AutorenewRoundedIcon />,
+        gradient: "linear-gradient(135deg, #FFFFFF 0%, #EAFBF8 100%)",
+        iconTint: "#0F766E",
+        iconSurface: "#CCFBF1",
+      },
+    ],
+    [summary]
+  );
+  const discoveryTableColumns: BusinessDataTableColumn<AugmisBusinessDiscovery>[] = [
+    {
+      key: "title",
+      label: "Opportunity",
+      width: 312,
+      cellSx: { maxWidth: 312 },
+      render: (discovery) => (
+        <Button
+          variant="text"
+          onClick={() => void openDiscoveryDrawer(discovery)}
+          sx={{
+            px: 0,
+            minWidth: 0,
+            width: "100%",
+            justifyContent: "flex-start",
+            textAlign: "left",
+            textTransform: "none",
+            fontWeight: 700,
+            color: "#1D4ED8",
+            minHeight: 0,
+          }}
+        >
+          <Box component="span" sx={BUSINESS_TABLE_SINGLE_LINE_TEXT_SX}>
+            {discoveryDisplayTitle(discovery)}
+          </Box>
+        </Button>
+      ),
+    },
+    {
+      key: "source",
+      label: "Source",
+      width: 128,
+      render: (discovery) => (
+        <Chip
+          size="small"
+          label={discoverySourceDisplay(discovery)}
+          sx={{
+            maxWidth: "100%",
+            border: "1px solid",
+            fontWeight: 700,
+            ...discoverySourceChipStyle(discovery),
+          }}
+        />
+      ),
+    },
+    {
+      key: "closing",
+      label: "Closing",
+      width: 150,
+      render: (discovery) => (
+        <Typography sx={{ ...BUSINESS_TABLE_SINGLE_LINE_TEXT_SX, color: "#0F172A", fontWeight: 600 }}>
+          {formatDate(discovery.closing_date)}
+        </Typography>
+      ),
+    },
+    {
+      key: "match",
+      label: "Match",
+      width: 112,
+      render: (discovery) => (
+        <Stack direction="row" spacing={0.6} sx={{ alignItems: "center", minWidth: 0 }}>
+          <Typography sx={{ fontSize: 13, fontWeight: 800, color: "#0F172A" }}>
+            {discovery.preliminary_relevance_score == null ? "N/A" : Math.round(discovery.preliminary_relevance_score)}
+          </Typography>
+          <Chip
+            label={discovery.relevance_band || "Unknown"}
+            size="small"
+            sx={{ textTransform: "capitalize", border: "1px solid", maxWidth: "100%", ...discoveryRelevanceBandChip(discovery.relevance_band) }}
+          />
+        </Stack>
+      ),
+    },
+    {
+      key: "commercial",
+      label: "Commercial",
+      width: 126,
+      render: (discovery) => (
+        <Stack direction="row" spacing={0.6} sx={{ alignItems: "center", minWidth: 0 }}>
+          <Typography sx={{ fontSize: 13, fontWeight: 800, color: "#0F172A" }}>
+            {discovery.commercial_priority_score == null ? "N/A" : Math.round(discovery.commercial_priority_score)}
+          </Typography>
+          <Chip
+            label={`P${discovery.commercial_priority_band || "?"}`}
+            size="small"
+            sx={{
+              textTransform: "capitalize",
+              border: "1px solid",
+              maxWidth: "100%",
+              ...discoveryPriorityBandChip(discovery.commercial_priority_band),
+            }}
+          />
+        </Stack>
+      ),
+    },
+    {
+      key: "recommendation",
+      label: "Recommendation",
+      width: 124,
+      render: (discovery) => (
+        <Chip
+          label={(discovery.commercial_recommendation || "watch").toUpperCase()}
+          size="small"
+          sx={{
+            textTransform: "uppercase",
+            border: "1px solid",
+            maxWidth: "100%",
+            ...discoveryRecommendationChip(discovery.commercial_recommendation),
+          }}
+        />
+      ),
+    },
+    {
+      key: "status",
+      label: "Status",
+      width: 100,
+      render: (discovery) => (
+        <Chip
+          label={discovery.discovery_status}
+          size="small"
+          sx={{ textTransform: "capitalize", border: "1px solid", maxWidth: "100%", ...discoveryStatusChip(discovery.discovery_status) }}
+        />
+      ),
+    },
+    {
+      key: "actions",
+      label: "Actions",
+      align: "right",
+      width: 168,
+      render: (discovery) => (
+        <Stack direction="row" spacing={0.5} sx={{ justifyContent: "flex-end", alignItems: "center" }}>
+          {discovery.source_url ? (
+            <Tooltip title="Open Source">
+              <span>
+                <IconButton
+                  size="small"
+                  component="a"
+                  href={discovery.source_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  sx={{ border: "1px solid #E2E8F0", bgcolor: "#FFFFFF", borderRadius: "8px" }}
+                >
+                  <OpenInNewRoundedIcon fontSize="small" sx={{ color: "#475569" }} />
+                </IconButton>
+              </span>
+            </Tooltip>
+          ) : null}
+          <Tooltip title="View">
+            <span>
+              <IconButton
+                size="small"
+                onClick={() => void openDiscoveryDrawer(discovery)}
+                sx={{ border: "1px solid #DBEAFE", bgcolor: "#F8FBFF", borderRadius: "8px" }}
+              >
+                <PreviewOutlinedIcon fontSize="small" sx={{ color: "#2563EB" }} />
+              </IconButton>
+            </span>
+          </Tooltip>
+          <Tooltip title="Shortlist">
+            <span>
+              <IconButton
+                size="small"
+                disabled={!canAdmin || busy || discovery.discovery_status === "imported"}
+                onClick={() => void handleDiscoveryAction("shortlist", discovery)}
+                sx={{ border: "1px solid #D1FADF", bgcolor: "#F6FEF9", borderRadius: "8px" }}
+              >
+                <TaskAltOutlinedIcon fontSize="small" sx={{ color: "#15803D" }} />
+              </IconButton>
+            </span>
+          </Tooltip>
+          <Tooltip title="Import">
+            <span>
+              <IconButton
+                size="small"
+                disabled={!canCreate || busy || discovery.discovery_status === "duplicate" || discovery.discovery_status === "imported"}
+                onClick={() => void handleDiscoveryAction("import", discovery)}
+                sx={{ border: "1px solid #C7D2FE", bgcolor: "#EEF2FF", borderRadius: "8px" }}
+              >
+                <ImportExportOutlinedIcon fontSize="small" sx={{ color: "#4338CA" }} />
+              </IconButton>
+            </span>
+          </Tooltip>
+        </Stack>
+      ),
+    },
+  ];
   const showToast = (message: string, severity: ToastSeverity) => {
     setToastMessage(message);
     setToastSeverity(severity);
@@ -2389,53 +2587,7 @@ function AugmisBusinessDiscoveryWorkspace() {
       >
         <Stack spacing={2.25}>
           {!isControlCentre ? (
-            <Box
-              sx={{
-                display: "grid",
-                gap: 1.5,
-                gridTemplateColumns: {
-                  xs: "1fr",
-                  md: "repeat(2, minmax(0, 1fr))",
-                  xl: "repeat(5, minmax(0, 1fr))",
-                },
-              }}
-            >
-              <MetricCard
-                icon={<CableOutlinedIcon sx={{ color: "#1D4ED8" }} />}
-                title="Active Connectors"
-                value={summary.active_connectors}
-                helper="Configured and enabled connectors"
-                accent="#DBEAFE"
-              />
-              <MetricCard
-                icon={<TravelExploreOutlinedIcon sx={{ color: "#047857" }} />}
-                title="Discoveries Today"
-                value={summary.discoveries_today}
-                helper="Fresh opportunities staged today"
-                accent="#D1FAE5"
-              />
-              <MetricCard
-                icon={<FindInPageOutlinedIcon sx={{ color: "#7C3AED" }} />}
-                title="New Discoveries"
-                value={summary.new_discoveries}
-                helper="Awaiting operator review"
-                accent="#EDE9FE"
-              />
-              <MetricCard
-                icon={<ErrorOutlineRoundedIcon sx={{ color: "#B42318" }} />}
-                title="Failed Runs"
-                value={summary.failed_runs}
-                helper="Runs that need attention"
-                accent="#FEE2E2"
-              />
-              <MetricCard
-                icon={<AutorenewRoundedIcon sx={{ color: "#0F766E" }} />}
-                title="Last Scan"
-                value={summary.last_scan ? new Date(summary.last_scan).toLocaleDateString() : "None"}
-                helper={summary.last_scan ? formatDate(summary.last_scan) : "No scans recorded yet"}
-                accent="#CCFBF1"
-              />
-            </Box>
+            <BusinessStatusCardStrip items={discoveryStatusCards} />
           ) : null}
 
           {busy && activeActionLabel && !(showRegistry && registryDialogOpen && activeActionLabel.startsWith("Scanning ")) ? (
@@ -2768,465 +2920,68 @@ function AugmisBusinessDiscoveryWorkspace() {
           ) : null}
 
           {showDiscoveryInbox ? (
-            <AdminTableCard
-              title={
-                <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
-                  <TravelExploreOutlinedIcon sx={{ fontSize: 18 }} />
-                  <Typography component="span" sx={{ fontWeight: 700, color: "inherit" }}>
-                    Discovery Inbox
-                  </Typography>
-                </Stack>
+            <BusinessDataTable
+              title="Discovery Inbox"
+              subtitle="Review search-driven discoveries, inspect source evidence, and import only verified opportunities."
+              icon={<TravelExploreOutlinedIcon sx={{ fontSize: 18 }} />}
+              headerActions={
+                <BusinessTableHeaderToolbar
+                  searchValue={search}
+                  onSearchChange={(value) => {
+                    setSearch(value);
+                    setDiscoveryPage(0);
+                  }}
+                  searchPlaceholder="Search title, organisation, summary"
+                  actions={
+                    <>
+                      {canAdmin ? (
+                        <Button
+                          variant="outlined"
+                          size="small"
+                          startIcon={<AutorenewRoundedIcon />}
+                          disabled={busy}
+                          onClick={() => void handleReprocessDiscoveryContent()}
+                        >
+                          Reprocess Content
+                        </Button>
+                      ) : null}
+                      {canAdmin ? (
+                        <Button
+                          variant="outlined"
+                          size="small"
+                          startIcon={<RuleFolderOutlinedIcon />}
+                          disabled={busy}
+                          onClick={() => void handleRecalculateDiscoveryValidity()}
+                        >
+                          Recalculate Validity
+                        </Button>
+                      ) : null}
+                    </>
+                  }
+                />
               }
-              description="Review search-driven discoveries, inspect source evidence, and import only verified opportunities."
-              bodySx={{ p: 2, bgcolor: "#FFFFFF" }}
-              paperSx={{ bgcolor: "#FFFFFF" }}
-            >
-              {discoveries.length ? (
-                <>
-                  <Box
-                    sx={{
-                      mb: 1.25,
-                      pb: 1.25,
-                      borderBottom: "1px solid #E2E8F0",
-                    }}
-                  >
-                    <Stack
-                      direction={{ xs: "column", md: "row" }}
-                      spacing={1}
-                      sx={{
-                        width: "100%",
-                        minWidth: 0,
-                        flexWrap: "wrap",
-                        justifyContent: { md: "space-between" },
-                        alignItems: { md: "center" },
-                        "& .MuiTextField-root": {
-                          minWidth: { xs: "100%", md: 0 },
-                        },
-                      }}
-                    >
-                      <Stack direction={{ xs: "column", md: "row" }} spacing={1} sx={{ flex: { md: "1 1 auto" }, minWidth: 0 }}>
-                        {canAdmin ? (
-                          <Button
-                            variant="outlined"
-                            size="small"
-                            startIcon={<AutorenewRoundedIcon />}
-                            disabled={busy}
-                            onClick={() => void handleReprocessDiscoveryContent()}
-                            sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700 }}
-                          >
-                            Reprocess Content
-                          </Button>
-                        ) : null}
-                        {canAdmin ? (
-                          <Button
-                            variant="outlined"
-                            size="small"
-                            startIcon={<RuleFolderOutlinedIcon />}
-                            disabled={busy}
-                            onClick={() => void handleRecalculateDiscoveryValidity()}
-                            sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700 }}
-                          >
-                            Recalculate Validity
-                          </Button>
-                        ) : null}
-                        <TextField
-                          size="small"
-                          value={search}
-                          onChange={(event) => {
-                            setSearch(event.target.value);
-                            setDiscoveryPage(0);
-                          }}
-                          placeholder="Search title, organisation, summary"
-                          sx={{ flex: { md: "1 1 340px" }, minWidth: 0 }}
-                          slotProps={{
-                            input: {
-                              startAdornment: (
-                                <InputAdornment position="start">
-                                  <SearchRoundedIcon fontSize="small" />
-                                </InputAdornment>
-                              ),
-                            },
-                          }}
-                        />
-                      </Stack>
-                      <Stack direction={{ xs: "column", md: "row" }} spacing={1} sx={{ minWidth: 0 }}>
-                        <TextField
-                          select
-                          size="small"
-                          label="Source"
-                          value={sourceCategoryFilter}
-                          onChange={(event) => {
-                            setSourceCategoryFilter(event.target.value);
-                            setDiscoveryPage(0);
-                          }}
-                          sx={{ width: { xs: "100%", md: 150 } }}
-                        >
-                          <MenuItem value="all">All sources</MenuItem>
-                          <MenuItem value="company_source">AUGMIS Web</MenuItem>
-                          <MenuItem value="search">Web Opportunity Search</MenuItem>
-                          <MenuItem value="procurement">TED</MenuItem>
-                          <MenuItem value="marketplace">Freelancer</MenuItem>
-                          <MenuItem value="remoteok">Remote OK</MenuItem>
-                          <MenuItem value="arbeitnow">Arbeitnow</MenuItem>
-                          <MenuItem value="remotive">Remotive</MenuItem>
-                          <MenuItem value="adzuna">Adzuna</MenuItem>
-                          <MenuItem value="fixture">Fixture</MenuItem>
-                        </TextField>
-                        <TextField
-                          select
-                          size="small"
-                          label="Status"
-                          value={statusFilter}
-                          onChange={(event) => {
-                            setStatusFilter(event.target.value);
-                            setDiscoveryPage(0);
-                          }}
-                          sx={{ width: { xs: "100%", md: 150 } }}
-                          slotProps={{
-                            input: {
-                              startAdornment: (
-                                <InputAdornment position="start">
-                                  <FilterAltOutlinedIcon fontSize="small" />
-                                </InputAdornment>
-                              ),
-                            },
-                          }}
-                        >
-                          <MenuItem value="all">All statuses</MenuItem>
-                          <MenuItem value="new">New</MenuItem>
-                          <MenuItem value="shortlisted">Shortlisted</MenuItem>
-                          <MenuItem value="duplicate">Duplicate</MenuItem>
-                          <MenuItem value="rejected">Rejected</MenuItem>
-                          <MenuItem value="imported">Imported</MenuItem>
-                          <MenuItem value="irrelevant">Irrelevant</MenuItem>
-                        </TextField>
-                        <TextField
-                          select
-                          size="small"
-                          label="Relevance"
-                          value={relevanceFilter}
-                          onChange={(event) => {
-                            setRelevanceFilter(event.target.value);
-                            setDiscoveryPage(0);
-                          }}
-                          sx={{ width: { xs: "100%", md: 150 } }}
-                        >
-                          <MenuItem value="all">All relevance</MenuItem>
-                          <MenuItem value="strong">Strong</MenuItem>
-                          <MenuItem value="good">Good</MenuItem>
-                          <MenuItem value="possible">Possible</MenuItem>
-                          <MenuItem value="weak">Weak</MenuItem>
-                          <MenuItem value="low">Low</MenuItem>
-                        </TextField>
-                        <TextField
-                          select
-                          size="small"
-                          label="Sort"
-                          value={sortBy}
-                          onChange={(event) => {
-                            setSortBy(event.target.value);
-                            setDiscoveryPage(0);
-                          }}
-                          sx={{ width: { xs: "100%", md: 150 } }}
-                        >
-                          <MenuItem value="newest">Newest</MenuItem>
-                          <MenuItem value="highest_match">Highest Match</MenuItem>
-                          <MenuItem value="lowest_match">Lowest Match</MenuItem>
-                          <MenuItem value="closing_soon">Closing Soon</MenuItem>
-                        </TextField>
-                      </Stack>
-                    </Stack>
-                  </Box>
-                  <Table
-                    size="small"
-                    sx={{
-                      tableLayout: "fixed",
-                      width: "100%",
-                      "& th, & td": {
-                        px: { xs: 0.75, md: 1.1 },
-                        py: 1.05,
-                        verticalAlign: "top",
-                      },
-                      "& thead th": {
-                        py: 0.8,
-                        verticalAlign: "middle",
-                        lineHeight: 1.2,
-                      },
-                    }}
-                  >
-                    <TableHead>
-                      <TableRow>
-                        <TableCell sx={{ width: { md: 520 } }}>Opportunity</TableCell>
-                        <TableCell sx={{ width: { md: 132 } }}>Source</TableCell>
-                        <TableCell sx={{ width: { md: 250 } }}>Closing</TableCell>
-                        <TableCell sx={{ width: { md: 104 } }}>Match</TableCell>
-                        <TableCell sx={{ width: { md: 118 } }}>Commercial</TableCell>
-                        <TableCell sx={{ width: { md: 104 } }}>Recommendation</TableCell>
-                        <TableCell sx={{ width: { md: 90 } }}>Status</TableCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {discoveries.map((discovery) => (
-                        <TableRow
-                          key={discovery.id}
-                          hover
-                          selected={selectedDiscovery?.id === discovery.id}
-                          sx={{
-                            "&.Mui-selected": { bgcolor: "#F8FBFF" },
-                            "&.Mui-selected:hover": { bgcolor: "#EFF6FF" },
-                          }}
-                        >
-                          <TableCell>
-                            <Stack spacing={0.55} sx={{ minWidth: 0 }}>
-                              <Button
-                                variant="text"
-                                onClick={() => void openDiscoveryDrawer(discovery)}
-                                sx={{
-                                  px: 0,
-                                  minWidth: 0,
-                                  width: "100%",
-                                  justifyContent: "flex-start",
-                                  textAlign: "left",
-                                  textTransform: "none",
-                                  fontWeight: 700,
-                                  color: "#1D4ED8",
-                                  "& .MuiButton-startIcon": { mr: 0.5 },
-                                }}
-                              >
-                                <Box
-                                  component="span"
-                                  sx={{
-                                    display: "-webkit-box",
-                                    WebkitBoxOrient: "vertical",
-                                    WebkitLineClamp: 2,
-                                    overflow: "hidden",
-                                    textOverflow: "ellipsis",
-                                    whiteSpace: "normal",
-                                    overflowWrap: "anywhere",
-                                    width: "100%",
-                                  }}
-                                >
-                                  {discoveryDisplayTitle(discovery)}
-                                </Box>
-                              </Button>
-                              <Stack direction="row" spacing={0.6} sx={{ alignItems: "center", flexWrap: "wrap", rowGap: 0.5 }}>
-                                {!discovery.source_language_is_english ? (
-                                  <Chip
-                                    size="small"
-                                    label={`${(discovery.source_language_code || "??").toUpperCase()} · ${discovery.source_language_label || "Unknown"}`}
-                                    sx={{ height: 22, fontSize: 11, border: "1px solid", ...discoveryLanguageChip(discovery.source_language_code) }}
-                                  />
-                                ) : null}
-                                {discovery.active_translation ? (
-                                  <Typography sx={{ fontSize: 11, color: "#64748B" }}>
-                                    Original: {discoveryOriginalLabel(discovery)}
-                                  </Typography>
-                                ) : null}
-                              </Stack>
-                              <Typography sx={{ fontSize: 12.5, color: "#0F172A", fontWeight: 600 }}>
-                                {discovery.organization_name || "Not available"}
-                              </Typography>
-                              <Stack direction="row" spacing={0.5} sx={{ flexWrap: "wrap", rowGap: 0.5 }}>
-                                <Chip
-                                  size="small"
-                                  label={
-                                    discovery.validity_score == null
-                                      ? "Validity unknown"
-                                      : `${Math.round(discovery.validity_score)} · ${formatDiscoveryValidityBand(discovery.validity_band)}`
-                                  }
-                                  sx={{
-                                    maxWidth: "100%",
-                                    border: "1px solid",
-                                    ...discoveryValidityBandChip(discovery.validity_band),
-                                  }}
-                                />
-                                {discovery.actionability ? (
-                                  <Chip
-                                    size="small"
-                                    label={formatDiscoveryActionability(discovery.actionability)}
-                                    sx={{
-                                      maxWidth: "100%",
-                                      border: "1px solid",
-                                      ...actionabilityChip(discovery.actionability),
-                                    }}
-                                  />
-                                ) : null}
-                              </Stack>
-                              <Typography sx={{ fontSize: 12, color: "#64748B" }}>
-                                {discovery.country || "Not available"}
-                              </Typography>
-                              <Stack direction="row" spacing={0.35} sx={{ flexWrap: "wrap", rowGap: 0.5, pt: 0.45 }}>
-                                {discovery.source_url ? (
-                                  <Tooltip title="Open Source">
-                                    <span>
-                                      <IconButton
-                                        size="small"
-                                        component="a"
-                                        href={discovery.source_url}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        sx={{ border: "1px solid #E2E8F0", bgcolor: "#FFFFFF" }}
-                                      >
-                                        <OpenInNewRoundedIcon fontSize="small" sx={{ color: "#475569" }} />
-                                      </IconButton>
-                                    </span>
-                                  </Tooltip>
-                                ) : null}
-                                <Tooltip title="View">
-                                  <span>
-                                    <IconButton
-                                      size="small"
-                                      onClick={() => void openDiscoveryDrawer(discovery)}
-                                      sx={{ border: "1px solid #DBEAFE", bgcolor: "#F8FBFF" }}
-                                    >
-                                      <PreviewOutlinedIcon fontSize="small" sx={{ color: "#2563EB" }} />
-                                    </IconButton>
-                                  </span>
-                                </Tooltip>
-                                <Tooltip title="Shortlist">
-                                  <span>
-                                    <IconButton
-                                      size="small"
-                                      disabled={!canAdmin || busy || discovery.discovery_status === "imported"}
-                                      onClick={() => void handleDiscoveryAction("shortlist", discovery)}
-                                      sx={{ border: "1px solid #D1FADF", bgcolor: "#F6FEF9" }}
-                                    >
-                                      <TaskAltOutlinedIcon fontSize="small" sx={{ color: "#15803D" }} />
-                                    </IconButton>
-                                  </span>
-                                </Tooltip>
-                                <Tooltip title="Reject">
-                                  <span>
-                                    <IconButton
-                                      size="small"
-                                      disabled={!canAdmin || busy || discovery.discovery_status === "imported"}
-                                      onClick={() => void handleDiscoveryAction("reject", discovery)}
-                                      sx={{ border: "1px solid #FECACA", bgcolor: "#FEF2F2" }}
-                                    >
-                                      <ErrorOutlineRoundedIcon fontSize="small" sx={{ color: "#B42318" }} />
-                                    </IconButton>
-                                  </span>
-                                </Tooltip>
-                                <Tooltip title="Import as Opportunity">
-                                  <span>
-                                    <IconButton
-                                      size="small"
-                                      disabled={!canCreate || busy || discovery.discovery_status === "duplicate" || discovery.discovery_status === "imported"}
-                                      onClick={() => void handleDiscoveryAction("import", discovery)}
-                                      sx={{ border: "1px solid #C7D2FE", bgcolor: "#EEF2FF" }}
-                                    >
-                                      <ImportExportOutlinedIcon fontSize="small" sx={{ color: "#4338CA" }} />
-                                    </IconButton>
-                                  </span>
-                                </Tooltip>
-                              </Stack>
-                            </Stack>
-                          </TableCell>
-                          <TableCell sx={{ color: "#475569" }}>
-                            <Chip
-                              size="small"
-                              label={discoverySourceDisplay(discovery)}
-                              sx={{
-                                maxWidth: "100%",
-                                border: "1px solid",
-                                fontWeight: 700,
-                                ...discoverySourceChipStyle(discovery),
-                              }}
-                            />
-                          </TableCell>
-                          <TableCell sx={{ color: "#475569", fontSize: 12, whiteSpace: "normal", overflowWrap: "anywhere" }}>
-                            <Stack spacing={0.5}>
-                              <Typography sx={{ fontSize: 11, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: ".04em" }}>
-                                Discovered
-                              </Typography>
-                              <Typography sx={{ fontSize: 11.5, color: "#64748B" }}>
-                                {formatDate(discovery.discovered_at)}
-                              </Typography>
-                              <Typography sx={{ fontSize: 12, fontWeight: 700, color: "#0F172A" }}>
-                                {renderRelativeClosing(discovery.closing_date)}
-                              </Typography>
-                              <Typography sx={{ fontSize: 11.5, color: "#64748B" }}>
-                                {formatDate(discovery.closing_date)}
-                              </Typography>
-                              <Chip
-                                label={(discovery.closing_status || "unknown").replace("_", " ")}
-                                size="small"
-                                sx={{ width: "fit-content", textTransform: "capitalize", border: "1px solid", ...discoveryClosingStatusChip(discovery.closing_status) }}
-                              />
-                            </Stack>
-                          </TableCell>
-                          <TableCell>
-                            <Stack spacing={0.35}>
-                              <Typography sx={{ fontSize: 13, fontWeight: 800, color: "#0F172A" }}>
-                                {discovery.preliminary_relevance_score == null
-                                  ? "N/A"
-                                  : Math.round(discovery.preliminary_relevance_score)}
-                              </Typography>
-                              <Chip
-                                label={discovery.relevance_band || "Unknown"}
-                                size="small"
-                                sx={{ textTransform: "capitalize", border: "1px solid", maxWidth: "100%", ...discoveryRelevanceBandChip(discovery.relevance_band) }}
-                              />
-                            </Stack>
-                          </TableCell>
-                          <TableCell>
-                            <Stack spacing={0.35}>
-                              <Typography sx={{ fontSize: 13, fontWeight: 800, color: "#0F172A" }}>
-                                {discovery.commercial_priority_score == null
-                                  ? "N/A"
-                                  : Math.round(discovery.commercial_priority_score)}
-                              </Typography>
-                              <Chip
-                                label={`Priority ${discovery.commercial_priority_band || "?"}`}
-                                size="small"
-                                sx={{
-                                  textTransform: "capitalize",
-                                  border: "1px solid",
-                                  maxWidth: "100%",
-                                  ...discoveryPriorityBandChip(discovery.commercial_priority_band),
-                                }}
-                              />
-                            </Stack>
-                          </TableCell>
-                          <TableCell>
-                            <Chip
-                              label={(discovery.commercial_recommendation || "watch").toUpperCase()}
-                              size="small"
-                              sx={{
-                                textTransform: "uppercase",
-                                border: "1px solid",
-                                maxWidth: "100%",
-                                ...discoveryRecommendationChip(discovery.commercial_recommendation),
-                              }}
-                            />
-                          </TableCell>
-                          <TableCell>
-                            <Chip
-                              label={discovery.discovery_status}
-                              size="small"
-                              sx={{ textTransform: "capitalize", border: "1px solid", maxWidth: "100%", ...discoveryStatusChip(discovery.discovery_status) }}
-                            />
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                  <TablePagination
-                    component="div"
-                    count={discoveriesTotal}
-                    page={discoveryPage}
-                    onPageChange={(_, page) => setDiscoveryPage(page)}
-                    rowsPerPage={discoveryPageSize}
-                    onRowsPerPageChange={(event) => {
-                      setDiscoveryPageSize(Number(event.target.value));
-                      setDiscoveryPage(0);
-                    }}
-                    rowsPerPageOptions={[10, 25, 50]}
-                    sx={ADMIN_TABLE_CARD_PAGINATION_SX}
-                  />
-                </>
-              ) : (
-                <Paper elevation={0} sx={{ p: 3, borderRadius: "8px", border: "1px dashed #CBD5E1", textAlign: "center" }}>
+              columns={discoveryTableColumns}
+              rows={discoveries}
+              page={discoveryPage}
+              pageSize={discoveryPageSize}
+              total={discoveriesTotal}
+              rowsPerPageOptions={[10, 25, 50]}
+              onPageChange={setDiscoveryPage}
+              onRowsPerPageChange={(nextPageSize) => {
+                setDiscoveryPageSize(nextPageSize);
+                setDiscoveryPage(0);
+              }}
+              selectedRowKey={selectedDiscovery?.id ?? null}
+              rowKey={(discovery) => discovery.id}
+              minWidth={1318}
+              tableLayout="fixed"
+              getRowSx={(discovery) => ({
+                "&.Mui-selected": { bgcolor: "#F8FBFF" },
+                "&.Mui-selected:hover": { bgcolor: "#EFF6FF" },
+                ...(selectedDiscovery?.id === discovery.id ? {} : {}),
+              })}
+              emptyContent={
+                <Paper elevation={0} sx={{ p: 3, borderRadius: "8px", border: "1px dashed #CBD5E1", textAlign: "center", m: 2.25 }}>
                   <Typography sx={{ fontWeight: 700, color: "#0F172A" }}>
                     No discoveries in the inbox yet
                   </Typography>
@@ -3253,8 +3008,8 @@ function AugmisBusinessDiscoveryWorkspace() {
                     ))}
                   </Stack>
                 </Paper>
-              )}
-            </AdminTableCard>
+              }
+            />
           ) : null}
         </Stack>
       </BusinessPageFrame>

@@ -61,7 +61,10 @@ import OutreachWorkspaceDialog from "../components/OutreachWorkspaceDialog";
 import MiniSolutionWorkspaceDrawer from "../components/MiniSolutionWorkspaceDrawer";
 import BusinessPageFrame from "../components/BusinessPageFrame";
 import BusinessFilterBar from "../components/BusinessFilterBar";
-import BusinessDataTable, { type BusinessDataTableColumn } from "../components/BusinessDataTable";
+import BusinessDataTable, {
+  BUSINESS_TABLE_SINGLE_LINE_TEXT_SX,
+  type BusinessDataTableColumn,
+} from "../components/BusinessDataTable";
 import BusinessDetailDrawer from "../components/BusinessDetailDrawer";
 import BusinessRowActionMenu from "../components/BusinessRowActionMenu";
 import {
@@ -69,7 +72,7 @@ import {
   BusinessSourceChip,
   BusinessStatusChip,
 } from "../components/BusinessChips";
-import type { BusinessMetricItem } from "../components/BusinessMetricCarousel";
+import { type BusinessStatusCardItem } from "../components/BusinessStatusCardStrip";
 
 type OpportunityFormState = {
   title: string;
@@ -697,22 +700,22 @@ export default function AugmisBusinessOpportunitiesPage() {
     return selectedOpportunity.source_evidence_json.map((entry) => JSON.stringify(entry));
   }, [selectedOpportunity]);
 
-  const metrics = useMemo<BusinessMetricItem[]>(
+  const metrics = useMemo<BusinessStatusCardItem[]>(
     () => [
       {
         key: "total-opportunities",
         title: "Total Opportunities",
         value: String(healthSummary?.opportunity_count ?? 0),
-        subtitle: "Tenant-scoped opportunity records",
-        accent: "linear-gradient(90deg, #DBEAFE 0%, #F8FAFC 100%)",
+        description: "Tenant-scoped opportunity records",
+        gradient: "linear-gradient(135deg, #FFFFFF 0%, #EAF2FF 100%)",
         icon: <ApartmentOutlinedIcon fontSize="small" />,
       },
       {
         key: "experience-catalogue",
         title: "Experience Catalogue",
         value: String(healthSummary?.experience_item_count ?? 0),
-        subtitle: "Reusable qualification references",
-        accent: "linear-gradient(90deg, #DCFCE7 0%, #F0FDF4 100%)",
+        description: "Reusable qualification references",
+        gradient: "linear-gradient(135deg, #FFFFFF 0%, #EAFBF1 100%)",
         icon: <HubOutlinedIcon fontSize="small" />,
       },
       {
@@ -722,24 +725,24 @@ export default function AugmisBusinessOpportunitiesPage() {
           items.filter((item) => ["new", "under_review", "qualified"].includes(item.opportunity_status))
             .length
         ),
-        subtitle: "Rows on the current filtered page",
-        accent: "linear-gradient(90deg, #FEF3C7 0%, #FFFBEB 100%)",
+        description: "Rows on the current filtered page",
+        gradient: "linear-gradient(135deg, #FFFFFF 0%, #FFF8E1 100%)",
         icon: <SourceOutlinedIcon fontSize="small" />,
       },
       {
         key: "converted-opportunities",
         title: "Converted",
         value: String(items.filter((item) => item.opportunity_status === "converted").length),
-        subtitle: "Already converted to leads",
-        accent: "linear-gradient(90deg, #EDE9FE 0%, #F8FAFC 100%)",
+        description: "Already converted to leads",
+        gradient: "linear-gradient(135deg, #FFFFFF 0%, #EEF2FF 100%)",
         icon: <WorkOutlineOutlinedIcon fontSize="small" />,
       },
       {
         key: "assessed-opportunities",
         title: "AI Assessed",
         value: String(items.filter((item) => item.ai_recommendation || item.fit_score != null).length),
-        subtitle: "Assessment data available on the page",
-        accent: "linear-gradient(90deg, #D1FAE5 0%, #F0FDFA 100%)",
+        description: "Assessment data available on the page",
+        gradient: "linear-gradient(135deg, #FFFFFF 0%, #ECFDF3 100%)",
         icon: <AutoAwesomeOutlinedIcon fontSize="small" />,
       },
     ],
@@ -752,51 +755,42 @@ export default function AugmisBusinessOpportunitiesPage() {
         label: "Opportunity",
         sortable: true,
         width: 360,
+        cellSx: { maxWidth: 360 },
         render: (item) => (
-          <Box>
-            <Button
-              variant="text"
-              onClick={() => void openDetailDrawer(item)}
-              sx={{
-                p: 0,
-                minWidth: 0,
-                justifyContent: "flex-start",
-                textTransform: "none",
-                fontWeight: 700,
-                color: "#0F172A",
-                textAlign: "left",
-                ...clampedTextSx(2),
-                "&:hover": { bgcolor: "transparent", color: "#1D4ED8" },
-              }}
-            >
+          <Button
+            variant="text"
+            onClick={() => void openDetailDrawer(item)}
+            sx={{
+              p: 0,
+              minWidth: 0,
+              width: "100%",
+              justifyContent: "flex-start",
+              textTransform: "none",
+              fontWeight: 700,
+              color: "#0F172A",
+              textAlign: "left",
+              "&:hover": { bgcolor: "transparent", color: "#1D4ED8" },
+            }}
+          >
+            <Box component="span" sx={BUSINESS_TABLE_SINGLE_LINE_TEXT_SX}>
               {item.title}
-            </Button>
-            <Typography sx={{ mt: 0.35, color: "#475569", fontSize: 13, ...clampedTextSx(2) }}>
-              {item.requirement_summary}
-            </Typography>
-            {(item.requirement_summary || "").length > 140 ? (
-              <Button
-                size="small"
-                onClick={() => void openDetailDrawer(item)}
-                sx={{ mt: 0.25, px: 0, minWidth: 0, textTransform: "none", fontWeight: 700 }}
-              >
-                View requirement
-              </Button>
-            ) : null}
-          </Box>
+            </Box>
+          </Button>
         ),
       },
       {
         key: "organization_name",
         label: "Organization",
         sortable: true,
-        width: 210,
+        width: 220,
+        cellSx: { maxWidth: 220 },
         render: (item) => (
-          <Box>
-            <Typography sx={{ fontWeight: 600, color: "#0F172A" }}>{item.organization_name}</Typography>
-            <Typography sx={{ mt: 0.35, color: "#64748B", fontSize: 13 }}>
-              {[item.country, item.region].filter(Boolean).join(" / ") || "Location not set"}
-            </Typography>
+          <Box
+            component="span"
+            title={[item.organization_name, item.country, item.region].filter(Boolean).join(" / ")}
+            sx={BUSINESS_TABLE_SINGLE_LINE_TEXT_SX}
+          >
+            {item.organization_name}
           </Box>
         ),
       },
@@ -804,12 +798,7 @@ export default function AugmisBusinessOpportunitiesPage() {
         key: "source_name",
         label: "Source",
         width: 170,
-        render: (item) => (
-          <Stack spacing={0.6} sx={{ alignItems: "flex-start" }}>
-            <BusinessSourceChip label={item.source_name || item.source_type} sourceType={item.source_type} />
-            <Typography sx={{ color: "#64748B", fontSize: 12.5 }}>{item.source_type}</Typography>
-          </Stack>
-        ),
+        render: (item) => <BusinessSourceChip label={item.source_name || item.source_type} sourceType={item.source_type} />,
       },
       {
         key: "opportunity_status",
@@ -842,35 +831,21 @@ export default function AugmisBusinessOpportunitiesPage() {
         key: "actions",
         label: "Actions",
         align: "right",
-        width: 230,
+        width: 130,
         render: (item) => (
           <BusinessRowActionMenu
-            primaryAction={
-              canQualify && isBuildLeadEligible(item) ? (
-                <Button
-                  size="small"
-                  variant="contained"
-                  startIcon={<HubOutlinedIcon sx={{ color: "#FFFFFF" }} />}
-                  onClick={() => openBuildLeadDialog(item)}
-                  sx={{
-                    minWidth: 0,
-                    px: 1.05,
-                    py: 0.4,
-                    borderRadius: "8px",
-                    textTransform: "none",
-                    fontSize: 12,
-                    fontWeight: 700,
-                    bgcolor: "#2563EB",
-                    boxShadow: "none",
-                    "&:hover": { bgcolor: "#1D4ED8", boxShadow: "none" },
-                  }}
-                >
-                  Build Lead
-                </Button>
-              ) : undefined
-            }
             onView={canRead ? () => void openDetailDrawer(item) : undefined}
             menuItems={[
+              ...(canQualify && isBuildLeadEligible(item)
+                ? [
+                    {
+                      key: "build-lead",
+                      label: "Build Lead",
+                      icon: <HubOutlinedIcon fontSize="small" />,
+                      onClick: () => openBuildLeadDialog(item),
+                    },
+                  ]
+                : []),
               ...(canQualify
                 ? [
                     {

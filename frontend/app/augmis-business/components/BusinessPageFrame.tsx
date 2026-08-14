@@ -5,8 +5,7 @@ import { Box, Stack } from "@mui/material";
 import { ADMIN_TOP_MENU_POST_MENU_CONTENT_SX } from "@/components/data-display/AdminTopMenu";
 import { OutletPage } from "@/components/layout/OutletPage";
 import AugmisBusinessTopMenu from "./AugmisBusinessTopMenu";
-import type { BusinessMetricItem } from "./BusinessMetricCarousel";
-import BusinessMetricCarousel from "./BusinessMetricCarousel";
+import BusinessStatusCardStrip, { type BusinessStatusCardItem } from "./BusinessStatusCardStrip";
 
 export default function BusinessPageFrame({
   title,
@@ -18,7 +17,7 @@ export default function BusinessPageFrame({
 }: {
   title: string;
   description: string;
-  metrics?: BusinessMetricItem[];
+  metrics?: BusinessStatusCardItem[];
   toolbar?: React.ReactNode;
   actions?: React.ReactNode;
   children: React.ReactNode;
@@ -29,7 +28,7 @@ export default function BusinessPageFrame({
         <AugmisBusinessTopMenu />
         <Stack spacing={1.6} sx={ADMIN_TOP_MENU_POST_MENU_CONTENT_SX}>
           {actions ? <Box>{actions}</Box> : null}
-          {metrics && metrics.length ? <BusinessMetricCarousel items={metrics} /> : null}
+          {metrics && metrics.length ? <BusinessStatusCardStrip items={metrics} /> : null}
           {toolbar}
           <Stack spacing={1.6}>{children}</Stack>
         </Stack>

@@ -65,9 +65,10 @@ export const ADMIN_TABLE_CARD_PAGINATION_SX = {
   "& .MuiTablePagination-toolbar": {
     minHeight: "unset",
     px: 0,
+    justifyContent: "flex-end",
   },
   "& .MuiTablePagination-spacer": {
-    display: "none",
+    flex: "1 1 auto",
   },
   "& .MuiTablePagination-selectLabel, & .MuiTablePagination-input, & .MuiTablePagination-select, & .MuiTablePagination-selectIcon": {
     display: "none",

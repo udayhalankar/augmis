@@ -4,7 +4,7 @@ import { useState, type MouseEvent, type ReactNode } from "react";
 
 import MoreVertRoundedIcon from "@mui/icons-material/MoreVertRounded";
 import VisibilityOutlinedIcon from "@mui/icons-material/VisibilityOutlined";
-import { Button, IconButton, Menu, MenuItem, Stack, Tooltip } from "@mui/material";
+import { IconButton, Menu, MenuItem, Stack, Tooltip } from "@mui/material";
 
 export type BusinessRowActionMenuItem = {
   key: string;
@@ -34,30 +34,32 @@ export default function BusinessRowActionMenu({
         {onView ? (
           <Tooltip title={viewLabel}>
             <span>
-              <Button
+              <IconButton
                 size="small"
-                variant="outlined"
-                startIcon={<VisibilityOutlinedIcon fontSize="small" />}
                 onClick={onView}
                 sx={{
-                  minWidth: 0,
-                  px: 1,
-                  py: 0.45,
-                  textTransform: "none",
                   borderRadius: "8px",
-                  fontSize: 12,
-                  fontWeight: 700,
+                  border: "1px solid #DBEAFE",
+                  bgcolor: "#F8FBFF",
                 }}
               >
-                View
-              </Button>
+                <VisibilityOutlinedIcon fontSize="small" sx={{ color: "#2563EB" }} />
+              </IconButton>
             </span>
           </Tooltip>
         ) : null}
         <Tooltip title="More actions">
           <span>
-            <IconButton size="small" onClick={(event: MouseEvent<HTMLElement>) => setAnchorEl(event.currentTarget)}>
-              <MoreVertRoundedIcon fontSize="small" />
+            <IconButton
+              size="small"
+              onClick={(event: MouseEvent<HTMLElement>) => setAnchorEl(event.currentTarget)}
+              sx={{
+                borderRadius: "8px",
+                border: "1px solid #E2E8F0",
+                bgcolor: "#FFFFFF",
+              }}
+            >
+              <MoreVertRoundedIcon fontSize="small" sx={{ color: "#475569" }} />
             </IconButton>
           </span>
         </Tooltip>

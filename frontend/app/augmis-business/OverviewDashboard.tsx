@@ -66,19 +66,19 @@ import {
   formatTaskLabel,
   getTaskTimingLabel,
 } from "./components/BusinessTaskUI";
-import BusinessMetricCarousel, { type BusinessMetricItem } from "./components/BusinessMetricCarousel";
 import BusinessPageFrame from "./components/BusinessPageFrame";
+import { type BusinessStatusCardItem } from "./components/BusinessStatusCardStrip";
 
 const KPI_CARD_STYLES = [
-  "linear-gradient(90deg, #DBEAFE 0%, #F8FAFC 100%)",
-  "linear-gradient(90deg, #DCFCE7 0%, #F0FDF4 100%)",
-  "linear-gradient(90deg, #FEF3C7 0%, #FFFBEB 100%)",
-  "linear-gradient(90deg, #FEE2E2 0%, #FFF1F2 100%)",
-  "linear-gradient(90deg, #E0EAFF 0%, #F8FAFC 100%)",
-  "linear-gradient(90deg, #D1FAE5 0%, #F0FDFA 100%)",
-  "linear-gradient(90deg, #E0F2FE 0%, #F8FAFC 100%)",
-  "linear-gradient(90deg, #FDE68A 0%, #FFFBEB 100%)",
-  "linear-gradient(90deg, #FECACA 0%, #FFF5F5 100%)",
+  "linear-gradient(135deg, #FFFFFF 0%, #EAF2FF 100%)",
+  "linear-gradient(135deg, #FFFFFF 0%, #EAFBF1 100%)",
+  "linear-gradient(135deg, #FFFFFF 0%, #FFF8E1 100%)",
+  "linear-gradient(135deg, #FFFFFF 0%, #FFF0F0 100%)",
+  "linear-gradient(135deg, #FFFFFF 0%, #EEF2FF 100%)",
+  "linear-gradient(135deg, #FFFFFF 0%, #ECFDF3 100%)",
+  "linear-gradient(135deg, #FFFFFF 0%, #E0F2FE 100%)",
+  "linear-gradient(135deg, #FFFFFF 0%, #FFFBEB 100%)",
+  "linear-gradient(135deg, #FFFFFF 0%, #FEF2F2 100%)",
 ];
 
 const CHART_COLORS = ["#2563EB", "#0F766E", "#F59E0B", "#DC2626", "#7C3AED", "#0891B2"];
@@ -324,78 +324,78 @@ export default function OverviewDashboard() {
   const closingSoonItems = dashboard?.opportunities_closing_soon.items || [];
   const recentActivities = dashboard?.recent_activities || [];
   const dealDeskItems = dealDesk?.items || [];
-  const overviewMetrics = useMemo<BusinessMetricItem[]>(
+  const overviewMetrics = useMemo<BusinessStatusCardItem[]>(
     () => [
       {
         key: "open-opportunities",
         title: "Open Opportunities",
         value: String(dashboard?.open_opportunities ?? 0),
-        subtitle: "Live active opportunity records",
-        accent: KPI_CARD_STYLES[0],
+        description: "Live active opportunity records",
+        gradient: KPI_CARD_STYLES[0],
         icon: <BusinessCenterOutlinedIcon fontSize="small" />,
       },
       {
         key: "converted-opportunities",
         title: "Converted Opportunities",
         value: String(dashboard?.converted_opportunities ?? 0),
-        subtitle: "Opportunities already converted to leads",
-        accent: KPI_CARD_STYLES[1],
+        description: "Opportunities already converted to leads",
+        gradient: KPI_CARD_STYLES[1],
         icon: <ArrowForwardOutlinedIcon fontSize="small" />,
       },
       {
         key: "active-prospects",
         title: "Active Prospects",
         value: String(dashboard?.active_prospects ?? 0),
-        subtitle: "Prospects currently active in tenant scope",
-        accent: KPI_CARD_STYLES[2],
+        description: "Prospects currently active in tenant scope",
+        gradient: KPI_CARD_STYLES[2],
         icon: <HubOutlinedIcon fontSize="small" />,
       },
       {
         key: "open-leads",
         title: "Open Leads",
         value: String(dashboard?.open_leads ?? 0),
-        subtitle: "Leads in active pipeline stages",
-        accent: KPI_CARD_STYLES[3],
+        description: "Leads in active pipeline stages",
+        gradient: KPI_CARD_STYLES[3],
         icon: <TimelineOutlinedIcon fontSize="small" />,
       },
       {
         key: "pipeline-value",
         title: "Pipeline Value",
         value: formatCurrency(dashboard?.pipeline_value),
-        subtitle: "Sum of active lead values",
-        accent: KPI_CARD_STYLES[4],
+        description: "Sum of active lead values",
+        gradient: KPI_CARD_STYLES[4],
         icon: <CurrencyExchangeOutlinedIcon fontSize="small" />,
       },
       {
         key: "weighted-pipeline",
         title: "Weighted Pipeline",
         value: formatCurrency(dashboard?.weighted_pipeline_value),
-        subtitle: "Probability-weighted active lead value",
-        accent: KPI_CARD_STYLES[5],
+        description: "Probability-weighted active lead value",
+        gradient: KPI_CARD_STYLES[5],
         icon: <InsightsOutlinedIcon fontSize="small" />,
       },
       {
         key: "tasks-due-today",
         title: "Tasks Due Today",
         value: String(dashboard?.tasks_due_today ?? 0),
-        subtitle: "Open and in-progress tasks due today",
-        accent: KPI_CARD_STYLES[6],
+        description: "Open and in-progress tasks due today",
+        gradient: KPI_CARD_STYLES[6],
         icon: <EventAvailableOutlinedIcon fontSize="small" />,
       },
       {
         key: "overdue-tasks",
         title: "Overdue Tasks",
         value: String(dashboard?.overdue_tasks ?? 0),
-        subtitle: "Tasks already past due and still open",
-        accent: KPI_CARD_STYLES[7],
+        description: "Tasks already past due and still open",
+        gradient: KPI_CARD_STYLES[7],
         icon: <AssignmentLateOutlinedIcon fontSize="small" />,
       },
       {
         key: "closing-soon",
         title: "Closing Soon",
         value: String(dashboard?.opportunities_closing_soon.count ?? 0),
-        subtitle: "Active opportunities closing within 14 days",
-        accent: KPI_CARD_STYLES[8],
+        description: "Active opportunities closing within 14 days",
+        gradient: KPI_CARD_STYLES[8],
         icon: <OpenInNewOutlinedIcon fontSize="small" />,
       },
     ],
@@ -406,6 +406,7 @@ export default function OverviewDashboard() {
     <BusinessPageFrame
       title="AUGMIS Business Overview"
       description="Live commercial visibility across opportunities, pipeline, prospects, tasks, and recent business activity."
+      metrics={overviewMetrics}
     >
       <Stack spacing={2.5}>
         {error ? <Alert severity="error">{error}</Alert> : null}
@@ -416,8 +417,6 @@ export default function OverviewDashboard() {
           </Stack>
         ) : (
           <>
-            <BusinessMetricCarousel items={overviewMetrics} />
-
             <Stack spacing={1.25}>
               <Typography sx={{ fontSize: 13, color: "#64748B" }}>
                 Operational dashboard for live business development execution

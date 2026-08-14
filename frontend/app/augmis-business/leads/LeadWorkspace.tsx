@@ -13,7 +13,6 @@ import InsightsOutlinedIcon from "@mui/icons-material/InsightsOutlined";
 import LightbulbOutlinedIcon from "@mui/icons-material/LightbulbOutlined";
 import MoreVertRoundedIcon from "@mui/icons-material/MoreVertRounded";
 import RefreshRoundedIcon from "@mui/icons-material/RefreshRounded";
-import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
 import SourceOutlinedIcon from "@mui/icons-material/SourceOutlined";
 import SwapHorizOutlinedIcon from "@mui/icons-material/SwapHorizOutlined";
 import VisibilityOutlined from "@mui/icons-material/VisibilityOutlined";
@@ -26,7 +25,6 @@ import {
   CircularProgress,
   Drawer,
   IconButton,
-  InputAdornment,
   Menu,
   MenuItem,
   Paper,
@@ -79,6 +77,14 @@ import {
   formatTaskDateTime,
   formatTaskLabel,
 } from "../components/BusinessTaskUI";
+import {
+  BUSINESS_TABLE_COMPACT_SX,
+  BUSINESS_TABLE_SINGLE_LINE_TEXT_SX,
+} from "../components/BusinessDataTable";
+import BusinessStatusCardStrip, {
+  type BusinessStatusCardItem,
+} from "../components/BusinessStatusCardStrip";
+import BusinessTableHeaderToolbar from "../components/BusinessTableHeaderToolbar";
 import OutreachWorkspaceDialog from "../components/OutreachWorkspaceDialog";
 import MiniSolutionWorkspaceDrawer from "../components/MiniSolutionWorkspaceDrawer";
 import BusinessPageFrame from "../components/BusinessPageFrame";
@@ -443,6 +449,7 @@ export default function LeadWorkspace({ mode }: { mode: WorkspaceMode }) {
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState("");
   const [detailTab, setDetailTab] = useState<DetailTabValue>("overview");
+
   const [selectedLead, setSelectedLead] = useState<AugmisBusinessLead | null>(null);
   const [selectedLeadActivities, setSelectedLeadActivities] = useState<AugmisBusinessActivity[]>([]);
   const [selectedLeadTasks, setSelectedLeadTasks] = useState<AugmisBusinessTask[]>([]);
@@ -571,6 +578,62 @@ export default function LeadWorkspace({ mode }: { mode: WorkspaceMode }) {
   }, [canRead, isPipeline, page, pageSize, prospectFilter, refreshTick, search, stageFilter, statusFilter]);
 
   const stageCounts = useMemo(() => mapStageCounts(dashboard), [dashboard]);
+
+  const workspaceStatusCards = useMemo<BusinessStatusCardItem[]>(
+    () => [
+      {
+        key: "open-leads",
+        title: "Open Leads",
+        value: dashboard?.open_leads ?? 0,
+        description: "Active lead records in tenant scope",
+        icon: <SourceOutlinedIcon fontSize="small" />,
+        gradient: "linear-gradient(135deg, #FFFFFF 0%, #EAF2FF 100%)",
+        iconTint: "#1D4ED8",
+        iconSurface: "#DBEAFE",
+      },
+      {
+        key: "pipeline-value",
+        title: "Pipeline Value",
+        value: formatCurrency(dashboard?.pipeline_value ?? 0),
+        description: "Current live value across open leads",
+        icon: <WorkOutlineOutlinedIcon fontSize="small" />,
+        gradient: "linear-gradient(135deg, #FFFFFF 0%, #EAFBF1 100%)",
+        iconTint: "#047857",
+        iconSurface: "#D1FAE5",
+      },
+      {
+        key: "weighted-pipeline",
+        title: "Weighted Pipeline",
+        value: formatCurrency(dashboard?.weighted_pipeline_value ?? 0),
+        description: "Probability-adjusted pipeline value",
+        icon: <InsightsOutlinedIcon fontSize="small" />,
+        gradient: "linear-gradient(135deg, #FFFFFF 0%, #F2ECFF 100%)",
+        iconTint: "#7C3AED",
+        iconSurface: "#EDE9FE",
+      },
+      {
+        key: "due-overdue",
+        title: "Due / Overdue",
+        value: (dashboard?.tasks_due_today ?? 0) + (dashboard?.overdue_tasks ?? 0),
+        description: `${dashboard?.tasks_due_today ?? 0} due today, ${dashboard?.overdue_tasks ?? 0} overdue`,
+        icon: <EventNoteOutlinedIcon fontSize="small" />,
+        gradient: "linear-gradient(135deg, #FFFFFF 0%, #FFF8E1 100%)",
+        iconTint: "#B54708",
+        iconSurface: "#FDE68A",
+      },
+      {
+        key: "proposal-negotiation",
+        title: "Proposal / Negotiation",
+        value: (stageCounts.get("proposal") ?? 0) + (stageCounts.get("negotiation") ?? 0),
+        description: "Leads currently in late commercial stages",
+        icon: <BadgeOutlinedIcon fontSize="small" />,
+        gradient: "linear-gradient(135deg, #FFFFFF 0%, #FFF0F0 100%)",
+        iconTint: "#B42318",
+        iconSurface: "#FEE2E2",
+      },
+    ],
+    [dashboard?.open_leads, dashboard?.overdue_tasks, dashboard?.pipeline_value, dashboard?.tasks_due_today, dashboard?.weighted_pipeline_value, stageCounts]
+  );
 
   const leadsByStage = useMemo(() => {
     const grouped: Record<string, AugmisBusinessLead[]> = {};
@@ -869,6 +932,7 @@ export default function LeadWorkspace({ mode }: { mode: WorkspaceMode }) {
         }
       >
         <Stack spacing={2.25}>
+          <BusinessStatusCardStrip items={workspaceStatusCards} />
           <AdminTableCard
             title={isPipeline ? "Pipeline Workspace" : "Leads Workspace"}
             description={
@@ -876,162 +940,26 @@ export default function LeadWorkspace({ mode }: { mode: WorkspaceMode }) {
                 ? "Track live tenant leads through the actual backend sales stages and update stage progression directly from the pipeline board."
                 : "Review live converted leads, real pipeline metrics, manual activities, and lead-scoped follow-up tasks."
             }
+            headerActions={
+              <BusinessTableHeaderToolbar
+                searchValue={searchInput}
+                onSearchChange={setSearchInput}
+                searchPlaceholder="Search lead title"
+                actions={
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    startIcon={<RefreshRoundedIcon />}
+                    onClick={() => setRefreshTick((value) => value + 1)}
+                  >
+                    Refresh
+                  </Button>
+                }
+              />
+            }
             bodySx={{ bgcolor: "#FFFFFF" }}
             paperSx={{ bgcolor: "#FFFFFF" }}
           >
-            <Stack
-              direction={{ xs: "column", md: "row" }}
-              spacing={1.5}
-              sx={{ p: 2, borderBottom: "1px solid #E2E8F0", bgcolor: "#F8FAFC" }}
-            >
-              <Paper
-                elevation={0}
-                sx={{ flex: 1, p: 1.75, borderRadius: "8px", border: "1px solid #E2E8F0" }}
-              >
-                <Typography sx={{ fontSize: 12, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: ".05em" }}>
-                  Open Leads
-                </Typography>
-                <Typography sx={{ mt: 0.6, fontSize: 28, fontWeight: 700, color: "#0F172A" }}>
-                  {dashboard?.open_leads ?? 0}
-                </Typography>
-              </Paper>
-              <Paper
-                elevation={0}
-                sx={{ flex: 1, p: 1.75, borderRadius: "8px", border: "1px solid #E2E8F0" }}
-              >
-                <Typography sx={{ fontSize: 12, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: ".05em" }}>
-                  Pipeline Value
-                </Typography>
-                <Typography sx={{ mt: 0.6, fontSize: 28, fontWeight: 700, color: "#0F172A" }}>
-                  {formatCurrency(dashboard?.pipeline_value ?? 0)}
-                </Typography>
-              </Paper>
-              <Paper
-                elevation={0}
-                sx={{ flex: 1, p: 1.75, borderRadius: "8px", border: "1px solid #E2E8F0" }}
-              >
-                <Typography sx={{ fontSize: 12, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: ".05em" }}>
-                  Weighted Pipeline
-                </Typography>
-                <Typography sx={{ mt: 0.6, fontSize: 28, fontWeight: 700, color: "#0F172A" }}>
-                  {formatCurrency(dashboard?.weighted_pipeline_value ?? 0)}
-                </Typography>
-              </Paper>
-              <Paper
-                elevation={0}
-                sx={{ flex: 1, p: 1.75, borderRadius: "8px", border: "1px solid #E2E8F0" }}
-              >
-                <Typography sx={{ fontSize: 12, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: ".05em" }}>
-                  Due / Overdue
-                </Typography>
-                <Typography sx={{ mt: 0.6, fontSize: 28, fontWeight: 700, color: "#0F172A" }}>
-                  {(dashboard?.tasks_due_today ?? 0) + (dashboard?.overdue_tasks ?? 0)}
-                </Typography>
-                <Typography sx={{ mt: 0.25, color: "#64748B", fontSize: 12.5 }}>
-                  {dashboard?.tasks_due_today ?? 0} due today • {dashboard?.overdue_tasks ?? 0} overdue
-                </Typography>
-              </Paper>
-              <Paper
-                elevation={0}
-                sx={{ flex: 1, p: 1.75, borderRadius: "8px", border: "1px solid #E2E8F0" }}
-              >
-                <Typography sx={{ fontSize: 12, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: ".05em" }}>
-                  Proposal / Negotiation
-                </Typography>
-                <Typography sx={{ mt: 0.6, fontSize: 28, fontWeight: 700, color: "#0F172A" }}>
-                  {(stageCounts.get("proposal") ?? 0) + (stageCounts.get("negotiation") ?? 0)}
-                </Typography>
-              </Paper>
-            </Stack>
-
-            <Stack
-              direction={{ xs: "column", md: "row" }}
-              spacing={1.25}
-              sx={{ p: 2, alignItems: { md: "center" } }}
-            >
-              <AdminFormTextField
-                label="Search"
-                value={searchInput}
-                onChange={(event) => setSearchInput(event.target.value)}
-                fieldSx={{ minWidth: { xs: "100%", md: 320 } }}
-                placeholder="Search lead title"
-                slotProps={{
-                  input: {
-                    startAdornment: (
-                      <InputAdornment position="start">
-                        <SearchRoundedIcon fontSize="small" sx={{ color: "#64748B" }} />
-                      </InputAdornment>
-                    ),
-                  },
-                }}
-              />
-              <AdminFormTextField
-                select
-                label="Stage"
-                value={stageFilter}
-                onChange={(event) => {
-                  setStageFilter(event.target.value);
-                  setPage(0);
-                }}
-                fieldSx={{ minWidth: { xs: "100%", md: 180 } }}
-              >
-                <MenuItem value="all">All stages</MenuItem>
-                {[...ACTIVE_STAGE_ORDER, ...TERMINAL_STAGE_ORDER].map((stage) => (
-                  <MenuItem key={stage} value={stage}>
-                    {formatStageLabel(stage)}
-                  </MenuItem>
-                ))}
-              </AdminFormTextField>
-              <AdminFormTextField
-                select
-                label="Status"
-                value={statusFilter}
-                onChange={(event) => {
-                  setStatusFilter(event.target.value);
-                  setPage(0);
-                }}
-                fieldSx={{ minWidth: { xs: "100%", md: 180 } }}
-              >
-                <MenuItem value="all">All statuses</MenuItem>
-                <MenuItem value="active">Active</MenuItem>
-                <MenuItem value="won">Won</MenuItem>
-                <MenuItem value="lost">Lost</MenuItem>
-                <MenuItem value="archived">Archived</MenuItem>
-              </AdminFormTextField>
-              <AdminFormTextField
-                select
-                label="Prospect"
-                value={prospectFilter}
-                onChange={(event) => {
-                  setProspectFilter(event.target.value);
-                  setPage(0);
-                }}
-                fieldSx={{ minWidth: { xs: "100%", md: 220 } }}
-              >
-                <MenuItem value="all">All prospects</MenuItem>
-                {prospects.map((prospect) => (
-                  <MenuItem key={prospect.id} value={prospect.id}>
-                    {prospect.organization_name}
-                  </MenuItem>
-                ))}
-              </AdminFormTextField>
-              <Button
-                variant="outlined"
-                startIcon={<RefreshRoundedIcon />}
-                onClick={() => setRefreshTick((value) => value + 1)}
-                sx={{ textTransform: "none", borderRadius: "8px", alignSelf: { xs: "stretch", md: "flex-end" } }}
-              >
-                Refresh
-              </Button>
-            </Stack>
-
-            <Box sx={{ px: 2, pb: 1.5 }}>
-              <Alert severity="info">
-                Supported backend filters are search, stage, status, and prospect. Priority,
-                due-date, and owner filters are not currently exposed server-side.
-              </Alert>
-            </Box>
-
             {loading ? (
               <Stack sx={{ minHeight: 280, alignItems: "center", justifyContent: "center" }} spacing={1.5}>
                 <CircularProgress />
@@ -1172,7 +1100,7 @@ export default function LeadWorkspace({ mode }: { mode: WorkspaceMode }) {
               </Box>
             ) : (
               <>
-                <Table size="small">
+                <Table size="small" sx={BUSINESS_TABLE_COMPACT_SX}>
                   <TableHead>
                     <TableRow>
                       <TableCell>Lead</TableCell>
@@ -1197,7 +1125,7 @@ export default function LeadWorkspace({ mode }: { mode: WorkspaceMode }) {
                       const lastActivity = meta?.activities?.[0] || null;
                       return (
                         <TableRow key={lead.id} hover>
-                          <TableCell sx={{ minWidth: 180 }}>
+                          <TableCell sx={{ minWidth: 180, maxWidth: 180 }}>
                             <Button
                               onClick={() => void openLeadDetail(lead.id)}
                               sx={{
@@ -1210,12 +1138,26 @@ export default function LeadWorkspace({ mode }: { mode: WorkspaceMode }) {
                                 color: "#0F172A",
                               }}
                             >
-                              {lead.title}
+                              <Box component="span" sx={BUSINESS_TABLE_SINGLE_LINE_TEXT_SX}>
+                                {lead.title}
+                              </Box>
                             </Button>
                           </TableCell>
-                          <TableCell>{lead.prospect?.organization_name || "Not available"}</TableCell>
-                          <TableCell>{getContactDisplayName(lead.primary_contact)}</TableCell>
-                          <TableCell>{lead.opportunity?.title || "Not available"}</TableCell>
+                          <TableCell sx={{ maxWidth: 170 }}>
+                            <Box component="span" sx={BUSINESS_TABLE_SINGLE_LINE_TEXT_SX}>
+                              {lead.prospect?.organization_name || "Not available"}
+                            </Box>
+                          </TableCell>
+                          <TableCell sx={{ maxWidth: 180 }}>
+                            <Box component="span" sx={BUSINESS_TABLE_SINGLE_LINE_TEXT_SX}>
+                              {getContactDisplayName(lead.primary_contact)}
+                            </Box>
+                          </TableCell>
+                          <TableCell sx={{ maxWidth: 190 }}>
+                            <Box component="span" sx={BUSINESS_TABLE_SINGLE_LINE_TEXT_SX}>
+                              {lead.opportunity?.title || "Not available"}
+                            </Box>
+                          </TableCell>
                           <TableCell>
                             <Chip
                               size="small"
@@ -1237,7 +1179,11 @@ export default function LeadWorkspace({ mode }: { mode: WorkspaceMode }) {
                           <TableCell sx={{ color: getDueDateColor(nextTask?.due_at || null) }}>
                             {formatDateTime(nextTask?.due_at || null)}
                           </TableCell>
-                          <TableCell>{nextTask?.title || "Not available"}</TableCell>
+                          <TableCell sx={{ maxWidth: 170 }}>
+                            <Box component="span" sx={BUSINESS_TABLE_SINGLE_LINE_TEXT_SX}>
+                              {nextTask?.title || "Not available"}
+                            </Box>
+                          </TableCell>
                           <TableCell>
                             <Chip
                               size="small"
@@ -1245,15 +1191,36 @@ export default function LeadWorkspace({ mode }: { mode: WorkspaceMode }) {
                               sx={{ textTransform: "capitalize", border: "1px solid", ...getStatusChip(lead.lead_status) }}
                             />
                           </TableCell>
-                          <TableCell>{getActivitySummary(lastActivity)}</TableCell>
+                          <TableCell sx={{ maxWidth: 170 }}>
+                            <Box component="span" sx={BUSINESS_TABLE_SINGLE_LINE_TEXT_SX}>
+                              {getActivitySummary(lastActivity)}
+                            </Box>
+                          </TableCell>
                           <TableCell align="right">
-                            <Tooltip title="Actions">
-                              <span>
-                                <IconButton size="small" onClick={(event) => openActionMenu(event, lead)}>
-                                  <MoreVertRoundedIcon fontSize="small" />
-                                </IconButton>
-                              </span>
-                            </Tooltip>
+                            <Stack direction="row" spacing={0.5} sx={{ justifyContent: "flex-end", alignItems: "center" }}>
+                              <Tooltip title="View Details">
+                                <span>
+                                  <IconButton
+                                    size="small"
+                                    onClick={() => void openLeadDetail(lead.id)}
+                                    sx={{ border: "1px solid #DBEAFE", bgcolor: "#F8FBFF", borderRadius: "8px" }}
+                                  >
+                                    <VisibilityOutlined fontSize="small" sx={{ color: "#2563EB" }} />
+                                  </IconButton>
+                                </span>
+                              </Tooltip>
+                              <Tooltip title="Actions">
+                                <span>
+                                  <IconButton
+                                    size="small"
+                                    onClick={(event) => openActionMenu(event, lead)}
+                                    sx={{ border: "1px solid #E2E8F0", bgcolor: "#FFFFFF", borderRadius: "8px" }}
+                                  >
+                                    <MoreVertRoundedIcon fontSize="small" sx={{ color: "#475569" }} />
+                                  </IconButton>
+                                </span>
+                              </Tooltip>
+                            </Stack>
                           </TableCell>
                         </TableRow>
                       );

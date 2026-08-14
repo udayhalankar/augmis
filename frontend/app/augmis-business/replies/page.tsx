@@ -90,7 +90,14 @@ import {
   updateAugmisBusinessLeadStage,
   updateAugmisBusinessReplyResponse,
 } from "@/services/augmisBusinessService";
+import BusinessStatusCardStrip, {
+  type BusinessStatusCardItem,
+} from "../components/BusinessStatusCardStrip";
 import BusinessPageFrame from "../components/BusinessPageFrame";
+import {
+  BUSINESS_TABLE_COMPACT_SX,
+  BUSINESS_TABLE_SINGLE_LINE_TEXT_SX,
+} from "../components/BusinessDataTable";
 
 type ToastSeverity = "success" | "error" | "info" | "warning";
 type DetailTab = "message" | "analysis" | "response" | "context" | "history";
@@ -288,40 +295,6 @@ function getResponseStatusChip(status: string | null | undefined) {
     default:
       return { bgcolor: "#EEF2FF", color: "#4338CA", borderColor: "#C7D2FE" };
   }
-}
-
-function MetricCard({
-  title,
-  value,
-  subtitle,
-  icon,
-  gradient,
-}: {
-  title: string;
-  value: number;
-  subtitle: string;
-  icon: React.ReactNode;
-  gradient: string;
-}) {
-  return (
-    <Paper
-      elevation={0}
-      sx={{ borderRadius: "8px", border: "1px solid #D9E2EC", overflow: "hidden" }}
-    >
-      <Box sx={{ px: 2, py: 1.1, background: gradient, borderBottom: "1px solid #E2E8F0" }}>
-        <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
-          <Box sx={{ color: "#0F4C81", display: "flex" }}>{icon}</Box>
-          <Typography sx={{ fontWeight: 700, color: "#0F172A" }}>{title}</Typography>
-        </Stack>
-      </Box>
-      <Box sx={{ px: 2, py: 1.8 }}>
-        <Typography sx={{ fontSize: 28, fontWeight: 800, color: "#0F172A", lineHeight: 1 }}>
-          {value}
-        </Typography>
-        <Typography sx={{ mt: 1, color: "#64748B", fontSize: 13 }}>{subtitle}</Typography>
-      </Box>
-    </Paper>
-  );
 }
 
 function FieldCard({ label, value }: { label: string; value: string }) {
@@ -772,49 +745,66 @@ export default function AugmisBusinessRepliesPage() {
     }
   }
 
+  const replyStatusCards: BusinessStatusCardItem[] = [
+    {
+      key: "unreviewed",
+      title: "Unreviewed Replies",
+      value: summary.unreviewed_replies,
+      description: "Inbound messages waiting for first review",
+      icon: <EmailOutlinedIcon />,
+      gradient: "linear-gradient(135deg, #FFFFFF 0%, #EAF2FF 100%)",
+      iconTint: "#175CD3",
+      iconSurface: "#DBEAFE",
+    },
+    {
+      key: "action-required",
+      title: "Action Required",
+      value: summary.action_required,
+      description: "Replies needing a deliberate operator decision",
+      icon: <WarningAmberOutlinedIcon />,
+      gradient: "linear-gradient(135deg, #FFFFFF 0%, #FFF2E8 100%)",
+      iconTint: "#C2410C",
+      iconSurface: "#FED7AA",
+    },
+    {
+      key: "positive-high-engagement",
+      title: "Positive / High Engagement",
+      value: summary.positive_high_engagement,
+      description: "Strong replies with real buying motion",
+      icon: <InsightsOutlinedIcon />,
+      gradient: "linear-gradient(135deg, #FFFFFF 0%, #E9FAF1 100%)",
+      iconTint: "#047857",
+      iconSurface: "#BBF7D0",
+    },
+    {
+      key: "objections",
+      title: "Objections",
+      value: summary.objections,
+      description: "Replies that surfaced explicit concerns",
+      icon: <LowPriorityOutlinedIcon />,
+      gradient: "linear-gradient(135deg, #FFFFFF 0%, #FFF8E1 100%)",
+      iconTint: "#B54708",
+      iconSurface: "#FDE68A",
+    },
+    {
+      key: "meetings-or-proposals",
+      title: "Meetings / Proposals",
+      value: summary.meetings_or_proposals,
+      description: "Replies indicating serious commercial interest",
+      icon: <TimelineOutlinedIcon />,
+      gradient: "linear-gradient(135deg, #FFFFFF 0%, #E7FAF7 100%)",
+      iconTint: "#0F766E",
+      iconSurface: "#99F6E4",
+    },
+  ];
+
   return (
     <BusinessPageFrame
       title="Replies Workspace"
       description="Capture inbound prospect replies, analyze intent, draft responses, and apply operator-approved next actions without any automatic sending."
     >
       <Stack spacing={2.5}>
-        <Stack direction={{ xs: "column", xl: "row" }} spacing={2}>
-          <MetricCard
-            title="Unreviewed Replies"
-            value={summary.unreviewed_replies}
-            subtitle="Inbound messages waiting for first review"
-            icon={<EmailOutlinedIcon />}
-            gradient="linear-gradient(135deg, rgba(239,246,255,1) 0%, rgba(219,234,254,1) 100%)"
-          />
-          <MetricCard
-            title="Action Required"
-            value={summary.action_required}
-            subtitle="Replies needing a deliberate operator decision"
-            icon={<WarningAmberOutlinedIcon />}
-            gradient="linear-gradient(135deg, rgba(255,247,237,1) 0%, rgba(254,215,170,0.72) 100%)"
-          />
-          <MetricCard
-            title="Positive / High Engagement"
-            value={summary.positive_high_engagement}
-            subtitle="Strong replies with real buying motion"
-            icon={<InsightsOutlinedIcon />}
-            gradient="linear-gradient(135deg, rgba(236,253,243,1) 0%, rgba(187,247,208,0.72) 100%)"
-          />
-          <MetricCard
-            title="Objections"
-            value={summary.objections}
-            subtitle="Replies that surfaced explicit concerns"
-            icon={<LowPriorityOutlinedIcon />}
-            gradient="linear-gradient(135deg, rgba(255,250,235,1) 0%, rgba(254,240,138,0.62) 100%)"
-          />
-          <MetricCard
-            title="Meetings / Proposals"
-            value={summary.meetings_or_proposals}
-            subtitle="Replies indicating serious commercial interest"
-            icon={<TimelineOutlinedIcon />}
-            gradient="linear-gradient(135deg, rgba(240,253,250,1) 0%, rgba(153,246,228,0.62) 100%)"
-          />
-        </Stack>
+        <BusinessStatusCardStrip items={replyStatusCards} />
 
         <Paper elevation={0} sx={{ borderRadius: "8px", border: "1px solid #D9E2EC", p: 2 }}>
           <Stack
@@ -928,7 +918,7 @@ export default function AugmisBusinessRepliesPage() {
             </Stack>
           ) : replies.length ? (
             <>
-              <Table size="small">
+              <Table size="small" sx={BUSINESS_TABLE_COMPACT_SX}>
                 <TableHead>
                   <TableRow>
                     <TableCell>Received</TableCell>
@@ -948,27 +938,32 @@ export default function AugmisBusinessRepliesPage() {
                   {replies.map((reply) => (
                     <TableRow key={reply.id} hover>
                       <TableCell sx={{ whiteSpace: "nowrap" }}>{formatDateTime(reply.received_at)}</TableCell>
-                      <TableCell>{reply.prospect_name || "Not available"}</TableCell>
-                      <TableCell>{reply.contact_name || reply.sender_display || "Not available"}</TableCell>
+                      <TableCell sx={{ maxWidth: 180 }}>
+                        <Box component="span" sx={BUSINESS_TABLE_SINGLE_LINE_TEXT_SX}>
+                          {reply.prospect_name || "Not available"}
+                        </Box>
+                      </TableCell>
+                      <TableCell sx={{ maxWidth: 180 }}>
+                        <Box component="span" sx={BUSINESS_TABLE_SINGLE_LINE_TEXT_SX}>
+                          {reply.contact_name || reply.sender_display || "Not available"}
+                        </Box>
+                      </TableCell>
                       <TableCell>
                         <Button
                           variant="text"
                           onClick={() => void openDetail(reply.id)}
-                          sx={{ px: 0, textTransform: "none", fontWeight: 700, minWidth: 0 }}
+                          sx={{ px: 0, textTransform: "none", fontWeight: 700, minWidth: 0, width: "100%", justifyContent: "flex-start" }}
                         >
-                          {reply.lead_title || reply.lead_id}
+                          <Box component="span" sx={BUSINESS_TABLE_SINGLE_LINE_TEXT_SX}>
+                            {reply.lead_title || reply.lead_id}
+                          </Box>
                         </Button>
                       </TableCell>
                       <TableCell>{formatLabel(reply.channel)}</TableCell>
-                      <TableCell sx={{ minWidth: 260 }}>
-                        <Typography sx={{ fontWeight: 700, color: "#0F172A" }}>
-                          {reply.subject || "No subject"}
-                        </Typography>
-                        <Typography sx={{ mt: 0.35, fontSize: 12.5, color: "#64748B" }}>
-                          {reply.raw_message.length > 110
-                            ? `${reply.raw_message.slice(0, 110)}...`
-                            : reply.raw_message}
-                        </Typography>
+                      <TableCell sx={{ minWidth: 260, maxWidth: 260 }}>
+                        <Box component="span" sx={BUSINESS_TABLE_SINGLE_LINE_TEXT_SX}>
+                          {reply.subject || reply.raw_message || "No subject"}
+                        </Box>
                       </TableCell>
                       <TableCell>
                         {reply.latest_intent ? (
@@ -1011,25 +1006,27 @@ export default function AugmisBusinessRepliesPage() {
                         />
                       </TableCell>
                       <TableCell align="right">
-                        <Tooltip title="View Reply">
-                          <IconButton size="small" onClick={() => void openDetail(reply.id)}>
-                            <VisibilityOutlinedIcon sx={{ color: "#175CD3" }} fontSize="small" />
-                          </IconButton>
-                        </Tooltip>
-                        {canOutreach ? (
-                          <Tooltip title="Analyze Reply">
-                            <IconButton size="small" onClick={() => void openDetail(reply.id, "analysis")}>
-                              <AutoAwesomeOutlinedIcon sx={{ color: "#7C3AED" }} fontSize="small" />
+                        <Stack direction="row" spacing={0.5} sx={{ justifyContent: "flex-end", alignItems: "center" }}>
+                          <Tooltip title="View Reply">
+                            <IconButton size="small" onClick={() => void openDetail(reply.id)} sx={{ border: "1px solid #DBEAFE", bgcolor: "#F8FBFF", borderRadius: "8px" }}>
+                              <VisibilityOutlinedIcon sx={{ color: "#175CD3" }} fontSize="small" />
                             </IconButton>
                           </Tooltip>
-                        ) : null}
-                        {canOutreach ? (
-                          <Tooltip title="Generate Response">
-                            <IconButton size="small" onClick={() => void openDetail(reply.id, "response")}>
-                              <SendOutlinedIcon sx={{ color: "#0F766E" }} fontSize="small" />
-                            </IconButton>
-                          </Tooltip>
-                        ) : null}
+                          {canOutreach ? (
+                            <Tooltip title="Analyze Reply">
+                              <IconButton size="small" onClick={() => void openDetail(reply.id, "analysis")} sx={{ border: "1px solid #E9D5FF", bgcolor: "#FAF5FF", borderRadius: "8px" }}>
+                                <AutoAwesomeOutlinedIcon sx={{ color: "#7C3AED" }} fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                          ) : null}
+                          {canOutreach ? (
+                            <Tooltip title="Generate Response">
+                              <IconButton size="small" onClick={() => void openDetail(reply.id, "response")} sx={{ border: "1px solid #A7F3D0", bgcolor: "#F0FDFA", borderRadius: "8px" }}>
+                                <SendOutlinedIcon sx={{ color: "#0F766E" }} fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                          ) : null}
+                        </Stack>
                       </TableCell>
                     </TableRow>
                   ))}

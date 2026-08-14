@@ -18,7 +18,6 @@ import MoreVertRoundedIcon from "@mui/icons-material/MoreVertRounded";
 import PersonOutlineOutlinedIcon from "@mui/icons-material/PersonOutlineOutlined";
 import PublicOutlinedIcon from "@mui/icons-material/PublicOutlined";
 import RefreshRoundedIcon from "@mui/icons-material/RefreshRounded";
-import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
 import SourceOutlinedIcon from "@mui/icons-material/SourceOutlined";
 import TimelineOutlinedIcon from "@mui/icons-material/TimelineOutlined";
 import VisibilityOutlined from "@mui/icons-material/VisibilityOutlined";
@@ -35,7 +34,6 @@ import {
   DialogTitle,
   Drawer,
   IconButton,
-  InputAdornment,
   Menu,
   MenuItem,
   Paper,
@@ -60,6 +58,14 @@ import {
 import { AdminFormDialog, AdminFormTextField } from "@/components/forms/AdminFormDialog";
 import { useAuth } from "@/context/AuthContext";
 import BusinessPageFrame from "../components/BusinessPageFrame";
+import {
+  BUSINESS_TABLE_COMPACT_SX,
+  BUSINESS_TABLE_SINGLE_LINE_TEXT_SX,
+} from "../components/BusinessDataTable";
+import BusinessStatusCardStrip, {
+  type BusinessStatusCardItem,
+} from "../components/BusinessStatusCardStrip";
+import BusinessTableHeaderToolbar from "../components/BusinessTableHeaderToolbar";
 import {
   type AugmisBusinessContact,
   type AugmisBusinessProspect,
@@ -948,6 +954,41 @@ export default function AugmisBusinessProspectsPage() {
         .length,
     [rowMeta]
   );
+  const prospectStatusCards = useMemo<BusinessStatusCardItem[]>(
+    () => [
+      {
+        key: "total-prospects",
+        title: "Total Prospects",
+        value: total,
+        description: "All tenant-scoped prospect records",
+        icon: <ApartmentOutlinedIcon fontSize="small" />,
+        gradient: "linear-gradient(135deg, #FFFFFF 0%, #EAF2FF 100%)",
+        iconTint: "#1D4ED8",
+        iconSurface: "#DBEAFE",
+      },
+      {
+        key: "loaded-this-page",
+        title: "Loaded This Page",
+        value: loadedProspectCount,
+        description: "Prospects currently loaded in the register",
+        icon: <SourceOutlinedIcon fontSize="small" />,
+        gradient: "linear-gradient(135deg, #FFFFFF 0%, #EAFBF1 100%)",
+        iconTint: "#047857",
+        iconSurface: "#D1FAE5",
+      },
+      {
+        key: "primary-contacts-visible",
+        title: "Primary Contacts Visible",
+        value: primaryContactCount,
+        description: "Rows with a primary buyer/contact resolved",
+        icon: <PersonOutlineOutlinedIcon fontSize="small" />,
+        gradient: "linear-gradient(135deg, #FFFFFF 0%, #F2ECFF 100%)",
+        iconTint: "#7C3AED",
+        iconSurface: "#EDE9FE",
+      },
+    ],
+    [loadedProspectCount, primaryContactCount, total]
+  );
 
   function showToast(message: string, severity: ToastSeverity) {
     setToastMessage(message);
@@ -1235,145 +1276,47 @@ export default function AugmisBusinessProspectsPage() {
         description="Manage tenant-scoped target organizations, buyer contacts, related opportunities, and live activity history."
       >
         <Stack spacing={2.25}>
+          <BusinessStatusCardStrip items={prospectStatusCards} />
           <AdminTableCard
             title="Prospect Management"
-            description="Manual prospect and contact management is now connected to the live AUGMIS Business API. Current backend filtering supports organization search, status, and server-side pagination."
+            description="Prospect and contact management."
             headerActions={
-              canCreate ? (
-                <Button
-                  variant="contained"
-                  startIcon={<AddCircleRoundedIcon />}
-                  onClick={openCreateProspectDialog}
-                  sx={{
-                    textTransform: "none",
-                    fontWeight: 700,
-                    borderRadius: "8px",
-                    bgcolor: "#2563EB",
-                    minWidth: 168,
-                    "&:hover": { bgcolor: "#1D4ED8" },
-                  }}
-                >
-                  New Prospect
-                </Button>
-              ) : null
+              <BusinessTableHeaderToolbar
+                searchValue={searchInput}
+                onSearchChange={setSearchInput}
+                searchPlaceholder="Search organization, domain, or industry"
+                actions={
+                  <>
+                    <Button
+                      variant="outlined"
+                      size="small"
+                      startIcon={<RefreshRoundedIcon />}
+                      onClick={() => setRefreshTick((value) => value + 1)}
+                    >
+                      Refresh
+                    </Button>
+                    {canCreate ? (
+                      <Button
+                        variant="contained"
+                        size="small"
+                        startIcon={<AddCircleRoundedIcon />}
+                        onClick={openCreateProspectDialog}
+                        sx={{
+                          bgcolor: "#2563EB",
+                          minWidth: 168,
+                          "&:hover": { bgcolor: "#1D4ED8" },
+                        }}
+                      >
+                        New Prospect
+                      </Button>
+                    ) : null}
+                  </>
+                }
+              />
             }
             bodySx={{ bgcolor: "#FFFFFF" }}
             paperSx={{ bgcolor: "#FFFFFF" }}
           >
-
-            <Stack
-              direction={{ xs: "column", md: "row" }}
-              spacing={1.5}
-              sx={{ p: 2, borderBottom: "1px solid #E2E8F0", bgcolor: "#F8FAFC" }}
-            >
-              <Paper
-                elevation={0}
-                sx={{
-                  flex: 1,
-                  p: 1.75,
-                  borderRadius: "8px",
-                  border: "1px solid #E2E8F0",
-                }}
-              >
-                <Typography sx={{ fontSize: 12, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: ".05em" }}>
-                  Total Prospects
-                </Typography>
-                <Typography sx={{ mt: 0.6, fontSize: 28, fontWeight: 700, color: "#0F172A" }}>
-                  {total}
-                </Typography>
-              </Paper>
-              <Paper
-                elevation={0}
-                sx={{
-                  flex: 1,
-                  p: 1.75,
-                  borderRadius: "8px",
-                  border: "1px solid #E2E8F0",
-                }}
-              >
-                <Typography sx={{ fontSize: 12, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: ".05em" }}>
-                  Loaded This Page
-                </Typography>
-                <Typography sx={{ mt: 0.6, fontSize: 28, fontWeight: 700, color: "#0F172A" }}>
-                  {loadedProspectCount}
-                </Typography>
-              </Paper>
-              <Paper
-                elevation={0}
-                sx={{
-                  flex: 1,
-                  p: 1.75,
-                  borderRadius: "8px",
-                  border: "1px solid #E2E8F0",
-                }}
-              >
-                <Typography sx={{ fontSize: 12, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: ".05em" }}>
-                  Primary Contacts Visible
-                </Typography>
-                <Typography sx={{ mt: 0.6, fontSize: 28, fontWeight: 700, color: "#0F172A" }}>
-                  {primaryContactCount}
-                </Typography>
-              </Paper>
-            </Stack>
-
-            <Stack
-              direction={{ xs: "column", md: "row" }}
-              spacing={1.25}
-              sx={{ p: 2, alignItems: { md: "center" } }}
-            >
-              <AdminFormTextField
-                label="Search"
-                value={searchInput}
-                onChange={(event) => setSearchInput(event.target.value)}
-                fieldSx={{ minWidth: { xs: "100%", md: 320 } }}
-                placeholder="Search organization, domain, or industry"
-                slotProps={{
-                  input: {
-                    startAdornment: (
-                      <InputAdornment position="start">
-                        <SearchRoundedIcon fontSize="small" sx={{ color: "#64748B" }} />
-                      </InputAdornment>
-                    ),
-                  },
-                }}
-              />
-              <AdminFormTextField
-                select
-                label="Status"
-                value={statusFilter}
-                onChange={(event) => {
-                  setStatusFilter(event.target.value);
-                  setPage(0);
-                }}
-                fieldSx={{ minWidth: { xs: "100%", md: 180 } }}
-              >
-                <MenuItem value="all">All statuses</MenuItem>
-                <MenuItem value="active">Active</MenuItem>
-                <MenuItem value="inactive">Inactive</MenuItem>
-                <MenuItem value="archived">Archived</MenuItem>
-              </AdminFormTextField>
-              <Button
-                variant="outlined"
-                startIcon={<RefreshRoundedIcon />}
-                onClick={() => setRefreshTick((value) => value + 1)}
-                sx={{
-                  textTransform: "none",
-                  borderRadius: "8px",
-                  alignSelf: { xs: "stretch", md: "flex-end" },
-                }}
-              >
-                Refresh
-              </Button>
-            </Stack>
-
-            <Box sx={{ px: 2, pb: 1.5 }}>
-              <Alert severity="info">
-                The current backend list API supports search, status, and pagination. Country,
-                region, and industry filters will be added when those server-side filters are
-                exposed.
-              </Alert>
-            </Box>
-
             {loading ? (
               <Stack sx={{ minHeight: 280, alignItems: "center", justifyContent: "center" }} spacing={1.5}>
                 <CircularProgress />
@@ -1392,7 +1335,7 @@ export default function AugmisBusinessProspectsPage() {
               </Box>
             ) : (
               <>
-                <Table size="small">
+                <Table size="small" sx={BUSINESS_TABLE_COMPACT_SX}>
                   <TableHead>
                     <TableRow>
                       <TableCell>Organization</TableCell>
@@ -1424,7 +1367,7 @@ export default function AugmisBusinessProspectsPage() {
 
                       return (
                         <TableRow key={item.id} hover>
-                          <TableCell sx={{ minWidth: 210 }}>
+                          <TableCell sx={{ minWidth: 210, maxWidth: 210 }}>
                             <Button
                               onClick={() => void openDetailDrawer(item.id)}
                               sx={{
@@ -1437,38 +1380,30 @@ export default function AugmisBusinessProspectsPage() {
                                 color: "#0F172A",
                               }}
                             >
-                              {item.organization_name}
+                              <Box component="span" sx={BUSINESS_TABLE_SINGLE_LINE_TEXT_SX}>
+                                {item.organization_name}
+                              </Box>
                             </Button>
-                            <Typography sx={{ mt: 0.35, color: "#64748B", fontSize: 12.5 }}>
-                              {item.organization_type || "Not available"}
-                            </Typography>
                           </TableCell>
                           <TableCell>
-                            <Typography sx={{ color: "#0F172A" }}>
-                              {item.country || "Not available"}
-                            </Typography>
-                            <Typography sx={{ mt: 0.35, color: "#64748B", fontSize: 12.5 }}>
-                              {item.region || "Not available"}
-                            </Typography>
+                            <Box component="span" sx={BUSINESS_TABLE_SINGLE_LINE_TEXT_SX}>
+                              {[item.country, item.region].filter(Boolean).join(" / ") || "Not available"}
+                            </Box>
                           </TableCell>
-                          <TableCell>{item.industry || "Not available"}</TableCell>
-                          <TableCell sx={{ maxWidth: 220 }}>
-                            <Typography sx={{ color: "#0F172A", wordBreak: "break-word" }}>
-                              {item.organization_domain || "Not available"}
-                            </Typography>
-                            <Typography sx={{ mt: 0.35, color: "#64748B", fontSize: 12.5, wordBreak: "break-word" }}>
-                              {item.website_url || "Not available"}
-                            </Typography>
+                          <TableCell sx={{ maxWidth: 140 }}>
+                            <Box component="span" sx={BUSINESS_TABLE_SINGLE_LINE_TEXT_SX}>
+                              {item.industry || "Not available"}
+                            </Box>
                           </TableCell>
                           <TableCell sx={{ maxWidth: 220 }}>
-                            <Typography sx={{ color: "#0F172A" }}>
+                            <Box component="span" sx={BUSINESS_TABLE_SINGLE_LINE_TEXT_SX}>
+                              {item.organization_domain || item.website_url || "Not available"}
+                            </Box>
+                          </TableCell>
+                          <TableCell sx={{ maxWidth: 220 }}>
+                            <Box component="span" sx={BUSINESS_TABLE_SINGLE_LINE_TEXT_SX}>
                               {getContactDisplayName(primaryContact)}
-                            </Typography>
-                            <Typography sx={{ mt: 0.35, color: "#64748B", fontSize: 12.5 }}>
-                              {primaryContact?.buyer_role
-                                ? primaryContact.buyer_role.replaceAll("_", " ")
-                                : "Not available"}
-                            </Typography>
+                            </Box>
                           </TableCell>
                           <TableCell>
                             <Chip
@@ -1490,15 +1425,36 @@ export default function AugmisBusinessProspectsPage() {
                           </TableCell>
                           <TableCell>{openOpportunityCount}</TableCell>
                           <TableCell>{activeLeadCount}</TableCell>
-                          <TableCell>{lastActivity ? formatDate(lastActivity.created_at) : "Not available"}</TableCell>
+                          <TableCell>
+                            <Box component="span" sx={BUSINESS_TABLE_SINGLE_LINE_TEXT_SX}>
+                              {lastActivity ? formatDate(lastActivity.created_at) : "Not available"}
+                            </Box>
+                          </TableCell>
                           <TableCell align="right">
-                            <Tooltip title="Actions">
-                              <span>
-                                <IconButton size="small" onClick={(event) => openActionMenu(event, item)}>
-                                  <MoreVertRoundedIcon fontSize="small" />
-                                </IconButton>
-                              </span>
-                            </Tooltip>
+                            <Stack direction="row" spacing={0.5} sx={{ justifyContent: "flex-end", alignItems: "center" }}>
+                              <Tooltip title="View Details">
+                                <span>
+                                  <IconButton
+                                    size="small"
+                                    onClick={() => void openDetailDrawer(item.id)}
+                                    sx={{ border: "1px solid #DBEAFE", bgcolor: "#F8FBFF", borderRadius: "8px" }}
+                                  >
+                                    <VisibilityOutlined fontSize="small" sx={{ color: "#2563EB" }} />
+                                  </IconButton>
+                                </span>
+                              </Tooltip>
+                              <Tooltip title="Actions">
+                                <span>
+                                  <IconButton
+                                    size="small"
+                                    onClick={(event) => openActionMenu(event, item)}
+                                    sx={{ border: "1px solid #E2E8F0", bgcolor: "#FFFFFF", borderRadius: "8px" }}
+                                  >
+                                    <MoreVertRoundedIcon fontSize="small" sx={{ color: "#475569" }} />
+                                  </IconButton>
+                                </span>
+                              </Tooltip>
+                            </Stack>
                           </TableCell>
                         </TableRow>
                       );

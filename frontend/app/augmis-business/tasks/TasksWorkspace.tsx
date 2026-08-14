@@ -66,12 +66,17 @@ import {
   isTaskOverdue,
   isTaskUpcoming,
 } from "../components/BusinessTaskUI";
-import BusinessDataTable, { type BusinessDataTableColumn } from "../components/BusinessDataTable";
+import BusinessDataTable, {
+  BUSINESS_TABLE_SINGLE_LINE_TEXT_SX,
+  type BusinessDataTableColumn,
+} from "../components/BusinessDataTable";
 import BusinessDetailDrawer from "../components/BusinessDetailDrawer";
 import BusinessFilterBar from "../components/BusinessFilterBar";
-import BusinessMetricCarousel, { type BusinessMetricItem } from "../components/BusinessMetricCarousel";
 import BusinessPageFrame from "../components/BusinessPageFrame";
 import BusinessRowActionMenu from "../components/BusinessRowActionMenu";
+import BusinessStatusCardStrip, {
+  type BusinessStatusCardItem,
+} from "../components/BusinessStatusCardStrip";
 import BusinessTabs, { type BusinessTabItem } from "../components/BusinessTabs";
 
 type TimingView = "all" | "overdue" | "due_today" | "upcoming" | "in_progress" | "completed";
@@ -566,47 +571,57 @@ export default function TasksWorkspace() {
     leadOptions.find((lead) => lead.id === createForm.lead_id) || leadMap[createForm.lead_id] || null;
   const selectedEditLead =
     leadOptions.find((lead) => lead.id === editForm.lead_id) || leadMap[editForm.lead_id] || null;
-  const metricItems = useMemo<BusinessMetricItem[]>(
+  const metricItems = useMemo<BusinessStatusCardItem[]>(
     () => [
       {
         key: "open",
         title: "Open",
         value: total,
-        subtitle: "Matching open task records",
+        description: "Matching open task records",
         icon: <TaskAltOutlinedIcon fontSize="small" />,
-        accent: "linear-gradient(90deg, #DBEAFE 0%, #F8FAFC 100%)",
+        gradient: "linear-gradient(135deg, #FFFFFF 0%, #EAF2FF 100%)",
+        iconTint: "#1D4ED8",
+        iconSurface: "#DBEAFE",
       },
       {
         key: "overdue",
         title: "Overdue",
         value: dashboard?.overdue_tasks ?? 0,
-        subtitle: "Open or in-progress tasks past due",
+        description: "Open or in-progress tasks past due",
         icon: <EventBusyOutlinedIcon fontSize="small" />,
-        accent: "linear-gradient(90deg, #FEE4E2 0%, #FFF5F4 100%)",
+        gradient: "linear-gradient(135deg, #FFFFFF 0%, #FFF0F0 100%)",
+        iconTint: "#B42318",
+        iconSurface: "#FEE2E2",
       },
       {
         key: "due-today",
         title: "Due Today",
         value: dashboard?.tasks_due_today ?? 0,
-        subtitle: "Live tasks due before close of day",
+        description: "Live tasks due before close of day",
         icon: <ScheduleOutlinedIcon fontSize="small" />,
-        accent: "linear-gradient(90deg, #FEF3C7 0%, #FFFBEB 100%)",
+        gradient: "linear-gradient(135deg, #FFFFFF 0%, #FFF8E1 100%)",
+        iconTint: "#B54708",
+        iconSurface: "#FDE68A",
       },
       {
         key: "upcoming",
         title: "Upcoming",
         value: displayedTasks.filter((task) => isTaskUpcoming(task)).length,
-        subtitle: "Loaded tasks due after today",
+        description: "Loaded tasks due after today",
         icon: <EventNoteOutlinedIcon fontSize="small" />,
-        accent: "linear-gradient(90deg, #E0F2FE 0%, #F8FAFC 100%)",
+        gradient: "linear-gradient(135deg, #FFFFFF 0%, #EEF7FF 100%)",
+        iconTint: "#0F4C81",
+        iconSurface: "#E0F2FE",
       },
       {
         key: "completed",
         title: "Completed",
         value: completedResultCount(displayedTasks, timingView, total),
-        subtitle: "Matching completed tasks",
+        description: "Matching completed tasks",
         icon: <AssignmentTurnedInOutlinedIcon fontSize="small" />,
-        accent: "linear-gradient(90deg, #DCFCE7 0%, #F0FDF4 100%)",
+        gradient: "linear-gradient(135deg, #FFFFFF 0%, #EAFBF1 100%)",
+        iconTint: "#047857",
+        iconSurface: "#BBF7D0",
       },
     ],
     [dashboard?.overdue_tasks, dashboard?.tasks_due_today, displayedTasks, timingView, total]
@@ -634,25 +649,18 @@ export default function TasksWorkspace() {
         label: "Task",
         sortable: true,
         width: 250,
+        cellSx: { maxWidth: 250 },
         render: (task) => (
-          <Box sx={{ minWidth: 0 }}>
-            <Typography
-              sx={{
-                fontWeight: 700,
-                color: "#0F172A",
-                display: "-webkit-box",
-                WebkitBoxOrient: "vertical",
-                WebkitLineClamp: 2,
-                overflow: "hidden",
-                whiteSpace: "normal",
-              }}
-            >
-              {task.title}
-            </Typography>
-            <Typography sx={{ mt: 0.35, color: "#64748B", fontSize: 12.5 }}>
-              {formatTaskLabel(task.task_type)}
-            </Typography>
-          </Box>
+          <Typography
+            title={task.title}
+            sx={{
+              ...BUSINESS_TABLE_SINGLE_LINE_TEXT_SX,
+              fontWeight: 700,
+              color: "#0F172A",
+            }}
+          >
+            {task.title}
+          </Typography>
         ),
       },
       {
@@ -668,7 +676,7 @@ export default function TasksWorkspace() {
         sortable: true,
         width: 150,
         render: (task) => (
-          <Typography sx={{ color: getTaskDueColor(task), fontWeight: 600 }}>
+          <Typography sx={{ ...BUSINESS_TABLE_SINGLE_LINE_TEXT_SX, color: getTaskDueColor(task), fontWeight: 600 }}>
             {formatTaskDateTime(task.due_at)}
           </Typography>
         ),
@@ -685,19 +693,13 @@ export default function TasksWorkspace() {
         label: "Assignee",
         sortable: true,
         width: 220,
+        cellSx: { maxWidth: 220 },
         render: (task) => {
           const assigned = getAssignedUserDisplay(task.assigned_user_id);
           return (
-            <Box sx={{ minWidth: 0 }}>
-              <Typography sx={{ color: "#0F172A", fontWeight: 600, lineHeight: 1.2 }}>
-                {assigned.primary}
-              </Typography>
-              {assigned.secondary ? (
-                <Typography sx={{ mt: 0.35, color: "#64748B", fontSize: 12 }}>
-                  {assigned.secondary}
-                </Typography>
-              ) : null}
-            </Box>
+            <Typography sx={{ ...BUSINESS_TABLE_SINGLE_LINE_TEXT_SX, color: "#0F172A", fontWeight: 600 }}>
+              {assigned.primary}
+            </Typography>
           );
         },
       },
@@ -705,25 +707,18 @@ export default function TasksWorkspace() {
         key: "lead",
         label: "Lead",
         width: 220,
+        cellSx: { maxWidth: 220 },
         render: (task) => (
-          <Box sx={{ minWidth: 0 }}>
-            <Typography
-              sx={{
-                color: "#0F172A",
-                fontWeight: 600,
-                display: "-webkit-box",
-                WebkitBoxOrient: "vertical",
-                WebkitLineClamp: 2,
-                overflow: "hidden",
-                whiteSpace: "normal",
-              }}
-            >
-              {findLeadTitle(leadMap, task)}
-            </Typography>
-            <Typography sx={{ mt: 0.35, color: "#64748B", fontSize: 12.5 }}>
-              {findProspectName(leadMap, task)}
-            </Typography>
-          </Box>
+          <Typography
+            title={`${findLeadTitle(leadMap, task)}${findProspectName(leadMap, task) ? ` - ${findProspectName(leadMap, task)}` : ""}`}
+            sx={{
+              ...BUSINESS_TABLE_SINGLE_LINE_TEXT_SX,
+              color: "#0F172A",
+              fontWeight: 600,
+            }}
+          >
+            {findLeadTitle(leadMap, task)}
+          </Typography>
         ),
       },
       {
@@ -1019,7 +1014,7 @@ export default function TasksWorkspace() {
     >
       <Stack spacing={2.5}>
         {error ? <Alert severity="error">{error}</Alert> : null}
-        <BusinessMetricCarousel items={metricItems} />
+        <BusinessStatusCardStrip items={metricItems} />
 
         <BusinessFilterBar
           filters={

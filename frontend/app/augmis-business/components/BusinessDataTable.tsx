@@ -30,7 +30,36 @@ export type BusinessDataTableColumn<RowType> = {
   align?: "left" | "right" | "center";
   width?: number | string;
   sx?: Record<string, unknown>;
+  cellSx?: Record<string, unknown>;
+  headerSx?: Record<string, unknown>;
 };
+
+export const BUSINESS_TABLE_SINGLE_LINE_TEXT_SX = {
+  display: "block",
+  minWidth: 0,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+} as const;
+
+export const BUSINESS_TABLE_COMPACT_SX = {
+  "& .MuiTableCell-root": {
+    borderColor: "#D8E1EE",
+  },
+  "& .MuiTableHead-root .MuiTableCell-root": {
+    py: 0.95,
+    color: "#334155",
+    fontSize: 12.5,
+    fontWeight: 700,
+    whiteSpace: "nowrap",
+    verticalAlign: "middle",
+  },
+  "& .MuiTableBody-root .MuiTableCell-root": {
+    py: 0.82,
+    verticalAlign: "middle",
+    borderColor: "#E2E8F0",
+  },
+} as const;
 
 export default function BusinessDataTable<RowType extends { id?: string }>({
   title,
@@ -44,12 +73,14 @@ export default function BusinessDataTable<RowType extends { id?: string }>({
   error,
   emptyTitle = "No rows found",
   emptyDescription = "No data matches the current filters.",
+  emptyContent,
   sortBy,
   sortOrder = "asc",
   onSortChange,
   page,
   pageSize,
   total,
+  rowsPerPageOptions = [10, 25, 50, 100],
   onPageChange,
   onRowsPerPageChange,
   rowKey,
@@ -70,12 +101,14 @@ export default function BusinessDataTable<RowType extends { id?: string }>({
   error?: string | null;
   emptyTitle?: string;
   emptyDescription?: string;
+  emptyContent?: ReactNode;
   sortBy?: string;
   sortOrder?: "asc" | "desc";
   onSortChange?: (sortBy: string, sortOrder: "asc" | "desc") => void;
   page?: number;
   pageSize?: number;
   total?: number;
+  rowsPerPageOptions?: number[];
   onPageChange?: (page: number) => void;
   onRowsPerPageChange?: (pageSize: number) => void;
   rowKey?: (row: RowType, index: number) => string;
@@ -120,9 +153,7 @@ export default function BusinessDataTable<RowType extends { id?: string }>({
               sx={{
                 tableLayout,
                 minWidth,
-                "& .MuiTableCell-root": {
-                  borderColor: "#D8E1EE",
-                },
+                ...BUSINESS_TABLE_COMPACT_SX,
               }}
             >
               <TableHead>
@@ -133,13 +164,8 @@ export default function BusinessDataTable<RowType extends { id?: string }>({
                       align={column.align}
                       sx={{
                         width: column.width,
-                        py: 1.05,
-                        color: "#334155",
-                        fontSize: 12.5,
-                        fontWeight: 700,
-                        whiteSpace: "nowrap",
-                        verticalAlign: "middle",
                         ...column.sx,
+                        ...column.headerSx,
                       }}
                     >
                       {column.sortable && onSortChange ? (
@@ -174,16 +200,11 @@ export default function BusinessDataTable<RowType extends { id?: string }>({
                       onClick={onRowClick ? () => onRowClick(row) : undefined}
                       sx={{
                         ...(onRowClick ? { cursor: "pointer" } : {}),
-                        "& td": {
-                          py: 1.35,
-                          verticalAlign: "top",
-                          borderColor: "#E2E8F0",
-                        },
                         ...getRowSx?.(row, index),
                       }}
                     >
                       {columns.map((column) => (
-                        <TableCell key={column.key} align={column.align} sx={column.sx}>
+                        <TableCell key={column.key} align={column.align} sx={column.cellSx}>
                           {column.render(row)}
                         </TableCell>
                       ))}
@@ -205,11 +226,13 @@ export default function BusinessDataTable<RowType extends { id?: string }>({
               rowsPerPage={pageSize}
               onPageChange={(_, nextPage) => onPageChange(nextPage)}
               onRowsPerPageChange={(event) => onRowsPerPageChange(Number(event.target.value))}
-              rowsPerPageOptions={[10, 25, 50, 100]}
+              rowsPerPageOptions={rowsPerPageOptions}
               sx={ADMIN_TABLE_CARD_PAGINATION_SX}
             />
           ) : null}
         </>
+      ) : emptyContent ? (
+        emptyContent
       ) : (
         <Box sx={{ p: 2.25 }}>
           <Box sx={{ p: 2.4, borderRadius: "8px", border: "1px dashed #CBD5E1", bgcolor: "#F8FAFC" }}>
