@@ -106,20 +106,19 @@ export default function BusinessStatusCardStrip({ items }: { items: BusinessStat
 
   return (
     <Stack spacing={1.25}>
-      <Stack
-        direction="row"
-        sx={{
-          alignItems: "center",
-          justifyContent: "flex-end",
-        }}
-      >
+      <Box sx={{ position: "relative" }}>
         {canShuffle ? (
-          <Stack direction="row" spacing={0.6}>
+          <>
             <IconButton
               size="small"
               disabled={offset === 0}
               onClick={() => setOffset((current) => Math.max(0, current - 1))}
               sx={{
+                position: "absolute",
+                left: -18,
+                top: "50%",
+                transform: "translateY(-50%)",
+                zIndex: 2,
                 borderRadius: "8px",
                 border: "1px solid #D9E2EC",
                 bgcolor: "#FFFFFF",
@@ -134,6 +133,11 @@ export default function BusinessStatusCardStrip({ items }: { items: BusinessStat
               disabled={offset >= maxOffset}
               onClick={() => setOffset((current) => Math.min(maxOffset, current + 1))}
               sx={{
+                position: "absolute",
+                right: -18,
+                top: "50%",
+                transform: "translateY(-50%)",
+                zIndex: 2,
                 borderRadius: "8px",
                 border: "1px solid #D9E2EC",
                 bgcolor: "#FFFFFF",
@@ -143,25 +147,25 @@ export default function BusinessStatusCardStrip({ items }: { items: BusinessStat
             >
               <ChevronRightRoundedIcon fontSize="small" />
             </IconButton>
-          </Stack>
+          </>
         ) : null}
-      </Stack>
-      <Box
-        sx={{
-          display: "grid",
-          gap: 1.75,
-          gridTemplateColumns: {
-            xs: "1fr",
-            sm: "repeat(2, minmax(0, 1fr))",
-            lg: canShuffle
-              ? `repeat(${MAX_VISIBLE_CARDS}, minmax(0, 1fr))`
-              : `repeat(${Math.min(visibleItems.length, MAX_VISIBLE_CARDS)}, minmax(0, 1fr))`,
-          },
-        }}
-      >
-        {visibleItems.map((item) => (
-          <BusinessStatusCard key={item.key} item={item} />
-        ))}
+        <Box
+          sx={{
+            display: "grid",
+            gap: 1.75,
+            gridTemplateColumns: {
+              xs: "1fr",
+              sm: "repeat(2, minmax(0, 1fr))",
+              lg: canShuffle
+                ? `repeat(${MAX_VISIBLE_CARDS}, minmax(0, 1fr))`
+                : `repeat(${Math.min(visibleItems.length, MAX_VISIBLE_CARDS)}, minmax(0, 1fr))`,
+            },
+          }}
+        >
+          {visibleItems.map((item) => (
+            <BusinessStatusCard key={item.key} item={item} />
+          ))}
+        </Box>
       </Box>
     </Stack>
   );
