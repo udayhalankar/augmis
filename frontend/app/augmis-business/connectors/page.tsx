@@ -1,11 +1,13 @@
 "use client";
 
 import { type ChangeEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { usePathname } from "next/navigation";
 
 import AutorenewRoundedIcon from "@mui/icons-material/AutorenewRounded";
 import AccountBalanceOutlinedIcon from "@mui/icons-material/AccountBalanceOutlined";
 import CableOutlinedIcon from "@mui/icons-material/CableOutlined";
 import CheckCircleOutlineRoundedIcon from "@mui/icons-material/CheckCircleOutlineRounded";
+import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import ErrorOutlineRoundedIcon from "@mui/icons-material/ErrorOutlineRounded";
 import FilterAltOutlinedIcon from "@mui/icons-material/FilterAltOutlined";
 import FindInPageOutlinedIcon from "@mui/icons-material/FindInPageOutlined";
@@ -113,8 +115,18 @@ import {
   recrawlAugmisBusinessWebDomain,
 } from "@/services/augmisBusinessService";
 import BusinessPageFrame from "../components/BusinessPageFrame";
+import BusinessWorkspaceModal from "../components/BusinessWorkspaceModal";
 
 type ToastSeverity = "success" | "error" | "info" | "warning";
+const HIDDEN_CONNECTOR_TYPES = new Set([
+  "fixture_opportunity_connector",
+  "independent_web_discovery",
+  "generic_web_search",
+  "ted_procurement",
+  "remote_job_feed",
+]);
+const CONNECTOR_REGISTRY_MODAL_WIDTH = 1320;
+const CONNECTOR_DETAIL_MODAL_WIDTH = 1180;
 type SearchProfileArrayField =
   | "target_regions_json"
   | "target_countries_json"
@@ -782,6 +794,15 @@ function connectorCategoryDisplay(connector: AugmisBusinessConnector) {
   return connector.source_category;
 }
 
+function discoveryInboxButtonColor(connector: AugmisBusinessConnector) {
+  if (connector.metadata?.is_test_connector) return undefined;
+  if (connector.connector_type === "freelancer_marketplace") return "#7C3AED";
+  if (connector.connector_type === "job_board_api") return "#15803D";
+  if (connector.connector_type === "remote_job_api") return "#4338CA";
+  if (connector.connector_type === "job_search_api") return "#C2410C";
+  return "#2563EB";
+}
+
 function credentialStatusChip(status: AugmisBusinessConnectorCredentialStatus | null) {
   if (!status || !status.configured) {
     return { bgcolor: "#FFF7ED", color: "#B45309", borderColor: "#FED7AA" };
@@ -1317,7 +1338,15 @@ function MetadataMetric({
   );
 }
 
-export default function AugmisBusinessConnectorsPage() {
+function AugmisBusinessDiscoveryWorkspace() {
+  const pathname = usePathname();
+  const isControlCentre = pathname === "/augmis-business/control-centre";
+  const pageTitle = isControlCentre ? "Control Centre" : "Discovry Inbox";
+  const pageDescription = isControlCentre
+    ? "Manage connector registry controls, scan operations, and governed discovery configuration within AUGMIS Business."
+    : "Review staged discoveries, inspect source evidence, and run available discovery scans within AUGMIS Business.";
+  const showRegistry = isControlCentre;
+  const showDiscoveryInbox = !isControlCentre;
   const { hasPermission } = useAuth();
   const canRead = hasPermission("business_development:read");
   const canAdmin = hasPermission("business_development:admin");
@@ -1367,6 +1396,7 @@ export default function AugmisBusinessConnectorsPage() {
   const [showSourceDetails, setShowSourceDetails] = useState(false);
   const [discoveryTranslationView, setDiscoveryTranslationView] = useState<"english" | "original">("original");
   const [translatingDiscoveryId, setTranslatingDiscoveryId] = useState<string | null>(null);
+  const [registryDialogOpen, setRegistryDialogOpen] = useState(false);
   const [connectorDrawerOpen, setConnectorDrawerOpen] = useState(false);
   const [discoveryDrawerOpen, setDiscoveryDrawerOpen] = useState(false);
   const [profileDialogOpen, setProfileDialogOpen] = useState(false);
@@ -1404,33 +1434,22 @@ export default function AugmisBusinessConnectorsPage() {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   const defaultProfile = profiles[0] ?? null;
-  const webConnector = useMemo(
-    () => connectors.find((connector) => connector.connector_type === "generic_web_search") ?? null,
+  const visibleConnectors = useMemo(
+    () => connectors.filter((connector) => !HIDDEN_CONNECTOR_TYPES.has(connector.connector_type)),
     [connectors]
   );
-  const fixtureConnector = useMemo(
-    () => connectors.find((connector) => connector.metadata?.is_test_connector) ?? null,
-    [connectors]
-  );
-  const tedConnector = useMemo(
-    () => connectors.find((connector) => connector.connector_type === "ted_procurement") ?? null,
-    [connectors]
-  );
-  const freelancerConnector = useMemo(
-    () => connectors.find((connector) => connector.connector_type === "freelancer_marketplace") ?? null,
-    [connectors]
-  );
-  const remoteOkConnector = useMemo(
-    () => connectors.find((connector) => connector.connector_type === "remote_job_feed") ?? null,
-    [connectors]
-  );
-  const arbeitnowConnector = useMemo(
-    () => connectors.find((connector) => connector.connector_type === "job_board_api") ?? null,
-    [connectors]
-  );
-  const remotiveConnector = useMemo(
-    () => connectors.find((connector) => connector.connector_type === "remote_job_api") ?? null,
-    [connectors]
+  const discoveryInboxConnectors = useMemo(
+    () =>
+      visibleConnectors.filter(
+        (connector) =>
+          connector.enabled &&
+          (connector.metadata?.is_test_connector ||
+            connector.source_category === "search" ||
+            connector.source_category === "procurement" ||
+            connector.source_category === "marketplace" ||
+            ["job_board_api", "remote_job_api", "job_search_api"].includes(connector.connector_type))
+      ),
+    [visibleConnectors]
   );
   const showToast = (message: string, severity: ToastSeverity) => {
     setToastMessage(message);
@@ -2268,8 +2287,8 @@ export default function AugmisBusinessConnectorsPage() {
   if (!canRead) {
     return (
       <BusinessPageFrame
-        title="Connectors"
-        description="Discovery connectors, scans, and inbox review remain within your AUGMIS workspace."
+        title={pageTitle}
+        description={pageDescription}
       >
         <Alert severity="warning">
           You do not currently have permission to view listener connectors or discoveries.
@@ -2305,57 +2324,59 @@ export default function AugmisBusinessConnectorsPage() {
   return (
     <>
       <BusinessPageFrame
-        title="Connectors"
-        description="Manage live web discovery scans, review staged findings, and import verified opportunities into AUGMIS Business."
+        title={pageTitle}
+        description={pageDescription}
       >
         <Stack spacing={2.25}>
-          <Box
-            sx={{
-              display: "grid",
-              gap: 1.5,
-              gridTemplateColumns: {
-                xs: "1fr",
-                md: "repeat(2, minmax(0, 1fr))",
-                xl: "repeat(5, minmax(0, 1fr))",
-              },
-            }}
-          >
-            <MetricCard
-              icon={<CableOutlinedIcon sx={{ color: "#1D4ED8" }} />}
-              title="Active Connectors"
-              value={summary.active_connectors}
-              helper="Configured and enabled connectors"
-              accent="#DBEAFE"
-            />
-            <MetricCard
-              icon={<TravelExploreOutlinedIcon sx={{ color: "#047857" }} />}
-              title="Discoveries Today"
-              value={summary.discoveries_today}
-              helper="Fresh opportunities staged today"
-              accent="#D1FAE5"
-            />
-            <MetricCard
-              icon={<FindInPageOutlinedIcon sx={{ color: "#7C3AED" }} />}
-              title="New Discoveries"
-              value={summary.new_discoveries}
-              helper="Awaiting operator review"
-              accent="#EDE9FE"
-            />
-            <MetricCard
-              icon={<ErrorOutlineRoundedIcon sx={{ color: "#B42318" }} />}
-              title="Failed Runs"
-              value={summary.failed_runs}
-              helper="Runs that need attention"
-              accent="#FEE2E2"
-            />
-            <MetricCard
-              icon={<AutorenewRoundedIcon sx={{ color: "#0F766E" }} />}
-              title="Last Scan"
-              value={summary.last_scan ? new Date(summary.last_scan).toLocaleDateString() : "None"}
-              helper={summary.last_scan ? formatDate(summary.last_scan) : "No scans recorded yet"}
-              accent="#CCFBF1"
-            />
-          </Box>
+          {!isControlCentre ? (
+            <Box
+              sx={{
+                display: "grid",
+                gap: 1.5,
+                gridTemplateColumns: {
+                  xs: "1fr",
+                  md: "repeat(2, minmax(0, 1fr))",
+                  xl: "repeat(5, minmax(0, 1fr))",
+                },
+              }}
+            >
+              <MetricCard
+                icon={<CableOutlinedIcon sx={{ color: "#1D4ED8" }} />}
+                title="Active Connectors"
+                value={summary.active_connectors}
+                helper="Configured and enabled connectors"
+                accent="#DBEAFE"
+              />
+              <MetricCard
+                icon={<TravelExploreOutlinedIcon sx={{ color: "#047857" }} />}
+                title="Discoveries Today"
+                value={summary.discoveries_today}
+                helper="Fresh opportunities staged today"
+                accent="#D1FAE5"
+              />
+              <MetricCard
+                icon={<FindInPageOutlinedIcon sx={{ color: "#7C3AED" }} />}
+                title="New Discoveries"
+                value={summary.new_discoveries}
+                helper="Awaiting operator review"
+                accent="#EDE9FE"
+              />
+              <MetricCard
+                icon={<ErrorOutlineRoundedIcon sx={{ color: "#B42318" }} />}
+                title="Failed Runs"
+                value={summary.failed_runs}
+                helper="Runs that need attention"
+                accent="#FEE2E2"
+              />
+              <MetricCard
+                icon={<AutorenewRoundedIcon sx={{ color: "#0F766E" }} />}
+                title="Last Scan"
+                value={summary.last_scan ? new Date(summary.last_scan).toLocaleDateString() : "None"}
+                helper={summary.last_scan ? formatDate(summary.last_scan) : "No scans recorded yet"}
+                accent="#CCFBF1"
+              />
+            </Box>
+          ) : null}
 
           {busy && activeActionLabel ? (
             <Alert
@@ -2367,370 +2388,290 @@ export default function AugmisBusinessConnectorsPage() {
             </Alert>
           ) : null}
 
-          <Paper elevation={0} sx={{ borderRadius: "8px", border: "1px solid #E2E8F0", overflow: "hidden" }}>
-            <Box
-              sx={{
-                px: 2.2,
-                py: 1.5,
-                background: "linear-gradient(90deg, #DBEAFE 0%, #F8FAFC 100%)",
-                borderBottom: "1px solid #E2E8F0",
-              }}
-            >
-              <Stack
-                direction={{ xs: "column", lg: "row" }}
-                spacing={1.5}
-                sx={{ justifyContent: "space-between", alignItems: { lg: "center" } }}
+          {showRegistry ? (
+            <>
+              <Box
+                sx={{
+                  display: "grid",
+                  gap: 1.5,
+                  gridTemplateColumns: { xs: "1fr", sm: "minmax(240px, 280px)" },
+                  alignItems: "start",
+                }}
               >
-                <Stack spacing={0.35}>
-                  <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
-                    <HubOutlinedIcon sx={{ color: "#1D4ED8", fontSize: 20 }} />
-                    <Typography sx={{ fontWeight: 700, color: "#0F172A" }}>
-                      Connector Registry
-                    </Typography>
-                  </Stack>
-                  <Typography sx={{ color: "#475569", fontSize: 13 }}>
-                    Web Opportunity Search, TED European Procurement, and Freelancer Marketplace are the live production listeners. The fixture connector remains available for regression-safe testing.
-                  </Typography>
-                </Stack>
-                <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap" }}>
-                  <Button
-                    variant="outlined"
-                    startIcon={<RuleFolderOutlinedIcon />}
-                    onClick={() => {
-                      setProfileForm(defaultProfile ? profileToForm(defaultProfile) : buildDefaultProfileForm());
-                      setProfileDialogOpen(true);
-                    }}
-                    disabled={!canAdmin || busy}
-                    sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700 }}
-                  >
-                    Edit Search Profile
-                  </Button>
-                  <Button
-                    variant="contained"
-                    startIcon={<RefreshRoundedIcon />}
-                    onClick={() => void refreshWorkspace()}
-                    disabled={loading || busy}
-                    sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700, bgcolor: "#2563EB" }}
-                  >
-                    Refresh
-                  </Button>
-                </Stack>
-              </Stack>
-            </Box>
-            <Box sx={{ p: 2 }}>
-              {loading ? (
-                <Stack sx={{ py: 4, alignItems: "center" }}>
-                  <CircularProgress size={30} />
-                </Stack>
-              ) : (
-                <Table
-                  size="small"
-                  sx={{
-                    tableLayout: "fixed",
-                    width: "100%",
-                    "& th, & td": {
-                      px: 1.25,
-                      py: 1.1,
-                      verticalAlign: "top",
-                    },
-                  }}
-                >
-                  <TableHead>
-                    <TableRow>
-                      <TableCell>Connector</TableCell>
-                      <TableCell>Type</TableCell>
-                      <TableCell>Provider</TableCell>
-                      <TableCell>Category</TableCell>
-                      <TableCell>Status</TableCell>
-                      <TableCell>Schedule</TableCell>
-                      <TableCell>Last Scan</TableCell>
-                      <TableCell align="right">Actions</TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {connectors.map((connector) => (
-                      <TableRow key={connector.id} hover>
-                        <TableCell>
-                          <Stack spacing={0.4}>
-                            <Stack direction="row" spacing={0.8} sx={{ alignItems: "center", flexWrap: "wrap" }}>
-                              {connectorPrimaryIcon(connector)}
-                              <Typography sx={{ fontWeight: 700, color: "#0F172A" }}>
-                                {connector.name}
-                              </Typography>
-                            </Stack>
-                            <Stack direction="row" spacing={0.75} sx={{ flexWrap: "wrap" }}>
-                              <Chip
-                                label={connectorCategoryLabel(connector)}
-                                size="small"
-                                sx={
-                                  connector.metadata?.is_test_connector
-                                    ? { bgcolor: "#FFF7ED", color: "#B45309", border: "1px solid #FED7AA" }
-                                    : { bgcolor: "#EFF6FF", color: "#1D4ED8", border: "1px solid #BFDBFE" }
-                                }
-                              />
-                              <Typography sx={{ fontSize: 12, color: "#64748B" }}>{connector.id}</Typography>
-                            </Stack>
-                          </Stack>
-                        </TableCell>
-                        <TableCell>{connector.connector_type}</TableCell>
-                        <TableCell>
-                          {connector.connector_type === "generic_web_search" ? (
-                            <Stack direction="row" spacing={0.75} sx={{ alignItems: "center", minWidth: 220 }}>
-                              <TextField
-                                select
-                                size="small"
-                                value={pendingProviderSelections[connector.id] || selectedConnectorProvider(connector)}
-                                disabled={!canAdmin || busy}
-                                onChange={(event) =>
-                                  setPendingProviderSelections((current) => ({
-                                    ...current,
-                                    [connector.id]: event.target.value,
-                                  }))
-                                }
-                                sx={{ minWidth: 160 }}
-                              >
-                                {searchProviders
-                                  .filter(
-                                    (provider) =>
-                                      provider.enabled || provider.provider_code === selectedConnectorProvider(connector)
-                                  )
-                                  .map((provider) => (
-                                    <MenuItem key={provider.id} value={provider.provider_code}>
-                                      {provider.display_name}
-                                    </MenuItem>
-                                  ))}
-                              </TextField>
-                              {(
-                                (pendingProviderSelections[connector.id] || selectedConnectorProvider(connector)) !==
-                                selectedConnectorProvider(connector)
-                              ) ? (
-                                <Button
-                                  variant="contained"
-                                  size="small"
-                                  disabled={!canAdmin || busy}
-                                  onClick={() => void handleInlineProviderSave(connector)}
-                                  sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700, bgcolor: "#2563EB" }}
-                                >
-                                  Save
-                                </Button>
-                              ) : null}
-                            </Stack>
-                          ) : connector.connector_type === "freelancer_marketplace" ? (
-                            <Chip
-                              label={connector.configuration_json.mode === "mock" ? "Freelancer / Mock" : "Freelancer"}
-                              size="small"
-                              sx={{ borderRadius: "8px", bgcolor: "#F5F3FF", color: "#6D28D9", border: "1px solid #DDD6FE" }}
-                            />
-                          ) : connector.connector_type === "ted_procurement" ? (
-                            <Chip
-                              label="TED"
-                              size="small"
-                              sx={{ borderRadius: "8px", bgcolor: "#ECFDF3", color: "#0F766E", border: "1px solid #A7F3D0" }}
-                            />
-                          ) : connector.connector_type === "remote_job_feed" ? (
-                            <Chip label="Remote OK" size="small" sx={{ borderRadius: "8px", bgcolor: "#ECFEFF", color: "#0F766E", border: "1px solid #A5F3FC" }} />
-                          ) : connector.connector_type === "job_board_api" ? (
-                            <Chip label="Arbeitnow" size="small" sx={{ borderRadius: "8px", bgcolor: "#F0FDF4", color: "#15803D", border: "1px solid #BBF7D0" }} />
-                          ) : connector.connector_type === "remote_job_api" ? (
-                            <Chip label="Remotive" size="small" sx={{ borderRadius: "8px", bgcolor: "#EEF2FF", color: "#4338CA", border: "1px solid #C7D2FE" }} />
-                          ) : connector.connector_type === "job_search_api" ? (
-                            <Chip label="Adzuna" size="small" sx={{ borderRadius: "8px", bgcolor: "#FFF7ED", color: "#C2410C", border: "1px solid #FED7AA" }} />
-                          ) : (
-                            "—"
-                          )}
-                        </TableCell>
-                        <TableCell sx={{ textTransform: "capitalize" }}>
-                          {connectorCategoryDisplay(connector)}
-                        </TableCell>
-                        <TableCell>
-                          <Chip
-                            label={connector.status}
-                            size="small"
-                            sx={{ textTransform: "capitalize", border: "1px solid", ...connectorStatusChip(connector.status) }}
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <Stack spacing={0.25}>
-                            <Typography sx={{ fontSize: 13, fontWeight: 600, color: "#0F172A" }}>
-                              {formatSchedule(connector)}
-                            </Typography>
-                            {connector.schedule_enabled ? (
-                              <Typography sx={{ fontSize: 12, color: "#64748B" }}>
-                                Next: {formatDate(connector.next_run_at)}
-                              </Typography>
-                            ) : null}
-                          </Stack>
-                        </TableCell>
-                        <TableCell>{formatDate(connector.last_scan_at)}</TableCell>
-                        <TableCell align="right">
-                          <Stack direction="row" spacing={0.5} sx={{ justifyContent: "flex-end" }}>
-                            <Tooltip title="View">
-                              <span>
-                                <IconButton size="small" onClick={() => void openConnectorDrawer(connector)}>
-                                  <PreviewOutlinedIcon fontSize="small" sx={{ color: "#2563EB" }} />
-                                </IconButton>
-                              </span>
-                            </Tooltip>
-                            <Tooltip title="Test Connection">
-                              <span>
-                                <IconButton size="small" disabled={!canAdmin || busy} onClick={() => void handleTest(connector)}>
-                                  <CheckCircleOutlineRoundedIcon fontSize="small" sx={{ color: "#0F766E" }} />
-                                </IconButton>
-                              </span>
-                            </Tooltip>
-                            <Tooltip title="Scan Now">
-                              <span>
-                                <IconButton size="small" disabled={!canScan || busy || connector.status === "running"} onClick={() => void handleScan(connector)}>
-                                  <PlayCircleOutlineRoundedIcon fontSize="small" sx={{ color: "#1D4ED8" }} />
-                                </IconButton>
-                              </span>
-                            </Tooltip>
-                            <Tooltip title={connector.enabled ? "Disable" : "Enable"}>
-                              <span>
-                                <IconButton size="small" disabled={!canAdmin || busy} onClick={() => void handleToggleConnector(connector)}>
-                                  <SettingsSuggestOutlinedIcon fontSize="small" sx={{ color: "#475569" }} />
-                                </IconButton>
-                              </span>
-                            </Tooltip>
-                          </Stack>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              )}
-            </Box>
-          </Paper>
-
-          <Paper elevation={0} sx={{ borderRadius: "8px", border: "1px solid #E2E8F0", overflow: "hidden" }}>
-            <Box
-              sx={{
-                px: 2.2,
-                py: 1.5,
-                background: "linear-gradient(90deg, #E0F2FE 0%, #F8FAFC 100%)",
-                borderBottom: "1px solid #E2E8F0",
-              }}
-            >
-              <Stack
-                direction={{ xs: "column", lg: "row" }}
-                spacing={1.5}
-                sx={{ justifyContent: "space-between", alignItems: { lg: "center" } }}
-              >
-                <Stack spacing={0.35}>
-                  <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
-                    <SearchRoundedIcon sx={{ color: "#0369A1", fontSize: 20 }} />
-                    <Typography sx={{ fontWeight: 700, color: "#0F172A" }}>Search Providers</Typography>
-                  </Stack>
-                  <Typography sx={{ color: "#475569", fontSize: 13 }}>
-                    Built-in providers remain available globally. Custom Generic REST providers are tenant-scoped and reusable from the connector provider dropdown.
-                  </Typography>
-                </Stack>
-                {canAdmin ? (
-                  <Button
-                    variant="contained"
-                    onClick={() => {
-                      setSearchProviderForm(buildSearchProviderForm());
-                      setSearchProviderDialogOpen(true);
-                    }}
-                    disabled={busy}
-                    sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700, bgcolor: "#2563EB" }}
-                  >
-                    + Add Search Provider
-                  </Button>
-                ) : null}
-              </Stack>
-            </Box>
-            <Box sx={{ p: 2 }}>
-              <Table size="small">
-                <TableHead>
-                  <TableRow>
-                    <TableCell>Provider</TableCell>
-                    <TableCell>Type</TableCell>
-                    <TableCell>Credential</TableCell>
-                    <TableCell>Status</TableCell>
-                    <TableCell>Last Tested</TableCell>
-                    <TableCell align="right">Actions</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {searchProviders.map((provider) => (
-                    <TableRow key={provider.id} hover>
-                      <TableCell>
-                        <Stack spacing={0.35}>
-                          <Typography sx={{ fontWeight: 700, color: "#0F172A" }}>{provider.display_name}</Typography>
-                          <Typography sx={{ fontSize: 12, color: "#64748B" }}>{provider.provider_code}</Typography>
+                <Paper elevation={0} sx={{ borderRadius: "12px", border: "1px solid #D9E2EC", overflow: "hidden", boxShadow: "0 8px 22px rgba(15, 23, 42, 0.08)" }}>
+                  <Box sx={{ p: 2, background: "linear-gradient(180deg, #F8FAFC 0%, #EFF6FF 100%)" }}>
+                    <Stack spacing={1.6} sx={{ minHeight: 164, justifyContent: "space-between" }}>
+                      <Box>
+                        <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+                          <HubOutlinedIcon sx={{ color: "#1D4ED8", fontSize: 22 }} />
+                          <Typography sx={{ fontWeight: 800, color: "#0F172A" }}>Connector Registry</Typography>
                         </Stack>
-                      </TableCell>
-                      <TableCell>{provider.provider_type === "builtin" ? "Built-in" : "Generic REST"}</TableCell>
-                      <TableCell>
-                        {provider.credential_configured
-                          ? provider.credential_source === "environment"
-                            ? "Configured via Environment"
-                            : "Configured"
-                          : "Not Configured"}
-                      </TableCell>
-                      <TableCell>
+                        <Typography sx={{ mt: 1, color: "#475569", fontSize: 13, lineHeight: 1.45 }}>
+                          Open the governed connector workspace, review live connector rows, and update runtime controls from one modal.
+                        </Typography>
+                      </Box>
+                      <Stack direction="row" spacing={1} sx={{ alignItems: "center", justifyContent: "space-between" }}>
                         <Chip
-                          label={!provider.enabled ? "Disabled" : provider.connection_status === "success" ? "Success" : provider.connection_status === "failed" ? "Failed" : "Not Tested"}
+                          label={`${visibleConnectors.length} visible`}
                           size="small"
-                          sx={{ textTransform: "capitalize", border: "1px solid", ...searchProviderStatusChip(provider) }}
+                          sx={{ borderRadius: "999px", bgcolor: "#EFF6FF", color: "#1D4ED8", border: "1px solid #BFDBFE" }}
                         />
-                      </TableCell>
-                      <TableCell>{formatDate(provider.last_tested_at)}</TableCell>
-                      <TableCell align="right">
-                        <Stack direction="row" spacing={0.5} sx={{ justifyContent: "flex-end" }}>
-                          <Tooltip title="Configure Credential">
-                            <span>
-                              <IconButton
-                                size="small"
-                                disabled={!canAdmin || busy}
-                                onClick={() => {
-                                  setActiveCredentialProviderCode(provider.provider_code);
-                                  void loadCredentialStatus(provider.provider_code);
-                                  setCredentialDialogMode(provider.credential_configured ? "replace" : "configure");
-                                  setCredentialDialogOpen(true);
-                                  resetCredentialForm();
-                                }}
-                              >
-                                <VisibilityOutlinedIcon fontSize="small" sx={{ color: "#2563EB" }} />
-                              </IconButton>
-                            </span>
-                          </Tooltip>
-                          <Tooltip title="Test">
-                            <span>
-                              <IconButton size="small" disabled={!canAdmin || busy} onClick={() => void handleTestSearchProvider(provider)}>
-                                <CheckCircleOutlineRoundedIcon fontSize="small" sx={{ color: "#0F766E" }} />
-                              </IconButton>
-                            </span>
-                          </Tooltip>
-                          {provider.provider_type === "generic_rest" ? (
-                            <Tooltip title={provider.enabled ? "Disable" : "Enable"}>
-                              <span>
-                                <IconButton size="small" disabled={!canAdmin || busy} onClick={() => void handleToggleSearchProvider(provider)}>
-                                  <SettingsSuggestOutlinedIcon fontSize="small" sx={{ color: "#475569" }} />
-                                </IconButton>
-                              </span>
-                            </Tooltip>
-                          ) : null}
-                          {provider.provider_type === "generic_rest" ? (
-                            <Tooltip title="Delete">
-                              <span>
-                                <IconButton size="small" disabled={!canAdmin || busy} onClick={() => void handleDeleteSearchProvider(provider)}>
-                                  <ErrorOutlineRoundedIcon fontSize="small" sx={{ color: "#B42318" }} />
-                                </IconButton>
-                              </span>
-                            </Tooltip>
-                          ) : null}
-                        </Stack>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </Box>
-          </Paper>
+                        <Button
+                          variant="contained"
+                          onClick={() => setRegistryDialogOpen(true)}
+                          disabled={busy}
+                          sx={{ borderRadius: "9px", textTransform: "none", fontWeight: 700, bgcolor: "#2563EB" }}
+                        >
+                          Open Registry
+                        </Button>
+                      </Stack>
+                    </Stack>
+                  </Box>
+                </Paper>
+              </Box>
 
-          <Paper elevation={0} sx={{ borderRadius: "8px", border: "1px solid #E2E8F0", overflow: "hidden" }}>
+              <BusinessWorkspaceModal
+                open={registryDialogOpen}
+                onClose={() => setRegistryDialogOpen(false)}
+                title="Connector Registry"
+                subtitle="Governed connector operations with single-line rows, runtime actions, and no hidden wrapping."
+                maxWidth={CONNECTOR_REGISTRY_MODAL_WIDTH}
+                actions={
+                  <>
+                    <Button
+                      variant="outlined"
+                      startIcon={<RuleFolderOutlinedIcon />}
+                      onClick={() => {
+                        setProfileForm(defaultProfile ? profileToForm(defaultProfile) : buildDefaultProfileForm());
+                        setProfileDialogOpen(true);
+                      }}
+                      disabled={!canAdmin || busy}
+                      sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700, color: "#F8FAFC", borderColor: "rgba(255,255,255,0.35)" }}
+                    >
+                      Edit Search Profile
+                    </Button>
+                    <Button
+                      variant="contained"
+                      startIcon={<RefreshRoundedIcon />}
+                      onClick={() => void refreshWorkspace()}
+                      disabled={loading || busy}
+                      sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700, bgcolor: "rgba(255,255,255,0.14)" }}
+                    >
+                      Refresh
+                    </Button>
+                  </>
+                }
+                contentSx={{ pt: 2.1 }}
+              >
+                {loading ? (
+                  <Stack sx={{ py: 7, alignItems: "center" }} spacing={1.2}>
+                    <CircularProgress size={30} />
+                    <Typography sx={{ color: "#475569" }}>Loading registry...</Typography>
+                  </Stack>
+                ) : (
+                  <Paper elevation={0} sx={{ borderRadius: "12px", border: "1px solid #D9E2EC", overflow: "hidden" }}>
+                    <Box sx={{ overflowX: "auto" }}>
+                      <Table
+                        size="small"
+                        sx={{
+                          minWidth: 1420,
+                          tableLayout: "auto",
+                          "& th": {
+                            px: 1.35,
+                            py: 1.2,
+                            fontSize: 12,
+                            fontWeight: 800,
+                            color: "#334155",
+                            whiteSpace: "nowrap",
+                          },
+                          "& td": {
+                            px: 1.35,
+                            py: 1.15,
+                            verticalAlign: "middle",
+                            borderColor: "#E2E8F0",
+                            whiteSpace: "nowrap",
+                          },
+                        }}
+                      >
+                        <TableHead>
+                          <TableRow>
+                            <TableCell>Connector</TableCell>
+                            <TableCell>Type</TableCell>
+                            <TableCell>Provider</TableCell>
+                            <TableCell>Category</TableCell>
+                            <TableCell>Status</TableCell>
+                            <TableCell>Schedule</TableCell>
+                            <TableCell>Last Scan</TableCell>
+                            <TableCell align="right">Actions</TableCell>
+                          </TableRow>
+                        </TableHead>
+                        <TableBody>
+                          {visibleConnectors.map((connector) => (
+                            <TableRow key={connector.id} hover>
+                              <TableCell>
+                                <Stack spacing={0.55}>
+                                  <Stack direction="row" spacing={0.8} sx={{ alignItems: "center" }}>
+                                    {connectorPrimaryIcon(connector)}
+                                    <Typography sx={{ fontWeight: 700, color: "#0F172A" }} noWrap>
+                                      {connector.name}
+                                    </Typography>
+                                  </Stack>
+                                  <Stack direction="row" spacing={0.75} sx={{ alignItems: "center" }}>
+                                    <Chip
+                                      label={connectorCategoryLabel(connector)}
+                                      size="small"
+                                      sx={
+                                        connector.metadata?.is_test_connector
+                                          ? { bgcolor: "#FFF7ED", color: "#B45309", border: "1px solid #FED7AA" }
+                                          : { bgcolor: "#EFF6FF", color: "#1D4ED8", border: "1px solid #BFDBFE" }
+                                      }
+                                    />
+                                    <Typography sx={{ fontSize: 12, color: "#64748B", maxWidth: 260 }} noWrap>
+                                      {connector.id}
+                                    </Typography>
+                                  </Stack>
+                                </Stack>
+                              </TableCell>
+                              <TableCell>{connector.connector_type}</TableCell>
+                              <TableCell>
+                                {connector.connector_type === "generic_web_search" ? (
+                                  <Stack direction="row" spacing={0.75} sx={{ alignItems: "center", minWidth: 220 }}>
+                                    <TextField
+                                      select
+                                      size="small"
+                                      value={pendingProviderSelections[connector.id] || selectedConnectorProvider(connector)}
+                                      disabled={!canAdmin || busy}
+                                      onChange={(event) =>
+                                        setPendingProviderSelections((current) => ({
+                                          ...current,
+                                          [connector.id]: event.target.value,
+                                        }))
+                                      }
+                                      sx={{ minWidth: 160 }}
+                                    >
+                                      {searchProviders
+                                        .filter(
+                                          (provider) =>
+                                            provider.enabled || provider.provider_code === selectedConnectorProvider(connector)
+                                        )
+                                        .map((provider) => (
+                                          <MenuItem key={provider.id} value={provider.provider_code}>
+                                            {provider.display_name}
+                                          </MenuItem>
+                                        ))}
+                                    </TextField>
+                                    {(
+                                      (pendingProviderSelections[connector.id] || selectedConnectorProvider(connector)) !==
+                                      selectedConnectorProvider(connector)
+                                    ) ? (
+                                      <Button
+                                        variant="contained"
+                                        size="small"
+                                        disabled={!canAdmin || busy}
+                                        onClick={() => void handleInlineProviderSave(connector)}
+                                        sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700, bgcolor: "#2563EB" }}
+                                      >
+                                        Save
+                                      </Button>
+                                    ) : null}
+                                  </Stack>
+                                ) : connector.connector_type === "freelancer_marketplace" ? (
+                                  <Chip
+                                    label={connector.configuration_json.mode === "mock" ? "Freelancer / Mock" : "Freelancer"}
+                                    size="small"
+                                    sx={{ borderRadius: "8px", bgcolor: "#F5F3FF", color: "#6D28D9", border: "1px solid #DDD6FE" }}
+                                  />
+                                ) : connector.connector_type === "ted_procurement" ? (
+                                  <Chip
+                                    label="TED"
+                                    size="small"
+                                    sx={{ borderRadius: "8px", bgcolor: "#ECFDF3", color: "#0F766E", border: "1px solid #A7F3D0" }}
+                                  />
+                                ) : connector.connector_type === "remote_job_feed" ? (
+                                  <Chip label="Remote OK" size="small" sx={{ borderRadius: "8px", bgcolor: "#ECFEFF", color: "#0F766E", border: "1px solid #A5F3FC" }} />
+                                ) : connector.connector_type === "job_board_api" ? (
+                                  <Chip label="Arbeitnow" size="small" sx={{ borderRadius: "8px", bgcolor: "#F0FDF4", color: "#15803D", border: "1px solid #BBF7D0" }} />
+                                ) : connector.connector_type === "remote_job_api" ? (
+                                  <Chip label="Remotive" size="small" sx={{ borderRadius: "8px", bgcolor: "#EEF2FF", color: "#4338CA", border: "1px solid #C7D2FE" }} />
+                                ) : connector.connector_type === "job_search_api" ? (
+                                  <Chip label="Adzuna" size="small" sx={{ borderRadius: "8px", bgcolor: "#FFF7ED", color: "#C2410C", border: "1px solid #FED7AA" }} />
+                                ) : (
+                                  "—"
+                                )}
+                              </TableCell>
+                              <TableCell sx={{ textTransform: "capitalize" }}>{connectorCategoryDisplay(connector)}</TableCell>
+                              <TableCell>
+                                <Chip
+                                  label={connector.status}
+                                  size="small"
+                                  sx={{ textTransform: "capitalize", border: "1px solid", ...connectorStatusChip(connector.status) }}
+                                />
+                              </TableCell>
+                              <TableCell>
+                                <Stack spacing={0.25}>
+                                  <Typography sx={{ fontSize: 13, fontWeight: 600, color: "#0F172A" }} noWrap>
+                                    {formatSchedule(connector)}
+                                  </Typography>
+                                  {connector.schedule_enabled ? (
+                                    <Typography sx={{ fontSize: 12, color: "#64748B" }} noWrap>
+                                      Next: {formatDate(connector.next_run_at)}
+                                    </Typography>
+                                  ) : null}
+                                </Stack>
+                              </TableCell>
+                              <TableCell>{formatDate(connector.last_scan_at)}</TableCell>
+                              <TableCell align="right">
+                                <Stack direction="row" spacing={0.5} sx={{ justifyContent: "flex-end" }}>
+                                  <Tooltip title="Update">
+                                    <span>
+                                      <IconButton
+                                        size="small"
+                                        onClick={() => {
+                                          setRegistryDialogOpen(false);
+                                          void openConnectorDrawer(connector);
+                                        }}
+                                        sx={{ borderRadius: "10px", bgcolor: "#EFF6FF", border: "1px solid #BFDBFE" }}
+                                      >
+                                        <EditOutlinedIcon fontSize="small" sx={{ color: "#2563EB" }} />
+                                      </IconButton>
+                                    </span>
+                                  </Tooltip>
+                                  <Tooltip title="Test Connection">
+                                    <span>
+                                      <IconButton size="small" disabled={!canAdmin || busy} onClick={() => void handleTest(connector)}>
+                                        <CheckCircleOutlineRoundedIcon fontSize="small" sx={{ color: "#0F766E" }} />
+                                      </IconButton>
+                                    </span>
+                                  </Tooltip>
+                                  <Tooltip title="Scan Now">
+                                    <span>
+                                      <IconButton size="small" disabled={!canScan || busy || connector.status === "running"} onClick={() => void handleScan(connector)}>
+                                        <PlayCircleOutlineRoundedIcon fontSize="small" sx={{ color: "#1D4ED8" }} />
+                                      </IconButton>
+                                    </span>
+                                  </Tooltip>
+                                  <Tooltip title={connector.enabled ? "Disable" : "Enable"}>
+                                    <span>
+                                      <IconButton size="small" disabled={!canAdmin || busy} onClick={() => void handleToggleConnector(connector)}>
+                                        <SettingsSuggestOutlinedIcon fontSize="small" sx={{ color: "#475569" }} />
+                                      </IconButton>
+                                    </span>
+                                  </Tooltip>
+                                </Stack>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </Box>
+                  </Paper>
+                )}
+              </BusinessWorkspaceModal>
+            </>
+          ) : null}
+
+          {showDiscoveryInbox ? (
+            <Paper elevation={0} sx={{ borderRadius: "8px", border: "1px solid #E2E8F0", overflow: "hidden" }}>
             <Box
               sx={{
                 px: 2.2,
@@ -3205,159 +3146,112 @@ export default function AugmisBusinessConnectorsPage() {
                     No discoveries in the inbox yet
                   </Typography>
                   <Typography sx={{ mt: 0.75, color: "#475569" }}>
-                    Run Web Opportunity Search, TED, Freelancer, or the connected job feeds for live discovery, or use the fixture connector for safe regression testing.
+                    Run any available connector scan to start populating the discovery inbox.
                   </Typography>
                   <Stack direction="row" spacing={1} sx={{ mt: 2, justifyContent: "center", flexWrap: "wrap" }}>
-                    {webConnector ? (
+                    {discoveryInboxConnectors.map((connector) => (
                       <Button
-                        variant="contained"
+                        key={connector.id}
+                        variant={connector.metadata?.is_test_connector ? "outlined" : "contained"}
                         startIcon={<PlayCircleOutlineRoundedIcon />}
-                        onClick={() => void handleScan(webConnector)}
-                        disabled={!canScan || busy}
-                        sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700, bgcolor: "#2563EB" }}
+                        onClick={() => void handleScan(connector)}
+                        disabled={!canScan || busy || connector.status === "running"}
+                        sx={{
+                          borderRadius: "8px",
+                          textTransform: "none",
+                          fontWeight: 700,
+                          bgcolor: discoveryInboxButtonColor(connector),
+                        }}
                       >
-                        Scan Web Opportunity Search
+                        {`Scan ${connector.name}`}
                       </Button>
-                    ) : null}
-                    {tedConnector ? (
-                      <Button
-                        variant="contained"
-                        startIcon={<PlayCircleOutlineRoundedIcon />}
-                        onClick={() => void handleScan(tedConnector)}
-                        disabled={!canScan || busy}
-                        sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700, bgcolor: "#0F766E" }}
-                      >
-                        Scan TED
-                      </Button>
-                    ) : null}
-                    {freelancerConnector ? (
-                      <Button
-                        variant="contained"
-                        startIcon={<PlayCircleOutlineRoundedIcon />}
-                        onClick={() => void handleScan(freelancerConnector)}
-                        disabled={!canScan || busy}
-                        sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700, bgcolor: "#7C3AED" }}
-                      >
-                        Scan Freelancer
-                      </Button>
-                    ) : null}
-                    {remoteOkConnector ? (
-                      <Button
-                        variant="contained"
-                        startIcon={<PlayCircleOutlineRoundedIcon />}
-                        onClick={() => void handleScan(remoteOkConnector)}
-                        disabled={!canScan || busy}
-                        sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700, bgcolor: "#0F766E" }}
-                      >
-                        Scan Remote OK
-                      </Button>
-                    ) : null}
-                    {arbeitnowConnector ? (
-                      <Button
-                        variant="contained"
-                        startIcon={<PlayCircleOutlineRoundedIcon />}
-                        onClick={() => void handleScan(arbeitnowConnector)}
-                        disabled={!canScan || busy}
-                        sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700, bgcolor: "#15803D" }}
-                      >
-                        Scan Arbeitnow
-                      </Button>
-                    ) : null}
-                    {remotiveConnector ? (
-                      <Button
-                        variant="contained"
-                        startIcon={<PlayCircleOutlineRoundedIcon />}
-                        onClick={() => void handleScan(remotiveConnector)}
-                        disabled={!canScan || busy}
-                        sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700, bgcolor: "#4338CA" }}
-                      >
-                        Scan Remotive
-                      </Button>
-                    ) : null}
-                    {fixtureConnector ? (
-                      <Button
-                        variant="outlined"
-                        startIcon={<PlayCircleOutlineRoundedIcon />}
-                        onClick={() => void handleScan(fixtureConnector)}
-                        disabled={!canScan || busy}
-                        sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700 }}
-                      >
-                        Scan Fixture Connector
-                      </Button>
-                    ) : null}
+                    ))}
                   </Stack>
                 </Paper>
               )}
             </Box>
-          </Paper>
+            </Paper>
+          ) : null}
         </Stack>
       </BusinessPageFrame>
 
-      <Drawer anchor="right" open={connectorDrawerOpen} onClose={() => setConnectorDrawerOpen(false)}>
-        <Box sx={{ width: { xs: "100vw", sm: 560 }, p: 2.2 }}>
-          {selectedConnector ? (
-            <Stack spacing={2}>
-              <Stack direction="row" spacing={1} sx={{ justifyContent: "space-between", alignItems: "flex-start" }}>
-                <Box>
-                  <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap" }}>
-                    {connectorPrimaryIcon(selectedConnector)}
-                    <Typography variant="h6" sx={{ fontWeight: 700 }}>
-                      {selectedConnector.name}
-                    </Typography>
-                  </Stack>
-                  <Stack direction="row" spacing={0.75} sx={{ mt: 0.7, flexWrap: "wrap" }}>
-                    <Chip
-                      label={connectorCategoryLabel(selectedConnector)}
-                      size="small"
-                      sx={
-                        selectedConnector.metadata?.is_test_connector
-                          ? { bgcolor: "#FFF7ED", color: "#B45309", border: "1px solid #FED7AA" }
-                          : { bgcolor: "#EFF6FF", color: "#1D4ED8", border: "1px solid #BFDBFE" }
-                      }
-                    />
-                    <Chip
-                      label={selectedConnector.status}
-                      size="small"
-                      sx={{ textTransform: "capitalize", border: "1px solid", ...connectorStatusChip(selectedConnector.status) }}
-                    />
-                  </Stack>
-                </Box>
-                <Stack direction="row" spacing={0.5}>
-                  <Button
-                    variant="outlined"
-                    size="small"
-                    startIcon={<CheckCircleOutlineRoundedIcon />}
-                    onClick={() => void handleTest(selectedConnector)}
-                    disabled={!canAdmin || busy}
-                    sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700 }}
-                  >
-                    Test
-                  </Button>
-                  <Button
-                    variant="contained"
-                    size="small"
-                    startIcon={selectedConnectorRunActive ? <CircularProgress size={16} color="inherit" /> : <PlayCircleOutlineRoundedIcon />}
-                    onClick={() => void handleScan(selectedConnector)}
-                    disabled={!canScan || busy || selectedConnector.status === "running" || Boolean(selectedConnector.active_run_id)}
-                    sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700, bgcolor: "#2563EB" }}
-                  >
-                    {selectedConnectorRunActive ? "Scanning..." : "Scan Now"}
-                  </Button>
-                  {selectedConnector.connector_type === "independent_web_discovery" && selectedConnectorRunActive ? (
-                    <Button
-                      variant="outlined"
-                      size="small"
-                      color="error"
-                      onClick={() => void handleStopScan(selectedConnector, selectedConnectorRun)}
-                      disabled={!canScan || busy || !selectedConnectorRun}
-                      sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700 }}
-                    >
-                      Stop Scan
-                    </Button>
-                  ) : null}
-                </Stack>
-              </Stack>
-
+      <BusinessWorkspaceModal
+        open={connectorDrawerOpen}
+        onClose={() => setConnectorDrawerOpen(false)}
+        title={
+          selectedConnector ? (
+            <Stack direction="row" spacing={1.1} sx={{ alignItems: "center", flexWrap: "wrap" }}>
+              {connectorPrimaryIcon(selectedConnector)}
+              <span>{selectedConnector.name}</span>
+            </Stack>
+          ) : (
+            "Connector"
+          )
+        }
+        subtitle="Connector runtime, schedule, credentials, and governed scan controls."
+        chips={
+          selectedConnector ? (
+            <>
+              <Chip
+                label={connectorCategoryLabel(selectedConnector)}
+                size="small"
+                sx={
+                  selectedConnector.metadata?.is_test_connector
+                    ? { bgcolor: "#FFF7ED", color: "#B45309", border: "1px solid #FED7AA" }
+                    : { bgcolor: "#EFF6FF", color: "#1D4ED8", border: "1px solid #BFDBFE" }
+                }
+              />
+              <Chip
+                label={selectedConnector.status}
+                size="small"
+                sx={{ textTransform: "capitalize", border: "1px solid", ...connectorStatusChip(selectedConnector.status) }}
+              />
+            </>
+          ) : null
+        }
+        actions={
+          selectedConnector ? (
+            <>
+              <Button
+                variant="outlined"
+                size="small"
+                startIcon={<CheckCircleOutlineRoundedIcon />}
+                onClick={() => void handleTest(selectedConnector)}
+                disabled={!canAdmin || busy}
+                sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700, color: "#F8FAFC", borderColor: "rgba(255,255,255,0.35)" }}
+              >
+                Test
+              </Button>
+              <Button
+                variant="contained"
+                size="small"
+                startIcon={selectedConnectorRunActive ? <CircularProgress size={16} color="inherit" /> : <PlayCircleOutlineRoundedIcon />}
+                onClick={() => void handleScan(selectedConnector)}
+                disabled={!canScan || busy || selectedConnector.status === "running" || Boolean(selectedConnector.active_run_id)}
+                sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700, bgcolor: "rgba(255,255,255,0.14)" }}
+              >
+                {selectedConnectorRunActive ? "Scanning..." : "Scan Now"}
+              </Button>
+              {selectedConnector.connector_type === "independent_web_discovery" && selectedConnectorRunActive ? (
+                <Button
+                  variant="outlined"
+                  size="small"
+                  color="error"
+                  onClick={() => void handleStopScan(selectedConnector, selectedConnectorRun)}
+                  disabled={!canScan || busy || !selectedConnectorRun}
+                  sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700, borderColor: "rgba(254, 202, 202, 0.55)", color: "#FECACA" }}
+                >
+                  Stop Scan
+                </Button>
+              ) : null}
+            </>
+          ) : null
+        }
+        maxWidth={CONNECTOR_DETAIL_MODAL_WIDTH}
+        contentSx={{ maxHeight: "calc(90vh - 190px)", overflowY: "auto" }}
+      >
+        {selectedConnector ? (
+          <Stack spacing={2}>
               <Paper elevation={0} sx={{ p: 1.5, borderRadius: "8px", border: "1px solid #E2E8F0" }}>
                 <Typography sx={{ fontWeight: 700, color: "#0F172A" }}>Overview</Typography>
                 <Typography sx={{ mt: 0.7, color: "#475569" }}>
@@ -5366,9 +5260,8 @@ export default function AugmisBusinessConnectorsPage() {
                 </Stack>
               </Paper>
             </Stack>
-          ) : null}
-        </Box>
-      </Drawer>
+        ) : null}
+      </BusinessWorkspaceModal>
 
       <Drawer anchor="right" open={discoveryDrawerOpen} onClose={() => setDiscoveryDrawerOpen(false)}>
         <Box sx={{ width: { xs: "100vw", sm: 660 }, p: 2.2 }}>
@@ -6896,4 +6789,8 @@ export default function AugmisBusinessConnectorsPage() {
       />
     </>
   );
+}
+
+export default function AugmisBusinessConnectorsPage() {
+  return <AugmisBusinessDiscoveryWorkspace />;
 }

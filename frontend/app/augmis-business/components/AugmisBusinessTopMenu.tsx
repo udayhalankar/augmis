@@ -7,13 +7,13 @@ import { AdminTopMenu } from "@/components/data-display/AdminTopMenu";
 
 const BUSINESS_MENU_ITEMS = [
   { key: "/augmis-business", label: "Overview" },
+  { key: "/augmis-business/connectors", label: "Discovry Inbox" },
   { key: "/augmis-business/opportunities", label: "Opportunities" },
   { key: "/augmis-business/leads", label: "Leads" },
   { key: "/augmis-business/prospects", label: "Prospects" },
   { key: "/augmis-business/pipeline", label: "Pipeline" },
   { key: "/augmis-business/replies", label: "Replies" },
   { key: "/augmis-business/tasks", label: "Tasks" },
-  { key: "/augmis-business/connectors", label: "Connectors" },
   { key: "/augmis-business/control-centre", label: "Control Centre" },
 ];
 
