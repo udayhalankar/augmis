@@ -44,6 +44,7 @@ import {
   YAxis,
 } from "recharts";
 
+import { AdminTableCard } from "@/components/data-display/AdminTableCard";
 import { parseApiValidationError } from "@/services/apiErrorParser";
 import {
   type AugmisBusinessActivity,
@@ -177,28 +178,21 @@ function SectionCard({
   children: React.ReactNode;
 }) {
   return (
-    <Paper
-      elevation={0}
-      sx={{ borderRadius: "8px", border: "1px solid #E2E8F0", overflow: "hidden" }}
-    >
-      <Box
-        sx={{
-          px: 2,
-          py: 1.3,
-          background: "linear-gradient(90deg, #DBEAFE 0%, #F8FAFC 100%)",
-          borderBottom: "1px solid #E2E8F0",
-        }}
-      >
-        <Stack direction="row" sx={{ alignItems: "center", justifyContent: "space-between" }}>
-          <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
-            <Box sx={{ color: "#2563EB", display: "flex" }}>{icon}</Box>
-            <Typography sx={{ fontWeight: 700, color: "#0F172A" }}>{title}</Typography>
-          </Stack>
-          {action}
+    <AdminTableCard
+      title={
+        <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+          <Box sx={{ color: "inherit", display: "flex" }}>{icon}</Box>
+          <Typography component="span" sx={{ fontWeight: 700, color: "inherit" }}>
+            {title}
+          </Typography>
         </Stack>
-      </Box>
-      <Box sx={{ p: 2 }}>{children}</Box>
-    </Paper>
+      }
+      headerActions={action}
+      bodySx={{ p: 2, bgcolor: "#FFFFFF" }}
+      paperSx={{ bgcolor: "#FFFFFF" }}
+    >
+      {children}
+    </AdminTableCard>
   );
 }
 
@@ -681,10 +675,10 @@ export default function OverviewDashboard() {
                             size="small"
                             sx={{ bgcolor: "#EFF6FF", color: "#1D4ED8", border: "1px solid #BFDBFE" }}
                           />
-                          <Button component={Link} href="/augmis-business/connectors" variant="outlined" size="small" sx={{ textTransform: "none", borderRadius: "8px" }}>
+                          <Button component={Link} href="/augmis-business/discovery-inbox" variant="outlined" size="small" sx={{ textTransform: "none", borderRadius: "8px" }}>
                             Open
                           </Button>
-                          <Button component={Link} href="/augmis-business/connectors" variant="contained" size="small" sx={{ textTransform: "none", borderRadius: "8px", bgcolor: "#2563EB" }}>
+                          <Button component={Link} href="/augmis-business/discovery-inbox" variant="contained" size="small" sx={{ textTransform: "none", borderRadius: "8px", bgcolor: "#2563EB" }}>
                             Import
                           </Button>
                         </Stack>

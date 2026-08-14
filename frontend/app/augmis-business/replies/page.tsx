@@ -46,6 +46,10 @@ import {
 
 import { AppNotificationToast } from "@/components/feedback/AppNotificationToast";
 import {
+  AdminTableCard,
+  ADMIN_TABLE_CARD_PAGINATION_SX,
+} from "@/components/data-display/AdminTableCard";
+import {
   AdminFormDialog,
   AdminFormField,
   AdminFormTextField,
@@ -905,13 +909,18 @@ export default function AugmisBusinessRepliesPage() {
           </Stack>
         </Paper>
 
-        <Paper elevation={0} sx={{ borderRadius: "8px", border: "1px solid #D9E2EC", overflow: "hidden" }}>
-          <Box sx={{ px: 2, py: 1.15, background: "linear-gradient(135deg, #EFF6FF 0%, #E0F2FE 100%)", borderBottom: "1px solid #E2E8F0" }}>
+        <AdminTableCard
+          title={
             <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
-              <EventNoteOutlinedIcon sx={{ color: "#0F4C81" }} />
-              <Typography sx={{ fontWeight: 700, color: "#0F172A" }}>Inbound Reply Queue</Typography>
+              <EventNoteOutlinedIcon />
+              <Typography component="span" sx={{ fontWeight: 700, color: "inherit" }}>
+                Inbound Reply Queue
+              </Typography>
             </Stack>
-          </Box>
+          }
+          bodySx={{ bgcolor: "#FFFFFF" }}
+          paperSx={{ bgcolor: "#FFFFFF" }}
+        >
           {loading ? (
             <Stack sx={{ py: 8, alignItems: "center", color: "#475569" }} spacing={1}>
               <CircularProgress size={28} />
@@ -1037,6 +1046,7 @@ export default function AugmisBusinessRepliesPage() {
                   setPage(0);
                 }}
                 rowsPerPageOptions={[10, 25, 50]}
+                sx={ADMIN_TABLE_CARD_PAGINATION_SX}
               />
             </>
           ) : (
@@ -1050,7 +1060,7 @@ export default function AugmisBusinessRepliesPage() {
               </Typography>
             </Stack>
           )}
-        </Paper>
+        </AdminTableCard>
       </Stack>
 
       <AdminFormDialog

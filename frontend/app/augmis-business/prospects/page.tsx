@@ -53,6 +53,10 @@ import {
 } from "@mui/material";
 
 import { AppNotificationToast } from "@/components/feedback/AppNotificationToast";
+import {
+  AdminTableCard,
+  ADMIN_TABLE_CARD_PAGINATION_SX,
+} from "@/components/data-display/AdminTableCard";
 import { AdminFormDialog, AdminFormTextField } from "@/components/forms/AdminFormDialog";
 import { useAuth } from "@/context/AuthContext";
 import BusinessPageFrame from "../components/BusinessPageFrame";
@@ -1231,57 +1235,31 @@ export default function AugmisBusinessProspectsPage() {
         description="Manage tenant-scoped target organizations, buyer contacts, related opportunities, and live activity history."
       >
         <Stack spacing={2.25}>
-          <Paper
-            elevation={0}
-            sx={{
-              borderRadius: "10px",
-              border: "1px solid #D9E2EC",
-              overflow: "hidden",
-            }}
+          <AdminTableCard
+            title="Prospect Management"
+            description="Manual prospect and contact management is now connected to the live AUGMIS Business API. Current backend filtering supports organization search, status, and server-side pagination."
+            headerActions={
+              canCreate ? (
+                <Button
+                  variant="contained"
+                  startIcon={<AddCircleRoundedIcon />}
+                  onClick={openCreateProspectDialog}
+                  sx={{
+                    textTransform: "none",
+                    fontWeight: 700,
+                    borderRadius: "8px",
+                    bgcolor: "#2563EB",
+                    minWidth: 168,
+                    "&:hover": { bgcolor: "#1D4ED8" },
+                  }}
+                >
+                  New Prospect
+                </Button>
+              ) : null
+            }
+            bodySx={{ bgcolor: "#FFFFFF" }}
+            paperSx={{ bgcolor: "#FFFFFF" }}
           >
-            <Box
-              sx={{
-                px: { xs: 2.25, md: 2.5 },
-                py: { xs: 2.25, md: 2.4 },
-                background:
-                  "linear-gradient(135deg, rgba(13,45,78,0.98) 0%, rgba(25,93,161,0.95) 58%, rgba(222,239,255,0.92) 100%)",
-                color: "#F8FAFC",
-              }}
-            >
-              <Stack
-                direction={{ xs: "column", lg: "row" }}
-                spacing={2}
-                sx={{ justifyContent: "space-between", alignItems: { lg: "center" } }}
-              >
-                <Box>
-                  <Typography variant="h5" sx={{ fontWeight: 700 }}>
-                    Prospect Management
-                  </Typography>
-                  <Typography sx={{ mt: 0.8, color: "rgba(248,250,252,0.88)", maxWidth: 780 }}>
-                    Manual prospect and contact management is now connected to the live
-                    AUGMIS Business API. Current backend filtering supports organization search,
-                    status, and server-side pagination.
-                  </Typography>
-                </Box>
-                {canCreate ? (
-                  <Button
-                    variant="contained"
-                    startIcon={<AddCircleRoundedIcon />}
-                    onClick={openCreateProspectDialog}
-                    sx={{
-                      textTransform: "none",
-                      fontWeight: 700,
-                      borderRadius: "8px",
-                      bgcolor: "#2563EB",
-                      minWidth: 168,
-                      "&:hover": { bgcolor: "#1D4ED8" },
-                    }}
-                  >
-                    New Prospect
-                  </Button>
-                ) : null}
-              </Stack>
-            </Box>
 
             <Stack
               direction={{ xs: "column", md: "row" }}
@@ -1539,10 +1517,11 @@ export default function AugmisBusinessProspectsPage() {
                     setPage(0);
                   }}
                   rowsPerPageOptions={[10, 25, 50]}
+                  sx={ADMIN_TABLE_CARD_PAGINATION_SX}
                 />
               </>
             )}
-          </Paper>
+          </AdminTableCard>
         </Stack>
       </BusinessPageFrame>
 

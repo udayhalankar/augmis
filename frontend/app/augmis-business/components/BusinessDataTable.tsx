@@ -6,7 +6,6 @@ import {
   Alert,
   Box,
   CircularProgress,
-  Paper,
   Stack,
   Table,
   TableBody,
@@ -18,7 +17,10 @@ import {
   Typography,
 } from "@mui/material";
 
-import BusinessSectionHeader from "./BusinessSectionHeader";
+import {
+  AdminTableCard,
+  ADMIN_TABLE_CARD_PAGINATION_SX,
+} from "@/components/data-display/AdminTableCard";
 
 export type BusinessDataTableColumn<RowType> = {
   key: string;
@@ -84,8 +86,23 @@ export default function BusinessDataTable<RowType extends { id?: string }>({
   getRowSx?: (row: RowType, index: number) => Record<string, unknown> | undefined;
 }) {
   return (
-    <Paper elevation={0} sx={{ borderRadius: "10px", border: "1px solid #D9E2EC", overflow: "hidden" }}>
-      <BusinessSectionHeader title={title} subtitle={subtitle} icon={icon} count={count} actions={headerActions} />
+    <AdminTableCard
+      title={
+        <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+          {icon ? <Box sx={{ display: "flex", color: "inherit" }}>{icon}</Box> : null}
+          <Box sx={{ minWidth: 0 }}>
+            <Stack direction="row" spacing={0.8} sx={{ alignItems: "center", flexWrap: "wrap" }}>
+              <Box component="span">{title}</Box>
+            </Stack>
+          </Box>
+        </Stack>
+      }
+      description={subtitle}
+      accentLabel={count == null ? undefined : String(count)}
+      headerActions={headerActions}
+      bodySx={{ bgcolor: "#FFFFFF" }}
+      paperSx={{ bgcolor: "#FFFFFF" }}
+    >
       {loading ? (
         <Stack sx={{ minHeight: 260, alignItems: "center", justifyContent: "center" }} spacing={1.25}>
           <CircularProgress size={28} />
@@ -98,7 +115,16 @@ export default function BusinessDataTable<RowType extends { id?: string }>({
       ) : rows.length ? (
         <>
           <Box sx={{ overflowX: "auto" }}>
-            <Table size="small" sx={{ tableLayout, minWidth }}>
+            <Table
+              size="small"
+              sx={{
+                tableLayout,
+                minWidth,
+                "& .MuiTableCell-root": {
+                  borderColor: "#D8E1EE",
+                },
+              }}
+            >
               <TableHead>
                 <TableRow>
                   {columns.map((column) => (
@@ -180,17 +206,18 @@ export default function BusinessDataTable<RowType extends { id?: string }>({
               onPageChange={(_, nextPage) => onPageChange(nextPage)}
               onRowsPerPageChange={(event) => onRowsPerPageChange(Number(event.target.value))}
               rowsPerPageOptions={[10, 25, 50, 100]}
+              sx={ADMIN_TABLE_CARD_PAGINATION_SX}
             />
           ) : null}
         </>
       ) : (
         <Box sx={{ p: 2.25 }}>
-          <Paper elevation={0} sx={{ p: 2.4, borderRadius: "8px", border: "1px dashed #CBD5E1", bgcolor: "#F8FAFC" }}>
+          <Box sx={{ p: 2.4, borderRadius: "8px", border: "1px dashed #CBD5E1", bgcolor: "#F8FAFC" }}>
             <Typography sx={{ fontWeight: 700, color: "#0F172A" }}>{emptyTitle}</Typography>
             <Typography sx={{ mt: 0.7, color: "#475569" }}>{emptyDescription}</Typography>
-          </Paper>
+          </Box>
         </Box>
       )}
-    </Paper>
+    </AdminTableCard>
   );
 }

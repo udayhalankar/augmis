@@ -53,6 +53,10 @@ import {
   Typography,
 } from "@mui/material";
 
+import {
+  AdminTableCard,
+  ADMIN_TABLE_CARD_PAGINATION_SX,
+} from "@/components/data-display/AdminTableCard";
 import { AppNotificationToast } from "@/components/feedback/AppNotificationToast";
 import { AdminFormDialog, AdminFormTextField } from "@/components/forms/AdminFormDialog";
 import { useAuth } from "@/context/AuthContext";
@@ -125,8 +129,8 @@ const HIDDEN_CONNECTOR_TYPES = new Set([
   "ted_procurement",
   "remote_job_feed",
 ]);
-const CONNECTOR_REGISTRY_MODAL_WIDTH = 1320;
-const CONNECTOR_DETAIL_MODAL_WIDTH = 1180;
+const CONNECTOR_REGISTRY_MODAL_WIDTH = 1060;
+const CONNECTOR_DETAIL_MODAL_WIDTH = CONNECTOR_REGISTRY_MODAL_WIDTH;
 type SearchProfileArrayField =
   | "target_regions_json"
   | "target_countries_json"
@@ -1328,10 +1332,10 @@ function MetadataMetric({
 }) {
   return (
     <Paper elevation={0} sx={{ p: 1.2, borderRadius: "8px", border: "1px solid #E2E8F0", bgcolor: "#F8FAFC" }}>
-      <Typography sx={{ fontSize: 11, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: ".04em" }}>
+      <Typography sx={{ fontSize: 11, fontWeight: 600, color: "#64748B", textTransform: "uppercase", letterSpacing: ".04em" }}>
         {label}
       </Typography>
-      <Typography sx={{ mt: 0.45, fontSize: 18, fontWeight: 700, color: "#0F172A" }}>
+      <Typography sx={{ mt: 0.45, fontSize: 16, fontWeight: 600, color: "#0F172A" }}>
         {value}
       </Typography>
     </Paper>
@@ -1341,7 +1345,7 @@ function MetadataMetric({
 function AugmisBusinessDiscoveryWorkspace() {
   const pathname = usePathname();
   const isControlCentre = pathname === "/augmis-business/control-centre";
-  const pageTitle = isControlCentre ? "Control Centre" : "Discovry Inbox";
+  const pageTitle = isControlCentre ? "Control Centre" : "Discovery Inbox";
   const pageDescription = isControlCentre
     ? "Manage connector registry controls, scan operations, and governed discovery configuration within AUGMIS Business."
     : "Review staged discoveries, inspect source evidence, and run available discovery scans within AUGMIS Business.";
@@ -1397,6 +1401,7 @@ function AugmisBusinessDiscoveryWorkspace() {
   const [discoveryTranslationView, setDiscoveryTranslationView] = useState<"english" | "original">("original");
   const [translatingDiscoveryId, setTranslatingDiscoveryId] = useState<string | null>(null);
   const [registryDialogOpen, setRegistryDialogOpen] = useState(false);
+  const [registryScanMessage, setRegistryScanMessage] = useState<{ severity: ToastSeverity; text: string } | null>(null);
   const [connectorDrawerOpen, setConnectorDrawerOpen] = useState(false);
   const [discoveryDrawerOpen, setDiscoveryDrawerOpen] = useState(false);
   const [profileDialogOpen, setProfileDialogOpen] = useState(false);
@@ -1514,10 +1519,20 @@ function AugmisBusinessDiscoveryWorkspace() {
             await loadIndependentConnectorData(activeScan.connectorId);
           }
           const metadata = extractRunMetadata(run);
-          showToast(
-            metadata.outcome_message || run.error_summary || (run.status === "failed" ? "Scan failed." : "Scan completed."),
-            run.status === "failed" ? "error" : "success"
-          );
+          if (registryDialogOpen) {
+            setRegistryScanMessage({
+              severity: run.status === "failed" ? "error" : "success",
+              text:
+                metadata.outcome_message ||
+                run.error_summary ||
+                (run.status === "failed" ? "Scan failed." : "Scan completed."),
+            });
+          } else {
+            showToast(
+              metadata.outcome_message || run.error_summary || (run.status === "failed" ? "Scan failed." : "Scan completed."),
+              run.status === "failed" ? "error" : "success"
+            );
+          }
           return;
         }
       } catch (error) {
@@ -1527,9 +1542,23 @@ function AugmisBusinessDiscoveryWorkspace() {
             if (selectedConnector?.id === activeScan.connectorId && selectedConnector.connector_type === "independent_web_discovery") {
               await loadIndependentConnectorData(activeScan.connectorId);
             }
-            showToast("Active connector run could not be found. Connector state was refreshed.", "warning");
+            if (registryDialogOpen) {
+              setRegistryScanMessage({
+                severity: "warning",
+                text: "Active connector run could not be found. Connector state was refreshed.",
+              });
+            } else {
+              showToast("Active connector run could not be found. Connector state was refreshed.", "warning");
+            }
           } else {
-            showToast(getBackendErrorMessage(error, "Unable to refresh scan progress."), "error");
+            if (registryDialogOpen) {
+              setRegistryScanMessage({
+                severity: "error",
+                text: getBackendErrorMessage(error, "Unable to refresh scan progress."),
+              });
+            } else {
+              showToast(getBackendErrorMessage(error, "Unable to refresh scan progress."), "error");
+            }
           }
           setActiveScan(null);
         }
@@ -1546,7 +1575,12 @@ function AugmisBusinessDiscoveryWorkspace() {
         window.clearTimeout(timerId);
       }
     };
-  }, [activeScan, loadConnectors, loadDiscoveries, loadIndependentConnectorData, selectedConnector]);
+  }, [activeScan, loadConnectors, loadDiscoveries, loadIndependentConnectorData, registryDialogOpen, selectedConnector]);
+
+  useEffect(() => {
+    if (registryDialogOpen) return;
+    setRegistryScanMessage(null);
+  }, [registryDialogOpen]);
 
   useEffect(() => {
     if (!canRead) return;
@@ -1579,6 +1613,16 @@ function AugmisBusinessDiscoveryWorkspace() {
     () => new Map(connectors.map((connector) => [connector.id, connector])),
     [connectors]
   );
+  const activeRegistryRun =
+    activeScan && registryDialogOpen ? runs.find((run) => run.id === activeScan.runId) ?? null : null;
+  const activeRegistryConnector =
+    activeScan && registryDialogOpen ? connectorById.get(activeScan.connectorId) ?? null : null;
+  const activeRegistryMetadata = activeRegistryRun ? extractRunMetadata(activeRegistryRun) : null;
+  useEffect(() => {
+    if (!registryDialogOpen || activeRegistryRun || !registryScanMessage) return;
+    const timerId = window.setTimeout(() => setRegistryScanMessage(null), 2000);
+    return () => window.clearTimeout(timerId);
+  }, [activeRegistryRun, registryDialogOpen, registryScanMessage]);
   const selectedProvider = activeCredentialProviderCode || selectedConnectorProvider(selectedConnector);
 
   async function loadCredentialStatus(provider: string) {
@@ -1801,10 +1845,12 @@ function AugmisBusinessDiscoveryWorkspace() {
 
   async function runConnectorScan(
     connector: AugmisBusinessConnector,
-    crawlEngine?: "augmis_native" | "scrapy"
+    crawlEngine?: "augmis_native" | "scrapy",
+    options?: { openDetails?: boolean }
   ) {
     setBusy(true);
     setActiveActionLabel(`Scanning ${connector.name}`);
+    setRegistryScanMessage({ severity: "info", text: `Scanning ${connector.name}. Live progress is now available below.` });
     try {
       const result = await scanAugmisBusinessConnector(connector.id, {
         run_type: "manual",
@@ -1815,14 +1861,22 @@ function AugmisBusinessDiscoveryWorkspace() {
       setRuns((current) => upsertRunEntry(current, startedRun));
       setActiveScan({ connectorId: connector.id, runId: startedRun.id });
       await refreshWorkspace();
-      await openConnectorDrawer((connectorById.get(connector.id) as AugmisBusinessConnector | undefined) ?? startedConnector);
-      showToast(
-        startedRun.status === "queued" || startedRun.status === "running"
-          ? "Scan started. Live progress is now available."
-          : extractRunMetadata(startedRun).outcome_message || "Connector scan completed.",
-        "info"
-      );
+      if (options?.openDetails !== false) {
+        await openConnectorDrawer((connectorById.get(connector.id) as AugmisBusinessConnector | undefined) ?? startedConnector);
+      }
+      if (options?.openDetails !== false || !registryDialogOpen) {
+        showToast(
+          startedRun.status === "queued" || startedRun.status === "running"
+            ? "Scan started. Live progress is now available."
+            : extractRunMetadata(startedRun).outcome_message || "Connector scan completed.",
+          "info"
+        );
+      }
     } catch (error) {
+      setRegistryScanMessage({
+        severity: "error",
+        text: getBackendErrorMessage(error, "Unable to run connector scan."),
+      });
       showToast(getBackendErrorMessage(error, "Unable to run connector scan."), "error");
     } finally {
       setBusy(false);
@@ -1833,13 +1887,14 @@ function AugmisBusinessDiscoveryWorkspace() {
   async function handleStartManualIndependentScan() {
     if (!manualScanConnector) return;
     setManualScanDialogOpen(false);
-    await runConnectorScan(manualScanConnector, manualScanEngine);
+    await runConnectorScan(manualScanConnector, manualScanEngine, { openDetails: !registryDialogOpen });
   }
 
   async function handleStopScan(connector: AugmisBusinessConnector, run: AugmisBusinessConnectorRun | null) {
     if (!run) return;
     setBusy(true);
     setActiveActionLabel(`Stopping ${connector.name}`);
+    setRegistryScanMessage({ severity: "warning", text: `Stopping ${connector.name}...` });
     try {
       const result = await stopAugmisBusinessConnectorRun(connector.id, run.id);
       setActiveScan(null);
@@ -1847,8 +1902,13 @@ function AugmisBusinessDiscoveryWorkspace() {
       await refreshWorkspace();
       await openConnectorDrawer((connectorById.get(connector.id) as AugmisBusinessConnector | undefined) ?? result.data.connector);
       const metadata = extractRunMetadata(result.data.run);
+      setRegistryScanMessage({ severity: "warning", text: metadata.outcome_message || "Scan stopped." });
       showToast(metadata.outcome_message || "Scan stopped.", "warning");
     } catch (error) {
+      setRegistryScanMessage({
+        severity: "error",
+        text: getBackendErrorMessage(error, "Unable to stop connector scan."),
+      });
       showToast(getBackendErrorMessage(error, "Unable to stop connector scan."), "error");
     } finally {
       setBusy(false);
@@ -2378,7 +2438,7 @@ function AugmisBusinessDiscoveryWorkspace() {
             </Box>
           ) : null}
 
-          {busy && activeActionLabel ? (
+          {busy && activeActionLabel && !(showRegistry && registryDialogOpen && activeActionLabel.startsWith("Scanning ")) ? (
             <Alert
               severity="info"
               icon={<CircularProgress size={16} />}
@@ -2434,7 +2494,7 @@ function AugmisBusinessDiscoveryWorkspace() {
                 open={registryDialogOpen}
                 onClose={() => setRegistryDialogOpen(false)}
                 title="Connector Registry"
-                subtitle="Governed connector operations with single-line rows, runtime actions, and no hidden wrapping."
+                        subtitle="Governed connector operations with compact single-line rows and direct update actions."
                 maxWidth={CONNECTOR_REGISTRY_MODAL_WIDTH}
                 actions={
                   <>
@@ -2461,242 +2521,266 @@ function AugmisBusinessDiscoveryWorkspace() {
                     </Button>
                   </>
                 }
-                contentSx={{ pt: 2.1 }}
+                contentSx={{ px: 0, py: 0, bgcolor: "#FFFFFF" }}
               >
                 {loading ? (
-                  <Stack sx={{ py: 7, alignItems: "center" }} spacing={1.2}>
+                  <Stack sx={{ px: 2.6, py: 7, alignItems: "center" }} spacing={1.2}>
                     <CircularProgress size={30} />
                     <Typography sx={{ color: "#475569" }}>Loading registry...</Typography>
                   </Stack>
                 ) : (
-                  <Paper elevation={0} sx={{ borderRadius: "12px", border: "1px solid #D9E2EC", overflow: "hidden" }}>
-                    <Box sx={{ overflowX: "auto" }}>
-                      <Table
-                        size="small"
+                  <Stack spacing={0}>
+                    {activeRegistryRun && activeRegistryConnector && activeRegistryMetadata ? (
+                      <Paper
+                        elevation={0}
                         sx={{
-                          minWidth: 1420,
-                          tableLayout: "auto",
-                          "& th": {
-                            px: 1.35,
-                            py: 1.2,
-                            fontSize: 12,
-                            fontWeight: 800,
-                            color: "#334155",
-                            whiteSpace: "nowrap",
-                          },
-                          "& td": {
-                            px: 1.35,
-                            py: 1.15,
-                            verticalAlign: "middle",
-                            borderColor: "#E2E8F0",
-                            whiteSpace: "nowrap",
-                          },
+                          mx: 2.6,
+                          mt: 1.35,
+                          mb: 1.35,
+                          p: 1.35,
+                          borderRadius: "10px",
+                          border: "1px solid #BFDBFE",
+                          bgcolor: "#F8FBFF",
                         }}
                       >
-                        <TableHead>
-                          <TableRow>
-                            <TableCell>Connector</TableCell>
-                            <TableCell>Type</TableCell>
-                            <TableCell>Provider</TableCell>
-                            <TableCell>Category</TableCell>
-                            <TableCell>Status</TableCell>
-                            <TableCell>Schedule</TableCell>
-                            <TableCell>Last Scan</TableCell>
-                            <TableCell align="right">Actions</TableCell>
-                          </TableRow>
-                        </TableHead>
-                        <TableBody>
-                          {visibleConnectors.map((connector) => (
-                            <TableRow key={connector.id} hover>
-                              <TableCell>
-                                <Stack spacing={0.55}>
-                                  <Stack direction="row" spacing={0.8} sx={{ alignItems: "center" }}>
-                                    {connectorPrimaryIcon(connector)}
-                                    <Typography sx={{ fontWeight: 700, color: "#0F172A" }} noWrap>
-                                      {connector.name}
-                                    </Typography>
-                                  </Stack>
-                                  <Stack direction="row" spacing={0.75} sx={{ alignItems: "center" }}>
-                                    <Chip
-                                      label={connectorCategoryLabel(connector)}
-                                      size="small"
-                                      sx={
-                                        connector.metadata?.is_test_connector
-                                          ? { bgcolor: "#FFF7ED", color: "#B45309", border: "1px solid #FED7AA" }
-                                          : { bgcolor: "#EFF6FF", color: "#1D4ED8", border: "1px solid #BFDBFE" }
-                                      }
-                                    />
-                                    <Typography sx={{ fontSize: 12, color: "#64748B", maxWidth: 260 }} noWrap>
-                                      {connector.id}
-                                    </Typography>
-                                  </Stack>
-                                </Stack>
-                              </TableCell>
-                              <TableCell>{connector.connector_type}</TableCell>
-                              <TableCell>
-                                {connector.connector_type === "generic_web_search" ? (
-                                  <Stack direction="row" spacing={0.75} sx={{ alignItems: "center", minWidth: 220 }}>
-                                    <TextField
-                                      select
-                                      size="small"
-                                      value={pendingProviderSelections[connector.id] || selectedConnectorProvider(connector)}
-                                      disabled={!canAdmin || busy}
-                                      onChange={(event) =>
-                                        setPendingProviderSelections((current) => ({
-                                          ...current,
-                                          [connector.id]: event.target.value,
-                                        }))
-                                      }
-                                      sx={{ minWidth: 160 }}
-                                    >
-                                      {searchProviders
-                                        .filter(
-                                          (provider) =>
-                                            provider.enabled || provider.provider_code === selectedConnectorProvider(connector)
-                                        )
-                                        .map((provider) => (
-                                          <MenuItem key={provider.id} value={provider.provider_code}>
-                                            {provider.display_name}
-                                          </MenuItem>
-                                        ))}
-                                    </TextField>
-                                    {(
-                                      (pendingProviderSelections[connector.id] || selectedConnectorProvider(connector)) !==
-                                      selectedConnectorProvider(connector)
-                                    ) ? (
-                                      <Button
-                                        variant="contained"
+                        <Stack direction="row" spacing={1} sx={{ alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" }}>
+                          <Typography sx={{ fontSize: 13, fontWeight: 700, color: "#0F172A" }}>
+                            {activeRegistryConnector.name} · {activeRegistryMetadata.stage_label || activeRegistryMetadata.stage || "Scanning"}
+                          </Typography>
+                          <Chip
+                            size="small"
+                            label={`Running · ${activeRegistryRun.status}`}
+                            sx={{ textTransform: "capitalize", border: "1px solid #BFDBFE", bgcolor: "#EFF6FF", color: "#1D4ED8" }}
+                          />
+                        </Stack>
+                        <LinearProgress
+                          variant="determinate"
+                          value={activeRegistryMetadata.progress_percent ?? 0}
+                          sx={{ mt: 1, height: 8, borderRadius: 999, bgcolor: "#DBEAFE" }}
+                        />
+                        <Typography sx={{ mt: 0.75, fontSize: 12, color: "#475569" }}>
+                          {(activeRegistryMetadata.batch_progress_current ?? activeRegistryMetadata.pages_fetched ?? 0)} / {(activeRegistryMetadata.batch_progress_total ?? connectorNumberConfig(activeRegistryConnector, "maximum_total_pages_per_run", 100))} pages
+                          {activeRegistryMetadata.current_url ? ` · ${activeRegistryMetadata.current_url}` : ""}
+                        </Typography>
+                      </Paper>
+                    ) : registryScanMessage ? (
+                      <Box sx={{ px: 2.6, pt: 1.35, pb: 1.35 }}>
+                        <Alert severity={registryScanMessage.severity} sx={{ borderRadius: "10px" }}>
+                          {registryScanMessage.text}
+                        </Alert>
+                      </Box>
+                    ) : null}
+                    <AdminTableCard
+                      title=""
+                      headerSx={{ display: "none" }}
+                      paperSx={{
+                        borderTop: "none",
+                        borderLeft: "1px solid #C9D8F0",
+                        borderRight: "1px solid #C9D8F0",
+                        borderBottom: "1px solid #C9D8F0",
+                        borderRadius: "0 0 14px 14px",
+                        overflow: "hidden",
+                        boxShadow: "none",
+                        bgcolor: "#FFFFFF",
+                        "&.MuiPaper-rounded": {
+                          borderRadius: "0 0 14px 14px !important",
+                        },
+                      }}
+                      bodySx={{ bgcolor: "#FFFFFF" }}
+                    >
+                      <Box sx={{ overflowX: "auto" }}>
+                        <Table
+                          size="small"
+                          sx={{
+                            minWidth: 980,
+                            tableLayout: "auto",
+                            "& th": {
+                              px: 1.1,
+                              py: 0.9,
+                              fontSize: 12,
+                              fontWeight: 600,
+                              color: "#334155",
+                              whiteSpace: "nowrap",
+                            },
+                            "& td": {
+                              px: 1.1,
+                              py: 0.8,
+                              verticalAlign: "middle",
+                              borderColor: "#E2E8F0",
+                              whiteSpace: "nowrap",
+                              fontSize: 13,
+                              fontWeight: 600,
+                              color: "#0F172A",
+                            },
+                          }}
+                        >
+                          <TableHead>
+                            <TableRow>
+                              <TableCell>Connector</TableCell>
+                              <TableCell>Type</TableCell>
+                              <TableCell>Provider</TableCell>
+                              <TableCell>Status</TableCell>
+                              <TableCell>Schedule</TableCell>
+                              <TableCell>Last Scan</TableCell>
+                              <TableCell align="right">Actions</TableCell>
+                            </TableRow>
+                          </TableHead>
+                          <TableBody>
+                            {visibleConnectors.map((connector) => (
+                              <TableRow key={connector.id} hover>
+                                <TableCell>
+                                    <Stack direction="row" spacing={0.8} sx={{ alignItems: "center" }}>
+                                      {connectorPrimaryIcon(connector)}
+                                      <Typography sx={{ fontSize: 13, fontWeight: 600, color: "#0F172A", maxWidth: 220 }} noWrap>
+                                        {connector.name}
+                                      </Typography>
+                                    </Stack>
+                                </TableCell>
+                                <TableCell>{connector.connector_type}</TableCell>
+                                <TableCell>
+                                  {connector.connector_type === "generic_web_search" ? (
+                                    <Stack direction="row" spacing={0.75} sx={{ alignItems: "center", minWidth: 220 }}>
+                                      <TextField
+                                        select
                                         size="small"
+                                        value={pendingProviderSelections[connector.id] || selectedConnectorProvider(connector)}
                                         disabled={!canAdmin || busy}
-                                        onClick={() => void handleInlineProviderSave(connector)}
-                                        sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700, bgcolor: "#2563EB" }}
+                                        onChange={(event) =>
+                                          setPendingProviderSelections((current) => ({
+                                            ...current,
+                                            [connector.id]: event.target.value,
+                                          }))
+                                        }
+                                        sx={{ minWidth: 160 }}
                                       >
-                                        Save
-                                      </Button>
-                                    ) : null}
-                                  </Stack>
-                                ) : connector.connector_type === "freelancer_marketplace" ? (
+                                        {searchProviders
+                                          .filter(
+                                            (provider) =>
+                                              provider.enabled || provider.provider_code === selectedConnectorProvider(connector)
+                                          )
+                                          .map((provider) => (
+                                            <MenuItem key={provider.id} value={provider.provider_code}>
+                                              {provider.display_name}
+                                            </MenuItem>
+                                          ))}
+                                      </TextField>
+                                      {(
+                                        (pendingProviderSelections[connector.id] || selectedConnectorProvider(connector)) !==
+                                        selectedConnectorProvider(connector)
+                                      ) ? (
+                                        <Button
+                                          variant="contained"
+                                          size="small"
+                                          disabled={!canAdmin || busy}
+                                          onClick={() => void handleInlineProviderSave(connector)}
+                                          sx={{ borderRadius: "8px", textTransform: "none", fontWeight: 700, bgcolor: "#2563EB" }}
+                                        >
+                                          Save
+                                        </Button>
+                                      ) : null}
+                                    </Stack>
+                                  ) : connector.connector_type === "freelancer_marketplace" ? (
+                                    <Chip
+                                      label={connector.configuration_json.mode === "mock" ? "Freelancer / Mock" : "Freelancer"}
+                                      size="small"
+                                      sx={{ borderRadius: "8px", bgcolor: "#F5F3FF", color: "#6D28D9", border: "1px solid #DDD6FE" }}
+                                    />
+                                  ) : connector.connector_type === "ted_procurement" ? (
+                                    <Chip
+                                      label="TED"
+                                      size="small"
+                                      sx={{ borderRadius: "8px", bgcolor: "#ECFDF3", color: "#0F766E", border: "1px solid #A7F3D0" }}
+                                    />
+                                  ) : connector.connector_type === "remote_job_feed" ? (
+                                    <Chip label="Remote OK" size="small" sx={{ borderRadius: "8px", bgcolor: "#ECFEFF", color: "#0F766E", border: "1px solid #A5F3FC" }} />
+                                  ) : connector.connector_type === "job_board_api" ? (
+                                    <Chip label="Arbeitnow" size="small" sx={{ borderRadius: "8px", bgcolor: "#F0FDF4", color: "#15803D", border: "1px solid #BBF7D0" }} />
+                                  ) : connector.connector_type === "remote_job_api" ? (
+                                    <Chip label="Remotive" size="small" sx={{ borderRadius: "8px", bgcolor: "#EEF2FF", color: "#4338CA", border: "1px solid #C7D2FE" }} />
+                                  ) : connector.connector_type === "job_search_api" ? (
+                                    <Chip label="Adzuna" size="small" sx={{ borderRadius: "8px", bgcolor: "#FFF7ED", color: "#C2410C", border: "1px solid #FED7AA" }} />
+                                  ) : (
+                                    "—"
+                                  )}
+                                </TableCell>
+                                <TableCell>
                                   <Chip
-                                    label={connector.configuration_json.mode === "mock" ? "Freelancer / Mock" : "Freelancer"}
+                                    label={connector.status}
                                     size="small"
-                                    sx={{ borderRadius: "8px", bgcolor: "#F5F3FF", color: "#6D28D9", border: "1px solid #DDD6FE" }}
+                                    sx={{ textTransform: "capitalize", border: "1px solid", ...connectorStatusChip(connector.status) }}
                                   />
-                                ) : connector.connector_type === "ted_procurement" ? (
-                                  <Chip
-                                    label="TED"
-                                    size="small"
-                                    sx={{ borderRadius: "8px", bgcolor: "#ECFDF3", color: "#0F766E", border: "1px solid #A7F3D0" }}
-                                  />
-                                ) : connector.connector_type === "remote_job_feed" ? (
-                                  <Chip label="Remote OK" size="small" sx={{ borderRadius: "8px", bgcolor: "#ECFEFF", color: "#0F766E", border: "1px solid #A5F3FC" }} />
-                                ) : connector.connector_type === "job_board_api" ? (
-                                  <Chip label="Arbeitnow" size="small" sx={{ borderRadius: "8px", bgcolor: "#F0FDF4", color: "#15803D", border: "1px solid #BBF7D0" }} />
-                                ) : connector.connector_type === "remote_job_api" ? (
-                                  <Chip label="Remotive" size="small" sx={{ borderRadius: "8px", bgcolor: "#EEF2FF", color: "#4338CA", border: "1px solid #C7D2FE" }} />
-                                ) : connector.connector_type === "job_search_api" ? (
-                                  <Chip label="Adzuna" size="small" sx={{ borderRadius: "8px", bgcolor: "#FFF7ED", color: "#C2410C", border: "1px solid #FED7AA" }} />
-                                ) : (
-                                  "—"
-                                )}
-                              </TableCell>
-                              <TableCell sx={{ textTransform: "capitalize" }}>{connectorCategoryDisplay(connector)}</TableCell>
-                              <TableCell>
-                                <Chip
-                                  label={connector.status}
-                                  size="small"
-                                  sx={{ textTransform: "capitalize", border: "1px solid", ...connectorStatusChip(connector.status) }}
-                                />
-                              </TableCell>
-                              <TableCell>
-                                <Stack spacing={0.25}>
+                                </TableCell>
+                                <TableCell>
                                   <Typography sx={{ fontSize: 13, fontWeight: 600, color: "#0F172A" }} noWrap>
                                     {formatSchedule(connector)}
                                   </Typography>
-                                  {connector.schedule_enabled ? (
-                                    <Typography sx={{ fontSize: 12, color: "#64748B" }} noWrap>
-                                      Next: {formatDate(connector.next_run_at)}
-                                    </Typography>
-                                  ) : null}
-                                </Stack>
-                              </TableCell>
-                              <TableCell>{formatDate(connector.last_scan_at)}</TableCell>
-                              <TableCell align="right">
-                                <Stack direction="row" spacing={0.5} sx={{ justifyContent: "flex-end" }}>
-                                  <Tooltip title="Update">
-                                    <span>
-                                      <IconButton
-                                        size="small"
-                                        onClick={() => {
-                                          setRegistryDialogOpen(false);
-                                          void openConnectorDrawer(connector);
-                                        }}
-                                        sx={{ borderRadius: "10px", bgcolor: "#EFF6FF", border: "1px solid #BFDBFE" }}
-                                      >
-                                        <EditOutlinedIcon fontSize="small" sx={{ color: "#2563EB" }} />
-                                      </IconButton>
-                                    </span>
-                                  </Tooltip>
-                                  <Tooltip title="Test Connection">
-                                    <span>
-                                      <IconButton size="small" disabled={!canAdmin || busy} onClick={() => void handleTest(connector)}>
-                                        <CheckCircleOutlineRoundedIcon fontSize="small" sx={{ color: "#0F766E" }} />
-                                      </IconButton>
-                                    </span>
-                                  </Tooltip>
-                                  <Tooltip title="Scan Now">
-                                    <span>
-                                      <IconButton size="small" disabled={!canScan || busy || connector.status === "running"} onClick={() => void handleScan(connector)}>
-                                        <PlayCircleOutlineRoundedIcon fontSize="small" sx={{ color: "#1D4ED8" }} />
-                                      </IconButton>
-                                    </span>
-                                  </Tooltip>
-                                  <Tooltip title={connector.enabled ? "Disable" : "Enable"}>
-                                    <span>
-                                      <IconButton size="small" disabled={!canAdmin || busy} onClick={() => void handleToggleConnector(connector)}>
-                                        <SettingsSuggestOutlinedIcon fontSize="small" sx={{ color: "#475569" }} />
-                                      </IconButton>
-                                    </span>
-                                  </Tooltip>
-                                </Stack>
-                              </TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                    </Box>
-                  </Paper>
+                                </TableCell>
+                                <TableCell>{formatDate(connector.last_scan_at)}</TableCell>
+                                <TableCell align="right">
+                                  <Stack direction="row" spacing={0.5} sx={{ justifyContent: "flex-end" }}>
+                                    <Tooltip title="Update">
+                                      <span>
+                                        <IconButton
+                                          size="small"
+                                          onClick={() => {
+                                            setRegistryDialogOpen(false);
+                                            void openConnectorDrawer(connector);
+                                          }}
+                                          sx={{ borderRadius: "10px", bgcolor: "#EFF6FF", border: "1px solid #BFDBFE" }}
+                                        >
+                                          <EditOutlinedIcon fontSize="small" sx={{ color: "#2563EB" }} />
+                                        </IconButton>
+                                      </span>
+                                    </Tooltip>
+                                    <Tooltip title="Test Connection">
+                                      <span>
+                                        <IconButton size="small" disabled={!canAdmin || busy} onClick={() => void handleTest(connector)}>
+                                          <CheckCircleOutlineRoundedIcon fontSize="small" sx={{ color: "#0F766E" }} />
+                                        </IconButton>
+                                      </span>
+                                    </Tooltip>
+                                    <Tooltip title="Scan Now">
+                                      <span>
+                                        <IconButton size="small" disabled={!canScan || busy || connector.status === "running"} onClick={() => void runConnectorScan(connector, undefined, { openDetails: false })}>
+                                          <PlayCircleOutlineRoundedIcon fontSize="small" sx={{ color: "#1D4ED8" }} />
+                                        </IconButton>
+                                      </span>
+                                    </Tooltip>
+                                    <Tooltip title={connector.enabled ? "Disable" : "Enable"}>
+                                      <span>
+                                        <IconButton size="small" disabled={!canAdmin || busy} onClick={() => void handleToggleConnector(connector)}>
+                                          <SettingsSuggestOutlinedIcon fontSize="small" sx={{ color: "#475569" }} />
+                                        </IconButton>
+                                      </span>
+                                    </Tooltip>
+                                  </Stack>
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </Box>
+                    </AdminTableCard>
+                  </Stack>
                 )}
               </BusinessWorkspaceModal>
             </>
           ) : null}
 
           {showDiscoveryInbox ? (
-            <Paper elevation={0} sx={{ borderRadius: "8px", border: "1px solid #E2E8F0", overflow: "hidden" }}>
-            <Box
-              sx={{
-                px: 2.2,
-                py: 0.72,
-                background: "linear-gradient(90deg, #DCFCE7 0%, #F8FAFC 100%)",
-                borderBottom: "1px solid #E2E8F0",
-              }}
-            >
-              <Stack
-                direction={{ xs: "column", lg: "row" }}
-                spacing={1.5}
-                sx={{ justifyContent: "space-between", alignItems: { lg: "center" } }}
-              >
-                <Stack spacing={0.1}>
-                  <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
-                    <TravelExploreOutlinedIcon sx={{ color: "#15803D", fontSize: 18 }} />
-                    <Typography sx={{ fontWeight: 700, color: "#0F172A" }}>Discovery Inbox</Typography>
-                  </Stack>
-                  <Typography sx={{ color: "#475569", fontSize: 12, lineHeight: 1.25 }}>
-                    Review search-driven discoveries, inspect source evidence, and import only verified opportunities.
+            <AdminTableCard
+              title={
+                <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+                  <TravelExploreOutlinedIcon sx={{ fontSize: 18 }} />
+                  <Typography component="span" sx={{ fontWeight: 700, color: "inherit" }}>
+                    Discovery Inbox
                   </Typography>
                 </Stack>
-              </Stack>
-            </Box>
-            <Box sx={{ p: 2 }}>
+              }
+              description="Review search-driven discoveries, inspect source evidence, and import only verified opportunities."
+              bodySx={{ p: 2, bgcolor: "#FFFFFF" }}
+              paperSx={{ bgcolor: "#FFFFFF" }}
+            >
               {discoveries.length ? (
                 <>
                   <Box
@@ -3138,6 +3222,7 @@ function AugmisBusinessDiscoveryWorkspace() {
                       setDiscoveryPage(0);
                     }}
                     rowsPerPageOptions={[10, 25, 50]}
+                    sx={ADMIN_TABLE_CARD_PAGINATION_SX}
                   />
                 </>
               ) : (
@@ -3169,8 +3254,7 @@ function AugmisBusinessDiscoveryWorkspace() {
                   </Stack>
                 </Paper>
               )}
-            </Box>
-            </Paper>
+            </AdminTableCard>
           ) : null}
         </Stack>
       </BusinessPageFrame>
@@ -3189,29 +3273,14 @@ function AugmisBusinessDiscoveryWorkspace() {
           )
         }
         subtitle="Connector runtime, schedule, credentials, and governed scan controls."
-        chips={
+        actions={
           selectedConnector ? (
             <>
-              <Chip
-                label={connectorCategoryLabel(selectedConnector)}
-                size="small"
-                sx={
-                  selectedConnector.metadata?.is_test_connector
-                    ? { bgcolor: "#FFF7ED", color: "#B45309", border: "1px solid #FED7AA" }
-                    : { bgcolor: "#EFF6FF", color: "#1D4ED8", border: "1px solid #BFDBFE" }
-                }
-              />
               <Chip
                 label={selectedConnector.status}
                 size="small"
                 sx={{ textTransform: "capitalize", border: "1px solid", ...connectorStatusChip(selectedConnector.status) }}
               />
-            </>
-          ) : null
-        }
-        actions={
-          selectedConnector ? (
-            <>
               <Button
                 variant="outlined"
                 size="small"

@@ -44,6 +44,10 @@ import {
 } from "@mui/material";
 
 import { AppNotificationToast } from "@/components/feedback/AppNotificationToast";
+import {
+  AdminTableCard,
+  ADMIN_TABLE_CARD_PAGINATION_SX,
+} from "@/components/data-display/AdminTableCard";
 import { AdminFormDialog, AdminFormTextField } from "@/components/forms/AdminFormDialog";
 import { useAuth } from "@/context/AuthContext";
 import { parseApiValidationError } from "@/services/apiErrorParser";
@@ -865,13 +869,15 @@ export default function LeadWorkspace({ mode }: { mode: WorkspaceMode }) {
         }
       >
         <Stack spacing={2.25}>
-          <Paper
-            elevation={0}
-            sx={{
-              borderRadius: "10px",
-              border: "1px solid #D9E2EC",
-              overflow: "hidden",
-            }}
+          <AdminTableCard
+            title={isPipeline ? "Pipeline Workspace" : "Leads Workspace"}
+            description={
+              isPipeline
+                ? "Track live tenant leads through the actual backend sales stages and update stage progression directly from the pipeline board."
+                : "Review live converted leads, real pipeline metrics, manual activities, and lead-scoped follow-up tasks."
+            }
+            bodySx={{ bgcolor: "#FFFFFF" }}
+            paperSx={{ bgcolor: "#FFFFFF" }}
           >
             <Stack
               direction={{ xs: "column", md: "row" }}
@@ -1266,10 +1272,11 @@ export default function LeadWorkspace({ mode }: { mode: WorkspaceMode }) {
                     setPage(0);
                   }}
                   rowsPerPageOptions={[10, 25, 50]}
+                  sx={ADMIN_TABLE_CARD_PAGINATION_SX}
                 />
               </>
             )}
-          </Paper>
+          </AdminTableCard>
         </Stack>
       </BusinessPageFrame>
 

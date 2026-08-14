@@ -72,7 +72,7 @@ export default function BusinessWorkspaceModal({
         <Stack spacing={1.25}>
           <Stack direction="row" spacing={1.4} sx={{ justifyContent: "space-between", alignItems: "flex-start" }}>
             <Box sx={{ minWidth: 0 }}>
-              <Typography sx={{ fontSize: 28, lineHeight: 1.15, fontWeight: 800, color: "inherit" }}>
+              <Typography sx={{ fontSize: 20, lineHeight: 1.15, fontWeight: 600, color: "inherit" }}>
                 {title}
               </Typography>
               {subtitle ? (
