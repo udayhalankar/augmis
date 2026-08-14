@@ -23,10 +23,6 @@ import {
   Button,
   Chip,
   CircularProgress,
-  FormControl,
-  InputLabel,
-  MenuItem,
-  Select,
   Paper,
   Stack,
   Typography,
@@ -62,7 +58,6 @@ import {
 import {
   TaskPriorityChip,
   TaskStatusChip,
-  formatTaskDateTime,
   formatTaskLabel,
   getTaskTimingLabel,
 } from "./components/BusinessTaskUI";
@@ -215,11 +210,6 @@ export default function OverviewDashboard() {
   const [dealDesk, setDealDesk] = useState<AugmisBusinessDealDeskResponse | null>(null);
   const [recentOpportunities, setRecentOpportunities] = useState<AugmisBusinessOpportunity[]>([]);
   const [attentionTasks, setAttentionTasks] = useState<AttentionTask[]>([]);
-  const [refreshTick, setRefreshTick] = useState(0);
-  const [dealDeskLimit, setDealDeskLimit] = useState(10);
-  const [dealDeskRecommendation, setDealDeskRecommendation] = useState("all");
-  const [dealDeskPriority, setDealDeskPriority] = useState("all");
-  const [lastDealDeskRefreshAt, setLastDealDeskRefreshAt] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -240,9 +230,7 @@ export default function OverviewDashboard() {
             listAugmisBusinessTasks({ page: 1, page_size: 8, status: "open" }),
             listAugmisBusinessTasks({ page: 1, page_size: 8, status: "in_progress" }),
             getAugmisBusinessDealDesk({
-              limit: dealDeskLimit,
-              recommendation: dealDeskRecommendation === "all" ? undefined : dealDeskRecommendation,
-              priority_band: dealDeskPriority === "all" ? undefined : dealDeskPriority,
+              limit: 10,
             }),
           ]);
 
@@ -286,7 +274,6 @@ export default function OverviewDashboard() {
             prospectName: leadMap[task.lead_id]?.prospect?.organization_name || "Not available",
           }))
         );
-        setLastDealDeskRefreshAt(new Date().toISOString());
       } catch (loadError) {
         if (!active) {
           return;
@@ -308,7 +295,7 @@ export default function OverviewDashboard() {
     return () => {
       active = false;
     };
-  }, [dealDeskLimit, dealDeskPriority, dealDeskRecommendation, refreshTick]);
+  }, []);
 
   const stageChartData = useMemo(
     () =>
@@ -417,109 +404,44 @@ export default function OverviewDashboard() {
           </Stack>
         ) : (
           <>
-            <Stack spacing={1.25}>
-              <Typography sx={{ fontSize: 13, color: "#64748B" }}>
-                Operational dashboard for live business development execution
-              </Typography>
-              <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap", rowGap: 1 }}>
-                <Button
-                  component={Link}
-                  href="/augmis-business/tasks?create=1"
-                  variant="contained"
-                  startIcon={<ChecklistOutlinedIcon />}
-                  sx={{ textTransform: "none", borderRadius: "8px", bgcolor: "#2563EB", "&:hover": { bgcolor: "#1D4ED8" } }}
-                >
-                  New Task
-                </Button>
-                <Button
-                  component={Link}
-                  href="/augmis-business/pipeline"
-                  variant="contained"
-                  startIcon={<TimelineOutlinedIcon />}
-                  sx={{ textTransform: "none", borderRadius: "8px", bgcolor: "#0F766E", "&:hover": { bgcolor: "#115E59" } }}
-                >
-                  View Pipeline
-                </Button>
-                <Button
-                  component={Link}
-                  href="/augmis-business/opportunities"
-                  variant="outlined"
-                  sx={{ textTransform: "none", borderRadius: "8px" }}
-                >
-                  Opportunities
-                </Button>
-                <Button
-                  component={Link}
-                  href="/augmis-business/prospects"
-                  variant="outlined"
-                  sx={{ textTransform: "none", borderRadius: "8px" }}
-                >
-                  Prospects
-                </Button>
-                <Button
-                  variant="outlined"
-                  startIcon={<RefreshRoundedIcon />}
-                  onClick={() => setRefreshTick((value) => value + 1)}
-                  sx={{ textTransform: "none", borderRadius: "8px" }}
-                >
-                  Refresh
-                </Button>
-              </Stack>
-            </Stack>
-
             <SectionCard
               title="Daily Deal Desk"
               icon={<PsychologyAltOutlinedIcon fontSize="small" />}
               action={
                 <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap" }}>
-                  <Typography sx={{ fontSize: 12, color: "#64748B", mr: 0.5 }}>
-                    {lastDealDeskRefreshAt ? `Refreshed ${formatTaskDateTime(lastDealDeskRefreshAt)}` : "Awaiting refresh"}
-                  </Typography>
-                  <FormControl size="small" sx={{ minWidth: 112 }}>
-                    <InputLabel>Recommendation</InputLabel>
-                    <Select
-                      label="Recommendation"
-                      value={dealDeskRecommendation}
-                      onChange={(event) => setDealDeskRecommendation(event.target.value)}
-                    >
-                      <MenuItem value="all">All</MenuItem>
-                      <MenuItem value="pursue">Pursue</MenuItem>
-                      <MenuItem value="watch">Watch</MenuItem>
-                    </Select>
-                  </FormControl>
-                  <FormControl size="small" sx={{ minWidth: 96 }}>
-                    <InputLabel>Priority</InputLabel>
-                    <Select
-                      label="Priority"
-                      value={dealDeskPriority}
-                      onChange={(event) => setDealDeskPriority(event.target.value)}
-                    >
-                      <MenuItem value="all">All</MenuItem>
-                      <MenuItem value="A">A</MenuItem>
-                      <MenuItem value="B">B</MenuItem>
-                      <MenuItem value="C">C</MenuItem>
-                    </Select>
-                  </FormControl>
-                  <FormControl size="small" sx={{ minWidth: 92 }}>
-                    <InputLabel>Limit</InputLabel>
-                    <Select
-                      label="Limit"
-                      value={String(dealDeskLimit)}
-                      onChange={(event) => setDealDeskLimit(Number(event.target.value))}
-                    >
-                      <MenuItem value="5">Top 5</MenuItem>
-                      <MenuItem value="10">Top 10</MenuItem>
-                      <MenuItem value="20">Top 20</MenuItem>
-                    </Select>
-                  </FormControl>
                   <Button
+                    component={Link}
+                    href="/augmis-business/tasks?create=1"
+                    variant="contained"
+                    startIcon={<ChecklistOutlinedIcon />}
+                    sx={{ textTransform: "none", borderRadius: "8px", bgcolor: "#2563EB", "&:hover": { bgcolor: "#1D4ED8" } }}
+                  >
+                    New Task
+                  </Button>
+                  <Button
+                    component={Link}
+                    href="/augmis-business/pipeline"
+                    variant="contained"
+                    startIcon={<TimelineOutlinedIcon />}
+                    sx={{ textTransform: "none", borderRadius: "8px", bgcolor: "#0F766E", "&:hover": { bgcolor: "#115E59" } }}
+                  >
+                    View Pipeline
+                  </Button>
+                  <Button
+                    component={Link}
+                    href="/augmis-business/opportunities"
                     variant="outlined"
-                    size="small"
-                    startIcon={<RefreshRoundedIcon />}
-                    onClick={() => setRefreshTick((value) => value + 1)}
                     sx={{ textTransform: "none", borderRadius: "8px" }}
                   >
-                    Refresh
+                    Opportunities
+                  </Button>
+                  <Button
+                    component={Link}
+                    href="/augmis-business/prospects"
+                    variant="outlined"
+                    sx={{ textTransform: "none", borderRadius: "8px" }}
+                  >
+                    Prospects
                   </Button>
                 </Stack>
               }
